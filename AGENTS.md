@@ -80,7 +80,10 @@ If two instructions conflict and both cannot be satisfied, stop and ask.
   shared docs before changing product behavior. Use commands that follow or
   explicitly traverse the symlink, such as `ls docs-shared/`,
   `find -L docs-shared -maxdepth 1 -type f`, or `rg --files docs-shared`.
-  Do not stage or commit `docs-shared` or its contents.
+  Do not stage or commit `docs-shared` or its contents from this repo.
+  If a task intentionally changes shared docs, edit and commit those files in
+  their owning source repo, such as `/Users/gabe/Sites/contribution-website`,
+  and keep that commit separate from CLI repo changes.
 - Temporary repo files must use a `temp-` prefix. Prefer `/tmp/contribution-*`
   for disposable harnesses and scratch runs.
 

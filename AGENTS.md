@@ -74,6 +74,13 @@ If two instructions conflict and both cannot be satisfied, stop and ask.
 
 - Keep active instructions in `AGENTS.md`, not tool-specific rule files.
 - Keep reference material, specs, runbooks, and roadmap content in `docs/`.
+- Local checkouts may have private shared product docs at `docs-shared/`.
+  This path is intentionally gitignored and may be a symlink to the private
+  website repo. If it exists, read `docs-shared/AGENTS.md` and the relevant
+  shared docs before changing product behavior. Use commands that follow or
+  explicitly traverse the symlink, such as `ls docs-shared/`,
+  `find -L docs-shared -maxdepth 1 -type f`, or `rg --files docs-shared`.
+  Do not stage or commit `docs-shared` or its contents.
 - Temporary repo files must use a `temp-` prefix. Prefer `/tmp/contribution-*`
   for disposable harnesses and scratch runs.
 

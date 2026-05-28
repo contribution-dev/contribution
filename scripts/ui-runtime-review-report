@@ -1,0 +1,445 @@
+#!/usr/bin/env node
+
+import { spawnSync } from "node:child_process";
+import { mkdir, mkdtemp, readFile, rm, writeFile } from "node:fs/promises";
+import { tmpdir } from "node:os";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+function usage() {
+  console.log(`Usage: scripts/ui-runtime-review-report --sha <commit-sha> [options]
+
+Options:
+  --sha <sha>               Commit SHA to associate with this runtime report
+  --trigger <name>          Trigger label (default: post-push)
+  --reviews-dir <path>      Override reviews artifact directory
+  --branch <name>           Branch name override
+  --base-url <url>          Runtime review base URL override
+`);
+}
+
+function parseArgs(argv) {
+  const args = {
+    sha: "",
+    trigger: "post-push",
+    reviewsDir: "",
+    branch: "",
+    baseUrl: process.env.CODEX_UI_RUNTIME_REVIEW_BASE_URL || "",
+  };
+
+  for (let i = 2; i < argv.length; i += 1) {
+    const token = argv[i];
+    const next = argv[i + 1];
+    switch (token) {
+      case "--sha":
+        args.sha = String(next || "").trim();
+        i += 1;
+        break;
+      case "--trigger":
+        args.trigger = String(next || "").trim() || args.trigger;
+        i += 1;
+        break;
+      case "--reviews-dir":
+        args.reviewsDir = String(next || "").trim();
+        i += 1;
+        break;
+      case "--branch":
+        args.branch = String(next || "").trim();
+        i += 1;
+        break;
+      case "--base-url":
+        args.baseUrl = String(next || "").trim();
+        i += 1;
+        break;
+      case "-h":
+      case "--help":
+        usage();
+        process.exit(0);
+        break;
+      default:
+        throw new Error(`Unknown argument: ${token}`);
+    }
+  }
+
+  if (!args.sha) {
+    throw new Error("--sha is required");
+  }
+
+  return args;
+}
+
+function isEnabled(value, defaultValue = true) {
+  const raw = String(value ?? "")
+    .trim()
+    .toLowerCase();
+  if (!raw) return defaultValue;
+  if (["0", "false", "no", "off"].includes(raw)) return false;
+  return true;
+}
+
+function toShortText(value, max = 240) {
+  const text = String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!text) return "";
+  if (text.length <= max) return text;
+  return `${text.slice(0, max - 1)}...`;
+}
+
+function sanitizeFindingText(value) {
+  return String(value || "")
+    .replace(/\s+/g, " ")
+    .trim();
+}
+
+function findWorstSeverity(findings) {
+  const rank = { blocker: 3, major: 2, minor: 1 };
+  let worst = "none";
+  for (const finding of findings) {
+    const severity = String(finding?.severity || "").toLowerCase();
+    if ((rank[severity] || 0) > (rank[worst] || 0)) {
+      worst = severity;
+    }
+  }
+  return worst;
+}
+
+export function renderMarkdownReport(report) {
+  const findings = Array.isArray(report.findings) ? report.findings : [];
+  const coverageDebt = report?.review_engines?.ui_runtime?.coverage_debt ?? [];
+  const targetSha = sanitizeFindingText(
+    report?.review_target?.sha || "unknown",
+  );
+  const trigger = sanitizeFindingText(report?.trigger || "unknown");
+  const reviewStatus = sanitizeFindingText(report?.review_status || "unknown");
+  const lastReviewed = sanitizeFindingText(report?.last_reviewed || "unknown");
+
+  const lines = [];
+  lines.push(`# UI Runtime Review: ${targetSha}`);
+  lines.push("");
+  lines.push(`- Trigger: \`${trigger}\``);
+  lines.push(`- Status: \`${reviewStatus}\``);
+  lines.push(`- Last reviewed: \`${lastReviewed}\``);
+  lines.push(`- Findings: \`${findings.length}\``);
+  lines.push("");
+  lines.push(report.summary || "UI runtime review completed.");
+  lines.push("");
+
+  if (coverageDebt.length > 0) {
+    lines.push("## Coverage Debt");
+    lines.push("");
+    for (const item of coverageDebt) {
+      const route = sanitizeFindingText(item.route || "unknown");
+      const source = sanitizeFindingText(item.source || "unknown");
+      lines.push(`- \`${route}\` (source: \`${source}\`)`);
+    }
+    lines.push("");
+  }
+
+  if (findings.length === 0) {
+    lines.push("## Findings");
+    lines.push("");
+    lines.push("No actionable findings.");
+    lines.push("");
+    return `${lines.join("\n")}\n`;
+  }
+
+  lines.push("## Findings");
+  lines.push("");
+
+  for (const finding of findings) {
+    const severity = String(finding.severity || "minor").toUpperCase();
+    const confidence = Number(finding.confidence || 0).toFixed(2);
+    lines.push(
+      `### [${sanitizeFindingText(finding.finding_id)}] [${severity}] ${sanitizeFindingText(finding.title)} (confidence ${confidence})`,
+    );
+    lines.push("");
+    lines.push(`- Hypothesis: ${sanitizeFindingText(finding.hypothesis)}`);
+    lines.push(`- Impact: ${sanitizeFindingText(finding.impact)}`);
+    lines.push(
+      `- Recommended direction: ${sanitizeFindingText(finding.recommended_direction)}`,
+    );
+
+    const evidence = Array.isArray(finding.evidence) ? finding.evidence : [];
+    if (evidence.length > 0) {
+      lines.push("- Evidence:");
+      for (const item of evidence) {
+        const file = sanitizeFindingText(item.file || "unknown");
+        const lineRef = sanitizeFindingText(item.lines || "n/a");
+        const reason = sanitizeFindingText(item.reason || "");
+        lines.push(`  - ${file}:${lineRef} — ${reason}`);
+      }
+    }
+
+    lines.push("");
+  }
+
+  return `${lines.join("\n")}\n`;
+}
+
+async function readRunPayload(outputPath) {
+  const raw = await readFile(outputPath, "utf8");
+  const parsed = JSON.parse(raw);
+  return {
+    summary: String(parsed.summary || ""),
+    findings: Array.isArray(parsed.findings) ? parsed.findings : [],
+    runStatus: String(parsed.run_status || "ok")
+      .trim()
+      .toLowerCase(),
+    failureReason: String(parsed.failure_reason || "").trim(),
+    uiRuntime:
+      parsed.ui_runtime && typeof parsed.ui_runtime === "object"
+        ? parsed.ui_runtime
+        : {},
+  };
+}
+
+export function deriveReviewOutcome({
+  runnerStatus,
+  payloadRunStatus,
+  failureReason,
+  runnerStderr,
+  infraBlocking,
+}) {
+  const normalizedPayloadStatus = String(payloadRunStatus || "ok")
+    .trim()
+    .toLowerCase();
+  const effectiveStatus =
+    runnerStatus === 0
+      ? normalizedPayloadStatus === "auth_error" ||
+        normalizedPayloadStatus === "infra_error"
+        ? normalizedPayloadStatus
+        : "ok"
+      : "infra_error";
+  const effectiveFailureReason = toShortText(
+    failureReason || runnerStderr || effectiveStatus,
+    120,
+  );
+
+  if (effectiveStatus === "ok") {
+    return {
+      reviewStatus: "ok",
+      engineStatus: "ok",
+      summaryPrefix: "",
+      failureReason: "",
+    };
+  }
+
+  if (effectiveStatus === "infra_error" && !infraBlocking) {
+    return {
+      reviewStatus: "ok",
+      engineStatus: "infra_error",
+      summaryPrefix:
+        "UI runtime review skipped due to infra issue (non-blocking): ",
+      failureReason: "",
+    };
+  }
+
+  return {
+    reviewStatus: effectiveStatus,
+    engineStatus: effectiveStatus,
+    summaryPrefix: "UI runtime review failed: ",
+    failureReason: effectiveFailureReason,
+  };
+}
+
+function resolveBranchName(inputBranch) {
+  if (inputBranch) return inputBranch;
+  const result = spawnSync("git", ["rev-parse", "--abbrev-ref", "HEAD"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status === 0) {
+    const value = String(result.stdout || "").trim();
+    if (value) return value;
+  }
+  return "HEAD";
+}
+
+function resolveHeadSha(gitExec = spawnSync) {
+  const result = gitExec("git", ["rev-parse", "HEAD"], {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status === 0) {
+    const value = String(result.stdout || "")
+      .trim()
+      .toLowerCase();
+    if (value) return value;
+  }
+  return "";
+}
+
+export function validateHeadTargetSha(targetSha, gitExec = spawnSync) {
+  const expectedSha = String(targetSha || "")
+    .trim()
+    .toLowerCase();
+  const headSha = resolveHeadSha(gitExec);
+  return {
+    ok: expectedSha !== "" && headSha !== "" && headSha === expectedSha,
+    expectedSha,
+    headSha,
+  };
+}
+
+async function main() {
+  if (!isEnabled(process.env.CODEX_REVIEW_ENABLED, true)) {
+    return;
+  }
+  if (!isEnabled(process.env.CODEX_UI_RUNTIME_REVIEW_ENABLED, true)) {
+    return;
+  }
+
+  const args = parseArgs(process.argv);
+  const repoRoot = process.cwd();
+  const reviewsDir =
+    args.reviewsDir || path.join(repoRoot, ".codex", "reviews");
+  const branch = resolveBranchName(args.branch);
+  const infraBlocking = isEnabled(
+    process.env.CODEX_UI_RUNTIME_REVIEW_INFRA_BLOCKING,
+    false,
+  );
+  const targetValidation = validateHeadTargetSha(args.sha);
+
+  if (!targetValidation.ok) {
+    const current = targetValidation.headSha || "unknown";
+    console.error(
+      `[ui-runtime-review-report] skipped: current HEAD ${current} does not match target SHA ${targetValidation.expectedSha}`,
+    );
+    return;
+  }
+
+  await mkdir(reviewsDir, { recursive: true });
+
+  const tempDir = await mkdtemp(path.join(tmpdir(), "ui-runtime-review-"));
+  const outputPath = path.join(tempDir, "runtime-review.json");
+
+  const runArgs = ["--output", outputPath];
+  runArgs.push("--review-target-sha", args.sha);
+  if (args.baseUrl) {
+    runArgs.push("--base-url", args.baseUrl);
+  }
+
+  const runResult = spawnSync(
+    path.join(repoRoot, "scripts", "ui-runtime-review-run"),
+    runArgs,
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      env: process.env,
+    },
+  );
+
+  let payload;
+  try {
+    payload = await readRunPayload(outputPath);
+  } catch (error) {
+    payload = {
+      summary:
+        "UI runtime review runner failed to produce a parseable payload.",
+      findings: [],
+      runStatus: "infra_error",
+      failureReason: error instanceof Error ? error.message : String(error),
+      uiRuntime: {},
+    };
+  }
+
+  const outcome = deriveReviewOutcome({
+    runnerStatus: runResult.status,
+    payloadRunStatus: payload.runStatus,
+    failureReason: payload.failureReason,
+    runnerStderr: runResult.stderr,
+    infraBlocking,
+  });
+
+  const findings = Array.isArray(payload.findings) ? payload.findings : [];
+  const worstSeverity = findWorstSeverity(findings);
+
+  const nowIso = new Date().toISOString();
+  const report = {
+    schema_version: 2,
+    summary:
+      outcome.reviewStatus === "ok"
+        ? outcome.engineStatus === "ok"
+          ? payload.summary
+          : `${outcome.summaryPrefix}${toShortText(payload.failureReason || runResult.stderr || "infra_error")}`
+        : `${outcome.summaryPrefix}${outcome.failureReason}`,
+    review_status: outcome.reviewStatus,
+    ...(outcome.failureReason
+      ? {
+          failure_reason: outcome.failureReason,
+        }
+      : {}),
+    trigger: args.trigger,
+    last_reviewed: nowIso,
+    review_target: {
+      type: "ui-runtime",
+      sha: args.sha,
+      branch,
+    },
+    review_engines: {
+      ui_runtime: {
+        status: outcome.engineStatus,
+        worst_severity: worstSeverity,
+        findings_count: findings.length,
+        base_url: String(payload.uiRuntime?.base_url || args.baseUrl || ""),
+        scanned_public: Number(payload.uiRuntime?.routes?.scanned_public || 0),
+        scanned_auth: Number(payload.uiRuntime?.routes?.scanned_auth || 0),
+        coverage_debt: Array.isArray(payload.uiRuntime?.routes?.coverage_debt)
+          ? payload.uiRuntime.routes.coverage_debt
+          : [],
+        auth_setup_error: String(payload.uiRuntime?.auth?.setup_error || ""),
+      },
+    },
+    findings,
+  };
+
+  const reportJsonPath = path.join(reviewsDir, `${args.sha}.ui-runtime.json`);
+  const reportMdPath = path.join(reviewsDir, `${args.sha}.ui-runtime.md`);
+
+  await writeFile(
+    reportJsonPath,
+    `${JSON.stringify(report, null, 2)}\n`,
+    "utf8",
+  );
+  await writeFile(reportMdPath, renderMarkdownReport(report), "utf8");
+
+  if (
+    isEnabled(process.env.CODEX_REVIEW_INBOX_ENABLED, true) &&
+    (findings.length > 0 || outcome.reviewStatus !== "ok")
+  ) {
+    spawnSync(
+      path.join(repoRoot, "scripts", "codex-review-inbox"),
+      [
+        "--mode",
+        "catch-up",
+        "--max-opens",
+        String(process.env.CODEX_REVIEW_INBOX_MAX_OPENS || "1"),
+        "--include-failed",
+        String(process.env.CODEX_REVIEW_INBOX_INCLUDE_FAILED || "1"),
+        "--reviews-dir",
+        reviewsDir,
+      ],
+      {
+        cwd: repoRoot,
+        stdio: "ignore",
+        env: process.env,
+      },
+    );
+  }
+
+  await rm(tempDir, { recursive: true, force: true });
+}
+
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(process.argv[1]).href
+) {
+  main().catch((error) => {
+    console.error(
+      `[ui-runtime-review-report] ${error instanceof Error ? error.message : String(error)}`,
+    );
+    process.exit(0);
+  });
+}

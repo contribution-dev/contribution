@@ -1,0 +1,320 @@
+#!/usr/bin/env node
+
+import { execFileSync } from "node:child_process";
+import { readdir, readFile } from "node:fs/promises";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { reportsDirForLane } from "./codex-review-inbox-lib.mjs";
+import {
+  enqueueReviewJob,
+  ensureReviewQueue,
+  queueStateForSha,
+} from "./codex-review-queue-lib.mjs";
+import { prepareCodexReviewCliContext } from "./lib/codex-review-cli-bootstrap.mjs";
+
+function usage() {
+  console.log(`Usage: scripts/codex-review-backfill [options]
+
+Options:
+  --lane <codex>             Repair lane to backfill (default: codex)
+  --days <n>                 Review window in days (default: 7)
+  --reviews-dir <path>       Override reviews directory
+  --dry-run                  Print candidates without enqueuing
+  -h, --help                 Show help
+`);
+}
+
+export function parseArgs(argv) {
+  const args = {
+    lane: "codex",
+    days: 7,
+    reviewsDir: "",
+    dryRun: false,
+  };
+  for (let index = 2; index < argv.length; index += 1) {
+    const arg = argv[index];
+    const next = argv[index + 1];
+    switch (arg) {
+      case "--days":
+        args.days = Number.parseInt(String(next ?? "7"), 10);
+        index += 1;
+        break;
+      case "--lane":
+        args.lane = String(next ?? "codex")
+          .trim()
+          .toLowerCase();
+        index += 1;
+        break;
+      case "--reviews-dir":
+        args.reviewsDir = String(next ?? "");
+        index += 1;
+        break;
+      case "--dry-run":
+        args.dryRun = true;
+        break;
+      case "-h":
+      case "--help":
+        usage();
+        process.exit(0);
+        break;
+      default:
+        throw new Error(`Unknown argument: ${arg}`);
+    }
+  }
+  if (!Number.isInteger(args.days) || args.days <= 0) {
+    throw new Error(`Invalid --days: ${args.days}`);
+  }
+  if (args.lane !== "codex") {
+    throw new Error(`Invalid --lane: ${args.lane}`);
+  }
+  return args;
+}
+
+async function readJson(filePath) {
+  try {
+    const raw = await readFile(filePath, "utf8");
+    return JSON.parse(raw);
+  } catch {
+    return null;
+  }
+}
+
+function recentGitShas(repoRoot, days) {
+  const seen = new Set();
+  const addOutput = (text) => {
+    for (const line of String(text ?? "").split(/\r?\n/)) {
+      const sha = line.trim().toLowerCase();
+      if (/^[0-9a-f]{40}$/.test(sha)) seen.add(sha);
+    }
+  };
+  try {
+    addOutput(
+      execFileSync("git", ["rev-list", `--since=${days} days ago`, "--all"], {
+        cwd: repoRoot,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }),
+    );
+    addOutput(
+      execFileSync("git", ["rev-list", `--since=${days} days ago`, "HEAD"], {
+        cwd: repoRoot,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+      }),
+    );
+  } catch {
+    return seen;
+  }
+  return seen;
+}
+
+export function buildRecentGitOrder(repoRoot, days) {
+  return new Map(
+    [...recentGitShas(repoRoot, days)].map((sha, index) => [sha, index]),
+  );
+}
+
+function candidatePriorityClass(candidate) {
+  const reasons = Array.isArray(candidate?.reasons) ? candidate.reasons : [];
+  if (
+    reasons.some((reason) =>
+      [
+        "review-failed",
+        "review-timed_out",
+        "review-infra_error",
+        "review-model_error",
+        "review-postprocess_error",
+      ].includes(
+        String(reason ?? "")
+          .trim()
+          .toLowerCase(),
+      ),
+    )
+  ) {
+    return 0;
+  }
+  if (
+    reasons.some(
+      (reason) =>
+        String(reason ?? "")
+          .trim()
+          .toLowerCase() === "missing-report",
+    )
+  ) {
+    return 1;
+  }
+  if (
+    reasons.some((reason) => {
+      const normalized = String(reason ?? "")
+        .trim()
+        .toLowerCase();
+      return normalized === "queue-active" || normalized === "queue-pending";
+    })
+  ) {
+    return 2;
+  }
+  return 3;
+}
+
+function compareCandidatesByBackfillPriority(left, right, recentOrder) {
+  const leftPriority = candidatePriorityClass(left);
+  const rightPriority = candidatePriorityClass(right);
+  if (leftPriority !== rightPriority) {
+    return leftPriority - rightPriority;
+  }
+  const leftSha = left.sha;
+  const rightSha = right.sha;
+  const leftRank = recentOrder.get(leftSha);
+  const rightRank = recentOrder.get(rightSha);
+  const leftIsRecent = Number.isInteger(leftRank);
+  const rightIsRecent = Number.isInteger(rightRank);
+  if (leftIsRecent && rightIsRecent && leftRank !== rightRank) {
+    return leftRank - rightRank;
+  }
+  if (leftIsRecent !== rightIsRecent) {
+    return leftIsRecent ? -1 : 1;
+  }
+  return String(leftSha).localeCompare(String(rightSha));
+}
+
+async function collectCandidatesForLane(repoRoot, reviewsDir, days, lane) {
+  const candidates = new Map();
+  const recentShas = [...recentGitShas(repoRoot, days)];
+  const addCandidate = (sha, reason) => {
+    if (
+      !/^[0-9a-f]{40}$/.test(
+        String(sha ?? "")
+          .trim()
+          .toLowerCase(),
+      )
+    )
+      return;
+    const normalizedSha = String(sha).trim().toLowerCase();
+    const existing = candidates.get(normalizedSha);
+    if (existing) {
+      existing.reasons.add(reason);
+      return;
+    }
+    candidates.set(normalizedSha, {
+      sha: normalizedSha,
+      reasons: new Set([reason]),
+    });
+  };
+
+  for (const sha of recentShas) {
+    addCandidate(sha, "recent-commit");
+  }
+
+  await ensureReviewQueue(reviewsDir, lane);
+  const queueRoot = path.join(reviewsDir, "queue", lane);
+  for (const status of ["pending", "active"]) {
+    const dir = path.join(queueRoot, status);
+    const entries = await readdir(dir).catch(() => []);
+    for (const entry of entries) {
+      if (!entry.endsWith(".json")) continue;
+      addCandidate(entry.replace(/\.json$/, ""), `queue-${status}`);
+    }
+  }
+
+  const selected = [];
+  for (const { sha, reasons } of candidates.values()) {
+    const report = await readJson(
+      path.join(reportsDirForLane(reviewsDir, lane), `${sha}.json`),
+    );
+    if (!report) {
+      selected.push({ sha, reasons: [...reasons, "missing-report"] });
+      continue;
+    }
+    const reviewStatus = String(report?.review_status ?? "")
+      .trim()
+      .toLowerCase();
+    if (
+      [
+        "failed",
+        "timed_out",
+        "infra_error",
+        "model_error",
+        "postprocess_error",
+      ].includes(reviewStatus)
+    ) {
+      selected.push({ sha, reasons: [...reasons, `review-${reviewStatus}`] });
+      continue;
+    }
+    continue;
+  }
+
+  return selected;
+}
+
+export async function collectCandidates(
+  repoRoot,
+  reviewsDir,
+  days,
+  lane = "all",
+) {
+  const lanes = ["codex"];
+  const recentOrder = buildRecentGitOrder(repoRoot, days);
+  const entries = [];
+  for (const selectedLane of lanes) {
+    const items = await collectCandidatesForLane(
+      repoRoot,
+      reviewsDir,
+      days,
+      selectedLane,
+    );
+    for (const item of items) {
+      entries.push({ ...item, lane: selectedLane });
+    }
+  }
+  entries.sort((left, right) =>
+    compareCandidatesByBackfillPriority(left, right, recentOrder),
+  );
+  return entries;
+}
+
+async function main() {
+  const args = parseArgs(process.argv);
+  const { repoRoot, reviewsDir } = await prepareCodexReviewCliContext({
+    invocationCwd: process.cwd(),
+    reviewsDirOverride: args.reviewsDir,
+    warnPrefix: "codex-review-backfill",
+  });
+  const candidates = await collectCandidates(
+    repoRoot,
+    reviewsDir,
+    args.days,
+    args.lane,
+  );
+  if (candidates.length === 0) {
+    console.log("[codex-review-backfill] candidates=0");
+    return;
+  }
+  for (const candidate of candidates) {
+    if (args.dryRun) {
+      console.log(
+        `[codex-review-backfill] dry-run sha=${candidate.sha} reasons=${candidate.reasons.join(",")}`,
+      );
+      continue;
+    }
+    await enqueueReviewJob({
+      reviewsDir,
+      sha: candidate.sha,
+      lane: candidate.lane,
+      trigger: "manual",
+      source: "backfill",
+      reason: candidate.reasons.join(","),
+    });
+    console.log(
+      `[codex-review-backfill] lane=${candidate.lane} queued sha=${candidate.sha} reasons=${candidate.reasons.join(",")}`,
+    );
+  }
+}
+
+if (
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1] ?? "")).href
+) {
+  main().catch((error) => {
+    console.error(`[codex-review-backfill] Failed: ${error.message}`);
+    process.exit(1);
+  });
+}

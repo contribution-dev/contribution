@@ -1,0 +1,128 @@
+#!/usr/bin/env node
+
+import {
+  resolveRepoRoot,
+  resolveReviewsDir,
+} from "./codex-review-inbox-lib.mjs";
+import {
+  clearReviewQueueBacklog,
+  readReviewQueueBacklog,
+  setReviewQueueBacklog,
+} from "./codex-review-queue-lib.mjs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+function usage() {
+  console.log(`Usage: scripts/codex-review-queue-backlog [options]
+
+Options:
+  --freeze-existing-pending   Park current pending SHAs and allow only later enqueues
+  --enqueue-after <iso>       Explicit cutoff timestamp (ISO-8601)
+  --reason <text>             Optional reason label
+  --clear                     Clear the parked-backlog cutoff
+  --lane <codex>              Queue lane (default: codex)
+  --reviews-dir <path>        Override reviews directory
+  -h, --help                  Show help
+`);
+}
+
+export function parseArgs(argv) {
+  const args = {
+    freezeExistingPending: false,
+    enqueueAfter: "",
+    reason: "",
+    clear: false,
+    lane: "codex",
+    reviewsDir: "",
+  };
+
+  for (let index = 2; index < argv.length; index += 1) {
+    const arg = argv[index];
+    const next = argv[index + 1];
+    switch (arg) {
+      case "--freeze-existing-pending":
+        args.freezeExistingPending = true;
+        break;
+      case "--enqueue-after":
+        args.enqueueAfter = String(next ?? "").trim();
+        index += 1;
+        break;
+      case "--reason":
+        args.reason = String(next ?? "").trim();
+        index += 1;
+        break;
+      case "--clear":
+        args.clear = true;
+        break;
+      case "--lane":
+        args.lane = String(next ?? "codex")
+          .trim()
+          .toLowerCase();
+        index += 1;
+        break;
+      case "--reviews-dir":
+        args.reviewsDir = String(next ?? "").trim();
+        index += 1;
+        break;
+      case "-h":
+      case "--help":
+        usage();
+        process.exit(0);
+        break;
+      default:
+        throw new Error(`Unknown argument: ${arg}`);
+    }
+  }
+
+  if (args.lane !== "codex") {
+    throw new Error(`Invalid --lane: ${args.lane}`);
+  }
+  if (args.clear && (args.freezeExistingPending || args.enqueueAfter)) {
+    throw new Error("--clear cannot be combined with cutoff options");
+  }
+  if (!args.clear && !args.freezeExistingPending && !args.enqueueAfter) {
+    throw new Error(
+      "Specify --freeze-existing-pending, --enqueue-after, or --clear",
+    );
+  }
+
+  return args;
+}
+
+async function main() {
+  const invocationCwd = process.env.CODEX_REVIEW_CALLER_CWD || process.cwd();
+  const args = parseArgs(process.argv);
+  const repoRoot = resolveRepoRoot(invocationCwd);
+  const reviewsDir = await resolveReviewsDir(
+    repoRoot,
+    args.reviewsDir,
+    invocationCwd,
+  );
+
+  if (args.clear) {
+    await clearReviewQueueBacklog(reviewsDir, args.lane);
+  } else {
+    const enqueueAfter = args.enqueueAfter || new Date().toISOString();
+    await setReviewQueueBacklog(reviewsDir, {
+      lane: args.lane,
+      enqueueAfter,
+      reason: args.reason,
+    });
+  }
+
+  const state = await readReviewQueueBacklog(reviewsDir, args.lane);
+  console.log(
+    `[codex-review-queue-backlog] lane=${args.lane} active=${state.active ? "1" : "0"} enqueue_after=${
+      state.enqueue_after || "none"
+    } reason=${state.reason || "none"} updated_at=${state.updated_at || "none"}`,
+  );
+}
+
+if (
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1] ?? "")).href
+) {
+  main().catch((error) => {
+    console.error(`[codex-review-queue-backlog] Failed: ${error.message}`);
+    process.exit(1);
+  });
+}

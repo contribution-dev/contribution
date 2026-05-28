@@ -1,0 +1,272 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+if [ "${CODEX_REVIEW_ENABLED:-1}" = "0" ] || [ "${CODEX_REVIEW_POST_PUSH_ENABLED:-1}" = "0" ]; then
+  exit 0
+fi
+
+UI_RUNTIME_REVIEW_ENABLED="${CODEX_UI_RUNTIME_REVIEW_ENABLED:-0}"
+case "$UI_RUNTIME_REVIEW_ENABLED" in
+  0|false|FALSE|no|NO|off|OFF)
+    UI_RUNTIME_REVIEW_ENABLED="0"
+    ;;
+  *)
+    UI_RUNTIME_REVIEW_ENABLED="1"
+    ;;
+esac
+
+UI_RUNTIME_REVIEW_POST_PUSH_ENABLED="${CODEX_UI_RUNTIME_REVIEW_POST_PUSH_ENABLED:-1}"
+case "$UI_RUNTIME_REVIEW_POST_PUSH_ENABLED" in
+  0|false|FALSE|no|NO|off|OFF)
+    UI_RUNTIME_REVIEW_POST_PUSH_ENABLED="0"
+    ;;
+  *)
+    UI_RUNTIME_REVIEW_POST_PUSH_ENABLED="1"
+    ;;
+esac
+
+# Bootstrap PATH for GUI git clients with minimal environments.
+if [ -d "/opt/homebrew/bin" ]; then
+  PATH="/opt/homebrew/bin:$PATH"
+fi
+if [ -d "/usr/local/bin" ]; then
+  PATH="/usr/local/bin:$PATH"
+fi
+if [ -d "$HOME/.volta/bin" ]; then
+  PATH="$HOME/.volta/bin:$PATH"
+fi
+if [ -d "$HOME/.asdf/shims" ]; then
+  PATH="$HOME/.asdf/shims:$PATH"
+fi
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+INPUT_FILE="${1:-}"
+REMOTE_NAME="${2:-}"
+
+if [ -z "$INPUT_FILE" ] || [ ! -f "$INPUT_FILE" ]; then
+  echo "Usage: scripts/codex-review-post-push <post-push-stdin-file> [remote-name]" >&2
+  exit 2
+fi
+
+cd "$REPO_ROOT"
+. "$REPO_ROOT/scripts/codex-review-dir.sh"
+if ! REVIEWS_DIR="$(resolve_codex_reviews_dir "$REPO_ROOT" "${CODE_REVIEW_DIR:-${CODEX_REVIEW_DIR:-$REPO_ROOT/.code-reviews}}")"; then
+  REVIEWS_DIR="${CODE_REVIEW_DIR:-${CODEX_REVIEW_DIR:-$REPO_ROOT/.code-reviews}}"
+fi
+
+node "$REPO_ROOT/scripts/codex-review-repair-state.mjs" \
+  --repo-root "$REPO_ROOT" \
+  --reviews-dir "$REVIEWS_DIR" >/dev/null 2>&1 || true
+
+has_completed_review_artifact() {
+  local sha="$1"
+  local report_json="$REVIEWS_DIR/$sha.json"
+  local queue_pending_json="$REVIEWS_DIR/queue/codex/pending/$sha.json"
+  local queue_active_json="$REVIEWS_DIR/queue/codex/active/$sha.json"
+  local legacy_queue_pending_json="$REVIEWS_DIR/queue/pending/$sha.json"
+  local legacy_queue_active_json="$REVIEWS_DIR/queue/active/$sha.json"
+
+  if [ "${CODEX_REVIEW_POST_PUSH_SKIP_IF_REVIEWED:-1}" = "0" ]; then
+    return 1
+  fi
+
+  if [ ! -s "$report_json" ]; then
+    if [ -s "$queue_pending_json" ] || [ -s "$queue_active_json" ] || [ -s "$legacy_queue_pending_json" ] || [ -s "$legacy_queue_active_json" ]; then
+      return 1
+    fi
+    if command -v node >/dev/null 2>&1; then
+      node -e '
+const fs = require("fs");
+const path = require("path");
+const repoRoot = process.argv[1];
+const sha = String(process.argv[2] || "").trim().toLowerCase();
+const reviewedPath = path.join(repoRoot, ".git", "codex-review", "reviewed", "global.json");
+try {
+  const parsed = JSON.parse(fs.readFileSync(reviewedPath, "utf8"));
+  const reviewed = Array.isArray(parsed?.reviewed) ? parsed.reviewed : [];
+  const clean = reviewed.some((entry) => {
+    const entrySha = String((typeof entry === "string" ? entry : entry?.sha) ?? "").trim().toLowerCase();
+    const codexStatus = String(entry?.lanes?.codex ?? entry?.status ?? "").trim().toLowerCase();
+    return entrySha === sha && codexStatus === "clean";
+  });
+  process.exit(clean ? 0 : 1);
+} catch {
+  process.exit(1);
+}
+' "$REPO_ROOT" "$sha" >/dev/null 2>&1
+      return $?
+    fi
+    return 1
+  fi
+
+  if command -v node >/dev/null 2>&1; then
+    node -e '
+const fs = require("fs");
+const reportPath = process.argv[1];
+try {
+  const parsed = JSON.parse(fs.readFileSync(reportPath, "utf8"));
+  const status = String(parsed.review_status || "").trim().toLowerCase();
+  const codexStatusRaw = String((((parsed.review_engines || {}).codex || {}).status) || "").trim().toLowerCase();
+  const codexStatus = codexStatusRaw || status;
+  const findingModels = Array.isArray(parsed.finding_models)
+    ? parsed.finding_models.map((value) => String(value || "").trim())
+    : [];
+  const findings = Array.isArray(parsed.findings) ? parsed.findings : [];
+  const reviewedAt = String(parsed.last_reviewed || "").trim();
+  if (
+    !findingModels.includes("queue-recovery") &&
+    status === "ok" &&
+    codexStatus === "ok" &&
+    findings.length === 0 &&
+    reviewedAt
+  ) {
+    process.exit(0);
+  }
+} catch {}
+process.exit(1);
+' "$report_json" >/dev/null 2>&1
+    return $?
+  fi
+
+  if command -v python3 >/dev/null 2>&1; then
+    python3 - "$report_json" <<'PY' >/dev/null 2>&1
+import json
+import sys
+
+path = sys.argv[1]
+try:
+    with open(path, "r", encoding="utf-8") as f:
+        parsed = json.load(f)
+except Exception:
+    raise SystemExit(1)
+
+status = str(parsed.get("review_status", ""))
+codex_status_raw = str(((parsed.get("review_engines") or {}).get("codex") or {}).get("status", "")).strip().lower()
+codex_status = codex_status_raw or status
+finding_models = [str(value or "").strip() for value in (parsed.get("finding_models") or [])]
+findings = parsed.get("findings") or []
+reviewed_at = str(parsed.get("last_reviewed", "")).strip()
+if "queue-recovery" not in finding_models and status == "ok" and codex_status == "ok" and len(findings) == 0 and reviewed_at:
+    raise SystemExit(0)
+raise SystemExit(1)
+PY
+    return $?
+  fi
+
+  # Fail closed when JSON runtimes are unavailable.
+  return 1
+}
+
+zero_sha='0000000000000000000000000000000000000000'
+seen_file="$(mktemp)"
+prune_file="$(mktemp)"
+trap 'rm -f "$seen_file" "$prune_file"' EXIT
+
+touch "$seen_file"
+touch "$prune_file"
+
+while read -r local_ref local_sha remote_ref remote_sha; do
+  [ -z "${local_ref:-}" ] && continue
+
+  case "$local_ref" in
+    refs/heads/*)
+      ;;
+    *)
+      continue
+      ;;
+  esac
+
+  if [ "$local_sha" = "$zero_sha" ]; then
+    continue
+  fi
+
+  if [ "$remote_sha" = "$zero_sha" ]; then
+    if [ -n "$REMOTE_NAME" ] && [ -n "$(git for-each-ref --format='%(refname)' "refs/remotes/$REMOTE_NAME/*" | head -n 1)" ]; then
+      rev_list_cmd=(git rev-list --reverse "$local_sha" --not "refs/remotes/$REMOTE_NAME/*")
+    else
+      # First push fallback when no local remote-tracking refs exist yet:
+      # review all commits unique to this branch, not just the tip SHA.
+      local_branch_refs=()
+      while read -r ref; do
+        [ -z "$ref" ] && continue
+        [ "$ref" = "$local_ref" ] && continue
+        local_branch_refs+=("$ref")
+      done < <(git for-each-ref --format='%(refname)' refs/heads)
+
+      if [ "${#local_branch_refs[@]}" -gt 0 ]; then
+        rev_list_cmd=(git rev-list --reverse "$local_sha" --not "${local_branch_refs[@]}")
+      else
+        rev_list_cmd=(git rev-list --reverse "$local_sha")
+      fi
+    fi
+  else
+    rev_list_cmd=(git rev-list --reverse "$remote_sha..$local_sha")
+  fi
+
+  if [ "${#rev_list_cmd[@]}" -gt 0 ]; then
+    if ! rev_output="$("${rev_list_cmd[@]}" 2>/dev/null)"; then
+      echo "Skipping ref update due to rev-list failure: $local_ref $local_sha $remote_ref $remote_sha" >&2
+      continue
+    fi
+  fi
+
+  while read -r sha; do
+    [ -z "$sha" ] && continue
+    if grep -qx "$sha" "$seen_file"; then
+      continue
+    fi
+    echo "$sha" >> "$seen_file"
+    echo "$sha" >> "$prune_file"
+    if ! has_completed_review_artifact "$sha"; then
+      "$REPO_ROOT/scripts/codex-review-enqueue" \
+        --sha "$sha" \
+        --lane codex \
+        --trigger post-push \
+        --source post-push-hook || true
+      continue
+    fi
+  done <<EOF
+$rev_output
+EOF
+done < "$INPUT_FILE"
+
+if [ "$UI_RUNTIME_REVIEW_ENABLED" = "1" ] && [ "$UI_RUNTIME_REVIEW_POST_PUSH_ENABLED" = "1" ]; then
+  current_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
+  if [ -z "$current_branch" ]; then
+    echo "Skipping post-push UI runtime review: HEAD is detached; unable to match pushed branch to current checkout" >&2
+  else
+    while read -r local_ref local_sha remote_ref remote_sha; do
+      [ -z "${local_ref:-}" ] && continue
+      case "$local_ref" in
+        refs/heads/*)
+          ;;
+        *)
+          continue
+          ;;
+      esac
+
+      if [ "$local_sha" = "$zero_sha" ]; then
+        continue
+      fi
+
+      branch_name="${local_ref#refs/heads/}"
+      if [ "$branch_name" != "$current_branch" ]; then
+        continue
+      fi
+
+      "$REPO_ROOT/scripts/ui-runtime-review-report" \
+        --sha "$local_sha" \
+        --trigger post-push \
+        --branch "$branch_name" \
+        --reviews-dir "$REVIEWS_DIR" || true
+    done < "$INPUT_FILE"
+  fi
+fi
+
+if [ "${CODEX_REVIEW_PRUNE_POST_PUSH_ENABLED:-1}" = "1" ]; then
+  node "$REPO_ROOT/scripts/codex-review-prune-artifacts.mjs" \
+    --repo-root "$REPO_ROOT" \
+    --reviews-dir "$REVIEWS_DIR" \
+    --sha-file "$prune_file" \
+    --remote-visible-successes >/dev/null 2>&1 || true
+fi

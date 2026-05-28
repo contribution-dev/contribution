@@ -1,0 +1,826 @@
+#!/usr/bin/env node
+
+import crypto from "node:crypto";
+import { execFileSync } from "node:child_process";
+import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import os from "node:os";
+import path from "node:path";
+import {
+  readBacklogRemediationAutomationConfig,
+  writeBacklogRemediationAutomationConfig,
+  resolveDurableWorkerReviewsDir,
+  resolveRepoRoot,
+} from "./codex-review-inbox-lib.mjs";
+
+function usage() {
+  console.log(`Usage: scripts/codex-review-launchctl <install|uninstall|status|print-plist> [options]
+
+Options:
+  --lane <codex|all>         Worker lane to manage (default: all)
+  --codex-workers <n>        Codex worker count (default: 2)
+  --watchdog-interval-seconds <n>  Watchdog repair interval (default: 300)
+  --reviews-dir <path>       Override reviews directory
+  --idle-sleep-seconds <n>   Worker idle sleep in watch mode (default: 5)
+  --heartbeat-seconds <n>    Worker heartbeat interval (default: 5)
+  -h, --help                 Show help
+`);
+}
+
+function parseArgs(argv) {
+  const args = {
+    command: "",
+    lane: "all",
+    codexWorkers: 2,
+    watchdogIntervalSeconds: 300,
+    reviewsDir: "",
+    idleSleepSeconds: 5,
+    heartbeatSeconds: 5,
+  };
+  for (let index = 2; index < argv.length; index += 1) {
+    const arg = argv[index];
+    const next = argv[index + 1];
+    switch (arg) {
+      case "install":
+      case "uninstall":
+      case "status":
+      case "print-plist":
+        args.command = arg;
+        break;
+      case "--reviews-dir":
+        args.reviewsDir = String(next ?? "");
+        index += 1;
+        break;
+      case "--codex-workers":
+        args.codexWorkers = Number.parseInt(String(next ?? "2"), 10);
+        index += 1;
+        break;
+      case "--watchdog-interval-seconds":
+        args.watchdogIntervalSeconds = Number.parseInt(
+          String(next ?? "300"),
+          10,
+        );
+        index += 1;
+        break;
+      case "--lane":
+        args.lane = String(next ?? "all")
+          .trim()
+          .toLowerCase();
+        index += 1;
+        break;
+      case "--idle-sleep-seconds":
+        args.idleSleepSeconds = Number.parseInt(String(next ?? "5"), 10);
+        index += 1;
+        break;
+      case "--heartbeat-seconds":
+        args.heartbeatSeconds = Number.parseInt(String(next ?? "5"), 10);
+        index += 1;
+        break;
+      case "-h":
+      case "--help":
+        usage();
+        process.exit(0);
+        break;
+      default:
+        throw new Error(`Unknown argument: ${arg}`);
+    }
+  }
+  if (!args.command) {
+    throw new Error("Missing command");
+  }
+  if (!["codex", "all"].includes(args.lane)) {
+    throw new Error(`Invalid --lane: ${args.lane}`);
+  }
+  if (!Number.isInteger(args.codexWorkers) || args.codexWorkers <= 0) {
+    throw new Error(`Invalid --codex-workers: ${args.codexWorkers}`);
+  }
+  if (
+    !Number.isInteger(args.watchdogIntervalSeconds) ||
+    args.watchdogIntervalSeconds <= 0
+  ) {
+    throw new Error(
+      `Invalid --watchdog-interval-seconds: ${args.watchdogIntervalSeconds}`,
+    );
+  }
+  return args;
+}
+
+function repoHash(repoRoot) {
+  const suffix = crypto
+    .createHash("sha1")
+    .update(String(repoRoot), "utf8")
+    .digest("hex")
+    .slice(0, 10);
+  return suffix;
+}
+
+function launchAgentBaseLabel(repoRoot, lane) {
+  return `com.contribution.codex-review-worker.${lane}.${repoHash(repoRoot)}`;
+}
+
+function legacyPerLaneLaunchAgentLabel(repoRoot, lane) {
+  return launchAgentBaseLabel(repoRoot, lane);
+}
+
+function legacyCleanupLanes() {
+  return ["local"];
+}
+
+function launchAgentLabel(repoRoot, lane, workerSlot) {
+  return `${launchAgentBaseLabel(repoRoot, lane)}.w${workerSlot}`;
+}
+
+function legacyLaunchAgentLabel(repoRoot) {
+  const suffix = crypto
+    .createHash("sha1")
+    .update(String(repoRoot), "utf8")
+    .digest("hex")
+    .slice(0, 10);
+  return `com.contribution.codex-review-worker.${suffix}`;
+}
+
+function launchAgentPath(label) {
+  return path.join(os.homedir(), "Library", "LaunchAgents", `${label}.plist`);
+}
+
+function watchdogLaunchAgentLabel(repoRoot) {
+  return `com.contribution.codex-review-watchdog.${repoHash(repoRoot)}`;
+}
+
+function backlogRemediationLaunchAgentLabel(repoRoot) {
+  return `com.contribution.codex-review-remediation.${repoHash(repoRoot)}`;
+}
+
+function watchdogConfigPath(reviewsDir) {
+  return path.join(reviewsDir, "watchdog.config.json");
+}
+
+function launchctlDomain() {
+  if (typeof process.getuid === "function") {
+    return `gui/${process.getuid()}`;
+  }
+  return "gui/$(id -u)";
+}
+
+function xmlEscape(value) {
+  return String(value ?? "")
+    .replaceAll("&", "&amp;")
+    .replaceAll("<", "&lt;")
+    .replaceAll(">", "&gt;")
+    .replaceAll('"', "&quot;")
+    .replaceAll("'", "&apos;");
+}
+
+function launchdPath(repoRoot = "") {
+  const repoPaths = repoRoot
+    ? [
+        path.join(repoRoot, ".tools", "bin"),
+        path.join(repoRoot, ".tools", "go", "bin"),
+        path.join(repoRoot, "scripts"),
+        path.join(repoRoot, "node_modules", ".bin"),
+      ].join(path.delimiter)
+    : "";
+  const candidates = [
+    repoPaths ? `${repoPaths}${path.delimiter}${process.env.PATH ?? ""}` : "",
+    process.env.PATH,
+    "/opt/homebrew/bin:/usr/local/bin:/usr/bin:/bin:/usr/sbin:/sbin",
+  ];
+  return (
+    candidates.find((value) => String(value ?? "").trim()) || "/usr/bin:/bin"
+  );
+}
+
+function launchdEnvVars(repoRoot = "") {
+  return new Map([["PATH", launchdPath(repoRoot)]]);
+}
+
+function launchdEnvXml(envVars) {
+  return [...envVars.entries()]
+    .map(
+      ([key, value]) => `      <key>${xmlEscape(key)}</key>
+      <string>${xmlEscape(value)}</string>`,
+    )
+    .join("\n");
+}
+
+function plistContent({
+  label,
+  repoRoot,
+  reviewsDir,
+  idleSleepSeconds,
+  heartbeatSeconds,
+  lane,
+  workerSlot,
+}) {
+  const workerScript = path.join(repoRoot, "scripts", "codex-review-worker");
+  const stdoutPath = path.join(
+    reviewsDir,
+    "logs",
+    `worker.${lane}.${workerSlot}.stdout.log`,
+  );
+  const stderrPath = path.join(
+    reviewsDir,
+    "logs",
+    `worker.${lane}.${workerSlot}.stderr.log`,
+  );
+  const envVars = launchdEnvVars(repoRoot);
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>${xmlEscape(label)}</string>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>WorkingDirectory</key>
+    <string>${xmlEscape(repoRoot)}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+${launchdEnvXml(envVars)}
+    </dict>
+    <key>ProgramArguments</key>
+    <array>
+      <string>${xmlEscape(process.execPath)}</string>
+      <string>${xmlEscape(workerScript)}</string>
+      <string>--lane</string>
+      <string>${xmlEscape(lane)}</string>
+      <string>--worker-slot</string>
+      <string>${xmlEscape(workerSlot)}</string>
+      <string>--watch</string>
+      <string>--idle-sleep-seconds</string>
+      <string>${xmlEscape(idleSleepSeconds)}</string>
+      <string>--heartbeat-seconds</string>
+      <string>${xmlEscape(heartbeatSeconds)}</string>
+      <string>--reviews-dir</string>
+      <string>${xmlEscape(reviewsDir)}</string>
+    </array>
+    <key>StandardOutPath</key>
+    <string>${xmlEscape(stdoutPath)}</string>
+    <key>StandardErrorPath</key>
+    <string>${xmlEscape(stderrPath)}</string>
+  </dict>
+</plist>
+`;
+}
+
+function backlogRemediationPlistContent({
+  label,
+  repoRoot,
+  reviewsDir,
+  idleSleepSeconds,
+}) {
+  const workerScript = path.join(
+    repoRoot,
+    "scripts",
+    "codex-review-remediation-worker",
+  );
+  const stdoutPath = path.join(
+    reviewsDir,
+    "logs",
+    "backlog-remediation.stdout.log",
+  );
+  const stderrPath = path.join(
+    reviewsDir,
+    "logs",
+    "backlog-remediation.stderr.log",
+  );
+  const envVars = launchdEnvVars(repoRoot);
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>${xmlEscape(label)}</string>
+    <key>KeepAlive</key>
+    <true/>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>WorkingDirectory</key>
+    <string>${xmlEscape(repoRoot)}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+${launchdEnvXml(envVars)}
+    </dict>
+    <key>ProgramArguments</key>
+    <array>
+      <string>${xmlEscape(process.execPath)}</string>
+      <string>${xmlEscape(workerScript)}</string>
+      <string>--watch</string>
+      <string>--idle-sleep-seconds</string>
+      <string>${xmlEscape(idleSleepSeconds)}</string>
+      <string>--reviews-dir</string>
+      <string>${xmlEscape(reviewsDir)}</string>
+    </array>
+    <key>StandardOutPath</key>
+    <string>${xmlEscape(stdoutPath)}</string>
+    <key>StandardErrorPath</key>
+    <string>${xmlEscape(stderrPath)}</string>
+  </dict>
+</plist>
+`;
+}
+
+function watchdogPlistContent({
+  label,
+  repoRoot,
+  reviewsDir,
+  codexWorkers,
+  intervalSeconds,
+  idleSleepSeconds,
+  heartbeatSeconds,
+}) {
+  const watchdogScript = path.join(
+    repoRoot,
+    "scripts",
+    "codex-review-watchdog",
+  );
+  const stdoutPath = path.join(reviewsDir, "logs", "watchdog.stdout.log");
+  const stderrPath = path.join(reviewsDir, "logs", "watchdog.stderr.log");
+  const envVars = launchdEnvVars(repoRoot);
+  return `<?xml version="1.0" encoding="UTF-8"?>
+<!DOCTYPE plist PUBLIC "-//Apple//DTD PLIST 1.0//EN" "http://www.apple.com/DTDs/PropertyList-1.0.dtd">
+<plist version="1.0">
+  <dict>
+    <key>Label</key>
+    <string>${xmlEscape(label)}</string>
+    <key>RunAtLoad</key>
+    <true/>
+    <key>StartInterval</key>
+    <integer>${xmlEscape(intervalSeconds)}</integer>
+    <key>WorkingDirectory</key>
+    <string>${xmlEscape(repoRoot)}</string>
+    <key>EnvironmentVariables</key>
+    <dict>
+${launchdEnvXml(envVars)}
+    </dict>
+    <key>ProgramArguments</key>
+    <array>
+      <string>${xmlEscape(process.execPath)}</string>
+      <string>${xmlEscape(watchdogScript)}</string>
+      <string>--codex-workers</string>
+      <string>${xmlEscape(codexWorkers)}</string>
+      <string>--idle-sleep-seconds</string>
+      <string>${xmlEscape(idleSleepSeconds)}</string>
+      <string>--heartbeat-seconds</string>
+      <string>${xmlEscape(heartbeatSeconds)}</string>
+      <string>--reviews-dir</string>
+      <string>${xmlEscape(reviewsDir)}</string>
+    </array>
+    <key>StandardOutPath</key>
+    <string>${xmlEscape(stdoutPath)}</string>
+    <key>StandardErrorPath</key>
+    <string>${xmlEscape(stderrPath)}</string>
+  </dict>
+</plist>
+`;
+}
+
+async function readExistingPlist(filePath) {
+  try {
+    return await readFile(filePath, "utf8");
+  } catch {
+    return "";
+  }
+}
+
+async function discoverLaunchAgentLabels(repoRoot, lane) {
+  const launchAgentsDir = path.join(os.homedir(), "Library", "LaunchAgents");
+  const labelPrefix = `com.contribution.codex-review-worker.${lane}.`;
+  const workerScript = path.join(repoRoot, "scripts", "codex-review-worker");
+  const serializedWorkerScript = xmlEscape(workerScript);
+  const serializedRepoRoot = xmlEscape(repoRoot);
+  let entries = [];
+  try {
+    entries = await readdir(launchAgentsDir);
+  } catch {
+    return [];
+  }
+  const labels = [];
+  for (const entry of entries) {
+    if (!entry.endsWith(".plist") || !entry.startsWith(labelPrefix)) {
+      continue;
+    }
+    const plistPath = path.join(launchAgentsDir, entry);
+    const plist = await readExistingPlist(plistPath);
+    if (
+      !plist.includes(serializedWorkerScript) ||
+      !plist.includes(serializedRepoRoot)
+    ) {
+      continue;
+    }
+    labels.push(entry.slice(0, -6));
+  }
+  return labels.sort((left, right) =>
+    left.localeCompare(right, undefined, { numeric: true }),
+  );
+}
+
+function desiredWorkerSlots(args, lane) {
+  const count = args.codexWorkers;
+  return Array.from({ length: count }, (_, index) => index + 1);
+}
+
+function launchctl(...args) {
+  return execFileSync("launchctl", args, {
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+}
+
+function enableLaunchAgent(domain, label) {
+  launchctl("enable", `${domain}/${label}`);
+}
+
+async function launchAgentStatus(domain, label) {
+  const plistPath = launchAgentPath(label);
+  const existing = await readExistingPlist(plistPath);
+  const installed = existing.length > 0;
+  let running = false;
+  let details = "";
+  if (installed) {
+    try {
+      details = launchctl("print", `${domain}/${label}`);
+      running = true;
+    } catch (error) {
+      details = error.stderr || error.stdout || String(error.message || error);
+    }
+  }
+  return { label, plistPath, installed, running, details };
+}
+
+async function ensureLaunchAgentLoaded(domain, label, plistPath) {
+  try {
+    enableLaunchAgent(domain, label);
+  } catch {}
+
+  try {
+    launchctl("bootout", `${domain}/${label}`);
+  } catch {}
+
+  try {
+    launchctl("bootstrap", domain, plistPath);
+  } catch (error) {
+    const status = await launchAgentStatus(domain, label);
+    if (!status.running) {
+      throw error;
+    }
+  }
+
+  try {
+    launchctl("kickstart", "-k", `${domain}/${label}`);
+  } catch (error) {
+    const status = await launchAgentStatus(domain, label);
+    if (!status.running) {
+      throw error;
+    }
+  }
+}
+
+async function removeLaunchAgent(domain, label) {
+  const plistPath = launchAgentPath(label);
+  try {
+    launchctl("bootout", `${domain}/${label}`);
+  } catch {}
+  await rm(plistPath, { force: true });
+  return plistPath;
+}
+
+async function writeWatchdogConfig(reviewsDir, args) {
+  const payload = {
+    version: 1,
+    codexWorkers: args.codexWorkers,
+    watchdogIntervalSeconds: args.watchdogIntervalSeconds,
+    idleSleepSeconds: args.idleSleepSeconds,
+    heartbeatSeconds: args.heartbeatSeconds,
+    updatedAt: new Date().toISOString(),
+  };
+  await writeFile(
+    watchdogConfigPath(reviewsDir),
+    `${JSON.stringify(payload, null, 2)}\n`,
+    {
+      encoding: "utf8",
+      mode: 0o600,
+    },
+  );
+}
+
+function shouldPersistWatchdogConfig(manageWatchdog, lane) {
+  return manageWatchdog;
+}
+
+async function statusLaneAgents({
+  domain,
+  repoRoot,
+  lane,
+  desiredWorkerSlots = [],
+}) {
+  const discovered = new Set(await discoverLaunchAgentLabels(repoRoot, lane));
+  discovered.add(legacyPerLaneLaunchAgentLabel(repoRoot, lane));
+  for (const workerSlot of desiredWorkerSlots) {
+    discovered.add(launchAgentLabel(repoRoot, lane, workerSlot));
+  }
+  for (const label of [...discovered].sort((left, right) =>
+    left.localeCompare(right, undefined, { numeric: true }),
+  )) {
+    const { plistPath, installed, running, details } = await launchAgentStatus(
+      domain,
+      label,
+    );
+    console.log(
+      `[codex-review-launchctl] lane=${lane} label=${label} installed=${installed ? "1" : "0"} running=${running ? "1" : "0"} plist=${plistPath}`,
+    );
+    if (details.trim()) {
+      console.log(details.trim());
+    }
+  }
+}
+
+async function removeLaneAgents({
+  domain,
+  repoRoot,
+  lane,
+  desiredWorkerSlots = [],
+  reason,
+}) {
+  const legacyPerLaneLabel = legacyPerLaneLaunchAgentLabel(repoRoot, lane);
+  const legacyPerLanePlistPath = await removeLaunchAgent(
+    domain,
+    legacyPerLaneLabel,
+  );
+  console.log(
+    `[codex-review-launchctl] ${reason} legacy-per-lane lane=${lane} label=${legacyPerLaneLabel} plist=${legacyPerLanePlistPath}`,
+  );
+  const labels = new Set(await discoverLaunchAgentLabels(repoRoot, lane));
+  for (const workerSlot of desiredWorkerSlots) {
+    labels.add(launchAgentLabel(repoRoot, lane, workerSlot));
+  }
+  for (const label of [...labels].sort((left, right) =>
+    left.localeCompare(right, undefined, { numeric: true }),
+  )) {
+    if (label === legacyPerLaneLabel) {
+      continue;
+    }
+    const plistPath = await removeLaunchAgent(domain, label);
+    console.log(
+      `[codex-review-launchctl] ${reason} lane=${lane} label=${label} plist=${plistPath}`,
+    );
+  }
+}
+
+async function main() {
+  const args = parseArgs(process.argv);
+  const repoRoot = resolveRepoRoot(process.cwd());
+  const reviewsDir = await resolveDurableWorkerReviewsDir(
+    repoRoot,
+    args.reviewsDir,
+  );
+  const domain = launchctlDomain();
+  const desiredLanes = args.lane === "all" ? ["codex"] : [args.lane];
+  const retiredLanes = legacyCleanupLanes();
+  const legacyLabel = legacyLaunchAgentLabel(repoRoot);
+  const watchdogLabel = watchdogLaunchAgentLabel(repoRoot);
+  const remediationLabel = backlogRemediationLaunchAgentLabel(repoRoot);
+  const manageWatchdog =
+    process.env.CODEX_REVIEW_LAUNCHCTL_SKIP_WATCHDOG !== "1";
+
+  if (args.command === "print-plist") {
+    for (const lane of desiredLanes) {
+      for (const workerSlot of desiredWorkerSlots(args, lane)) {
+        const label = launchAgentLabel(repoRoot, lane, workerSlot);
+        process.stdout.write(
+          plistContent({
+            label,
+            repoRoot,
+            reviewsDir,
+            idleSleepSeconds: args.idleSleepSeconds,
+            heartbeatSeconds: args.heartbeatSeconds,
+            lane,
+            workerSlot,
+          }),
+        );
+        process.stdout.write("\n");
+      }
+    }
+    process.stdout.write(
+      backlogRemediationPlistContent({
+        label: remediationLabel,
+        repoRoot,
+        reviewsDir,
+        idleSleepSeconds: args.idleSleepSeconds,
+      }),
+    );
+    process.stdout.write("\n");
+    return;
+  }
+
+  if (args.command === "status") {
+    const remediation = await launchAgentStatus(domain, remediationLabel);
+    console.log(
+      `[codex-review-launchctl] lane=remediation label=${remediation.label} installed=${remediation.installed ? "1" : "0"} running=${remediation.running ? "1" : "0"} plist=${remediation.plistPath}`,
+    );
+    if (remediation.details.trim()) {
+      console.log(remediation.details.trim());
+    }
+    if (manageWatchdog) {
+      const watchdog = await launchAgentStatus(domain, watchdogLabel);
+      console.log(
+        `[codex-review-launchctl] lane=watchdog label=${watchdog.label} installed=${watchdog.installed ? "1" : "0"} running=${watchdog.running ? "1" : "0"} plist=${watchdog.plistPath}`,
+      );
+      if (watchdog.details.trim()) {
+        console.log(watchdog.details.trim());
+      }
+    }
+    const legacy = await launchAgentStatus(domain, legacyLabel);
+    if (legacy.installed || legacy.running) {
+      console.log(
+        `[codex-review-launchctl] lane=legacy-single label=${legacy.label} installed=${legacy.installed ? "1" : "0"} running=${legacy.running ? "1" : "0"} plist=${legacy.plistPath}`,
+      );
+      if (legacy.details.trim()) {
+        console.log(legacy.details.trim());
+      }
+    }
+    for (const lane of [...new Set([...desiredLanes, ...retiredLanes])]) {
+      await statusLaneAgents({
+        domain,
+        repoRoot,
+        lane,
+        desiredWorkerSlots: desiredLanes.includes(lane)
+          ? desiredWorkerSlots(args, lane)
+          : [],
+      });
+    }
+    return;
+  }
+
+  const desiredLabels = desiredLanes.flatMap((lane) =>
+    desiredWorkerSlots(args, lane).map((workerSlot) =>
+      launchAgentLabel(repoRoot, lane, workerSlot),
+    ),
+  );
+  const plistPaths = [...desiredLabels, remediationLabel].map((label) =>
+    launchAgentPath(label),
+  );
+  await mkdir(path.dirname(plistPaths[0]), { recursive: true, mode: 0o700 });
+  if (args.command === "install") {
+    let watchdogInstallError = "";
+    const legacyPlistPath = await removeLaunchAgent(domain, legacyLabel);
+    console.log(
+      `[codex-review-launchctl] removed legacy-single label=${legacyLabel} plist=${legacyPlistPath}`,
+    );
+    const remediationPlistPath = launchAgentPath(remediationLabel);
+    await writeFile(
+      remediationPlistPath,
+      backlogRemediationPlistContent({
+        label: remediationLabel,
+        repoRoot,
+        reviewsDir,
+        idleSleepSeconds: args.idleSleepSeconds,
+      }),
+      { encoding: "utf8", mode: 0o600 },
+    );
+    await ensureLaunchAgentLoaded(
+      domain,
+      remediationLabel,
+      remediationPlistPath,
+    );
+    console.log(
+      `[codex-review-launchctl] installed lane=remediation label=${remediationLabel} plist=${remediationPlistPath}`,
+    );
+    for (const lane of [...new Set([...desiredLanes, ...retiredLanes])]) {
+      const desired = new Set(
+        (desiredLanes.includes(lane) ? desiredWorkerSlots(args, lane) : []).map(
+          (workerSlot) => launchAgentLabel(repoRoot, lane, workerSlot),
+        ),
+      );
+      const discovered = new Set(
+        await discoverLaunchAgentLabels(repoRoot, lane),
+      );
+      discovered.add(legacyPerLaneLaunchAgentLabel(repoRoot, lane));
+      for (const label of discovered) {
+        if (desired.has(label)) {
+          continue;
+        }
+        const plistPath = await removeLaunchAgent(domain, label);
+        console.log(
+          `[codex-review-launchctl] removed extra lane=${lane} label=${label} plist=${plistPath}`,
+        );
+      }
+      if (!desiredLanes.includes(lane)) {
+        continue;
+      }
+      for (const workerSlot of desiredWorkerSlots(args, lane)) {
+        const label = launchAgentLabel(repoRoot, lane, workerSlot);
+        const plistPath = launchAgentPath(label);
+        await writeFile(
+          plistPath,
+          plistContent({
+            label,
+            repoRoot,
+            reviewsDir,
+            idleSleepSeconds: args.idleSleepSeconds,
+            heartbeatSeconds: args.heartbeatSeconds,
+            lane,
+            workerSlot,
+          }),
+          { encoding: "utf8", mode: 0o600 },
+        );
+        await ensureLaunchAgentLoaded(domain, label, plistPath);
+        console.log(
+          `[codex-review-launchctl] installed lane=${lane} worker_slot=${workerSlot} label=${label} plist=${plistPath}`,
+        );
+      }
+    }
+    if (manageWatchdog) {
+      const watchdogPlistPath = launchAgentPath(watchdogLabel);
+      await writeFile(
+        watchdogPlistPath,
+        watchdogPlistContent({
+          label: watchdogLabel,
+          repoRoot,
+          reviewsDir,
+          codexWorkers: args.codexWorkers,
+          intervalSeconds: args.watchdogIntervalSeconds,
+          idleSleepSeconds: args.idleSleepSeconds,
+          heartbeatSeconds: args.heartbeatSeconds,
+        }),
+        { encoding: "utf8", mode: 0o600 },
+      );
+      try {
+        await ensureLaunchAgentLoaded(domain, watchdogLabel, watchdogPlistPath);
+        console.log(
+          `[codex-review-launchctl] installed lane=watchdog label=${watchdogLabel} plist=${watchdogPlistPath}`,
+        );
+      } catch (error) {
+        watchdogInstallError =
+          error instanceof Error
+            ? error.message
+            : String(error ?? "unknown-error");
+        console.warn(
+          `[codex-review-launchctl] watchdog_install_failed label=${watchdogLabel} plist=${watchdogPlistPath} error=${watchdogInstallError}`,
+        );
+      }
+    }
+    if (
+      !watchdogInstallError &&
+      shouldPersistWatchdogConfig(manageWatchdog, args.lane)
+    ) {
+      await writeWatchdogConfig(reviewsDir, args);
+    }
+    const existingAutomation =
+      await readBacklogRemediationAutomationConfig(reviewsDir);
+    await writeBacklogRemediationAutomationConfig(reviewsDir, {
+      ...existingAutomation,
+      enabled: true,
+    });
+    if (watchdogInstallError) {
+      throw new Error(`watchdog install failed: ${watchdogInstallError}`);
+    }
+    return;
+  }
+
+  if (args.command === "uninstall") {
+    const remediationPlistPath = await removeLaunchAgent(
+      domain,
+      remediationLabel,
+    );
+    console.log(
+      `[codex-review-launchctl] uninstalled lane=remediation label=${remediationLabel} plist=${remediationPlistPath}`,
+    );
+    if (manageWatchdog) {
+      const watchdogPlistPath = await removeLaunchAgent(domain, watchdogLabel);
+      console.log(
+        `[codex-review-launchctl] uninstalled lane=watchdog label=${watchdogLabel} plist=${watchdogPlistPath}`,
+      );
+    }
+    const legacyPlistPath = await removeLaunchAgent(domain, legacyLabel);
+    console.log(
+      `[codex-review-launchctl] uninstalled legacy-single label=${legacyLabel} plist=${legacyPlistPath}`,
+    );
+    for (const lane of [...new Set([...desiredLanes, ...retiredLanes])]) {
+      await removeLaneAgents({
+        domain,
+        repoRoot,
+        lane,
+        desiredWorkerSlots: desiredLanes.includes(lane)
+          ? desiredWorkerSlots(args, lane)
+          : [],
+        reason: "uninstalled",
+      });
+    }
+    if (shouldPersistWatchdogConfig(manageWatchdog, args.lane)) {
+      await rm(watchdogConfigPath(reviewsDir), { force: true });
+    }
+    await writeBacklogRemediationAutomationConfig(reviewsDir, {
+      enabled: false,
+      paused: false,
+      pause_reason: "",
+      last_opened_sha: "",
+    });
+  }
+}
+
+main().catch((error) => {
+  console.error(`[codex-review-launchctl] Failed: ${error.message}`);
+  process.exit(1);
+});

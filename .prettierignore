@@ -1,0 +1,10 @@
+node_modules/
+bin/
+dist/
+coverage/
+.code-reviews/
+.codex/reviews/
+.pnpm-store/
+.tools/
+go.sum
+pnpm-lock.yaml

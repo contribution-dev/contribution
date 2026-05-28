@@ -1,0 +1,47 @@
+{
+  "name": "contribution-tooling",
+  "private": true,
+  "type": "module",
+  "packageManager": "pnpm@10.20.0",
+  "engines": {
+    "node": ">=22.22.2 <23",
+    "pnpm": ">=10.20.0"
+  },
+  "scripts": {
+    "build": "scripts/with-tools go build -trimpath -o bin/contribution ./cmd/contribution",
+    "lint": "pnpm lint:scripts && pnpm lint:go && pnpm format:check",
+    "lint:go": "scripts/with-tools golangci-lint run",
+    "lint:scripts": "node scripts/check-js-syntax.mjs",
+    "lint:changed": "scripts/with-tools node scripts/run-changed-checks.mjs --mode lint",
+    "typecheck": "scripts/with-tools go vet ./...",
+    "typecheck:changed": "scripts/with-tools node scripts/run-changed-checks.mjs --mode typecheck",
+    "test": "scripts/with-tools go test ./...",
+    "test:race": "scripts/with-tools go test -race ./...",
+    "test:scripts": "node --test scripts/*.test.mjs scripts/lib/*.test.mjs",
+    "test:changed": "scripts/with-tools node scripts/run-changed-checks.mjs --mode test",
+    "checks:changed": "scripts/with-tools node scripts/run-changed-checks.mjs --mode all",
+    "format": "prettier --write . && scripts/go-format write",
+    "format:check": "prettier --check . && scripts/go-format check",
+    "vuln": "scripts/with-tools govulncheck ./...",
+    "ci": "pnpm lint:scripts && pnpm format:check && pnpm typecheck && pnpm test && pnpm test:race && pnpm build",
+    "agents:check": "node scripts/check-install-prereqs.mjs && node scripts/check-agents-drift.mjs && node scripts/check-workflow-parity.mjs",
+    "tools:preflight": "scripts/with-tools bash scripts/preflight-tools.sh",
+    "validate:final": "scripts/with-tools node scripts/validate-and-report.mjs",
+    "validate:final:skip-install": "scripts/with-tools node scripts/validate-and-report.mjs --skip-install",
+    "review:worker": "scripts/with-tools scripts/codex-review-worker --watch",
+    "review:worker:once": "scripts/with-tools scripts/codex-review-worker --once",
+    "review:recover": "scripts/codex-review-launchctl install --lane all",
+    "review:status": "scripts/codex-review-status",
+    "review:backfill": "scripts/codex-review-backfill",
+    "review:queue:backlog": "scripts/codex-review-queue-backlog",
+    "review:prune": "node scripts/codex-review-prune-artifacts.mjs",
+    "review:remediate:backlog": "scripts/codex-review-remediate-backlog --scope all",
+    "review:launchctl": "scripts/codex-review-launchctl",
+    "prepare": "husky"
+  },
+  "devDependencies": {
+    "husky": "^9.1.7",
+    "lint-staged": "^17.0.5",
+    "prettier": "^3.8.3"
+  }
+}

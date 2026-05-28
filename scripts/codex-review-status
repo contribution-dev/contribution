@@ -1,0 +1,416 @@
+#!/usr/bin/env node
+
+import { readdir, stat } from "node:fs/promises";
+import { spawnSync } from "node:child_process";
+import path from "node:path";
+import { collectLiveBacklogArtifacts } from "./lib/codex-review-backlog-artifacts.mjs";
+import {
+  collectLaneReportOutcomes,
+  collectLaneThroughput,
+  collectReviewCoverage,
+  collectStaleActiveJobs,
+  estimateEtaSeconds,
+  formatEta,
+} from "./codex-review-metrics.mjs";
+import {
+  reportsDirForLane,
+  resolveRepoRoot,
+  resolveReviewsDir,
+} from "./codex-review-inbox-lib.mjs";
+import {
+  clearReviewQueuePause,
+  collectQueueSummary,
+  readReviewQueueBacklog,
+  readReviewQueuePause,
+} from "./codex-review-queue-lib.mjs";
+import { repairLegacyReviewState } from "./codex-review-repair-state.mjs";
+import { resolveCodexReviewCliContext } from "./lib/codex-review-cli-bootstrap.mjs";
+
+function usage() {
+  console.log(`Usage: scripts/codex-review-status [options]
+
+Options:
+  --watch                     Refresh continuously
+  --interval <seconds>        Watch refresh interval (default: 2)
+  --sha <commit-sha>          Target queue, backlog, and process output to one SHA
+  --include-historical        Include historical backlog in actionable counts
+  --clear-pause               Clear the codex queue pause before rendering status
+  -h, --help                  Show help
+`);
+}
+
+function parseArgs(argv) {
+  const args = {
+    watch: false,
+    intervalSeconds: 2,
+    sha: "",
+    includeHistorical: false,
+    clearPause: false,
+  };
+  for (let index = 2; index < argv.length; index += 1) {
+    const arg = argv[index];
+    const next = argv[index + 1];
+    switch (arg) {
+      case "--watch":
+        args.watch = true;
+        break;
+      case "--interval":
+        args.intervalSeconds = Number.parseInt(String(next ?? "2"), 10);
+        index += 1;
+        break;
+      case "--sha":
+        args.sha = String(next ?? "")
+          .trim()
+          .toLowerCase();
+        index += 1;
+        break;
+      case "--include-historical":
+        args.includeHistorical = true;
+        break;
+      case "--clear-pause":
+        args.clearPause = true;
+        break;
+      case "-h":
+      case "--help":
+        usage();
+        process.exit(0);
+        break;
+      default:
+        throw new Error(`Unknown argument: ${arg}`);
+    }
+  }
+  if (!Number.isInteger(args.intervalSeconds) || args.intervalSeconds <= 0) {
+    throw new Error(`Invalid --interval: ${args.intervalSeconds}`);
+  }
+  return args;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function readProcessLines(columns) {
+  for (const binary of ["/bin/ps", "/usr/bin/ps", "ps"]) {
+    const result = spawnSync(binary, ["-axo", columns], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    if (result.status === 0) {
+      return String(result.stdout ?? "")
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+    }
+  }
+  return [];
+}
+
+function processSnapshot(filterSha = "") {
+  const lines = readProcessLines("pid=,etime=,args=").filter((line) => {
+    if (
+      !/codex-review-worker|codex-review-commit|git push|launchctl/.test(line)
+    ) {
+      return false;
+    }
+    if (!filterSha) return true;
+    return line.includes(filterSha);
+  });
+  return lines;
+}
+
+function readLaunchctlWorkerStatus(repoRoot) {
+  const launchctlScript = path.join(
+    repoRoot,
+    "scripts",
+    "codex-review-launchctl",
+  );
+  try {
+    const output = spawnSync(
+      process.execPath,
+      [launchctlScript, "status", "--lane", "codex"],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        env: {
+          ...process.env,
+          CODEX_REVIEW_LAUNCHCTL_SKIP_WATCHDOG: "1",
+        },
+      },
+    );
+    if (output.status !== 0) {
+      return [];
+    }
+    return String(output.stdout ?? "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) =>
+        /^\[codex-review-launchctl\] lane=codex label=com\.contribution\.codex-review-worker\.[^ ]+ installed=\d running=\d /.test(
+          line,
+        ),
+      );
+  } catch {
+    return [];
+  }
+}
+
+function hasRunningLaunchctlWorkers(lines) {
+  return lines.some((line) => /running=1\b/.test(line));
+}
+
+function workerProcessCount(processLines) {
+  let codex = 0;
+  for (const line of processLines) {
+    if (line === "none") continue;
+    if (
+      /codex-review-worker .*--lane codex/.test(line) ||
+      (/^\[codex-review-launchctl\]/.test(line) &&
+        /lane=codex\b/.test(line) &&
+        /running=1\b/.test(line))
+    ) {
+      codex += 1;
+    }
+  }
+  return codex;
+}
+
+function currentHeadSha(repoRoot) {
+  const result = spawnSync("git", ["rev-parse", "HEAD"], {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "ignore"],
+  });
+  if (result.status !== 0) {
+    return "";
+  }
+  return String(result.stdout ?? "")
+    .trim()
+    .toLowerCase();
+}
+
+async function recentReports(reviewsDir, filterSha = "") {
+  const reports = [];
+  const laneDir = reportsDirForLane(reviewsDir, "codex");
+  const entries = await readdir(laneDir).catch(() => []);
+  for (const entry of entries) {
+    if (!entry.endsWith(".json") || entry === ".ack.json") continue;
+    if (filterSha && !entry.startsWith(filterSha)) continue;
+    const fullPath = path.join(laneDir, entry);
+    const info = await stat(fullPath).catch(() => null);
+    if (!info) continue;
+    reports.push({
+      name: entry,
+      mtimeMs: info.mtimeMs,
+    });
+  }
+  reports.sort((left, right) => right.mtimeMs - left.mtimeMs);
+  return reports.slice(0, 12);
+}
+
+function renderJobs(summary, filterSha = "") {
+  const jobs = summary.jobs.filter(
+    (entry) =>
+      entry.lane === "codex" && (!filterSha || entry.job.sha === filterSha),
+  );
+  if (jobs.length === 0) return ["none"];
+  return jobs.slice(0, 12).map((entry) => {
+    const heartbeat =
+      entry.job.worker?.heartbeat_at ||
+      entry.job.started_at ||
+      entry.job.enqueued_at ||
+      "unknown";
+    const heartbeatMs = Date.parse(String(heartbeat));
+    const heartbeatAgeSeconds = Number.isFinite(heartbeatMs)
+      ? Math.max(0, Math.floor((Date.now() - heartbeatMs) / 1000))
+      : "unknown";
+    return [
+      entry.job.sha,
+      `status=${entry.status}`,
+      `trigger=${entry.job.trigger_last}`,
+      `attempts=${entry.job.attempts}`,
+      `last_error=${entry.job.last_error || "none"}`,
+      `heartbeat=${heartbeat}`,
+      `heartbeat_age_seconds=${heartbeatAgeSeconds}`,
+    ].join(" ");
+  });
+}
+
+async function renderStatus(
+  filterSha = "",
+  { includeHistorical = false } = {},
+) {
+  const { repoRoot, reviewsDir } = await resolveCodexReviewCliContext({
+    invocationCwd: process.cwd(),
+  });
+  const summary = await collectQueueSummary(reviewsDir, { lane: "codex" });
+  const pauseState = await readReviewQueuePause(reviewsDir, "codex");
+  const backlogState = await readReviewQueueBacklog(reviewsDir, "codex");
+  const coverage = await collectReviewCoverage(reviewsDir);
+  const headSha = currentHeadSha(repoRoot);
+  const backlogArtifacts = await collectLiveBacklogArtifacts(reviewsDir, {
+    headSha,
+  });
+  const filteredBacklogArtifacts = filterSha
+    ? backlogArtifacts.filter((entry) => entry.sha === filterSha)
+    : backlogArtifacts;
+  const actionableBacklog = filteredBacklogArtifacts.filter(
+    (entry) => entry.category === "actionable" && !entry.requiresAdjudication,
+  );
+  const currentTipActionable = actionableBacklog.filter(
+    (entry) => entry.scope === "head" && entry.ownership !== "remediation",
+  );
+  const historicalUnownedActionable = actionableBacklog.filter(
+    (entry) => entry.scope !== "head" && entry.ownership !== "remediation",
+  );
+  const remediationOwnedActionable = actionableBacklog.filter(
+    (entry) => entry.ownership === "remediation",
+  );
+  const adjudicationArtifacts = filteredBacklogArtifacts.filter(
+    (entry) => entry.requiresAdjudication,
+  );
+  const codexThroughput = await collectLaneThroughput(reviewsDir, "codex");
+  const codexOutcomes = await collectLaneReportOutcomes(reviewsDir, "codex", {
+    sinceMs: Date.now() - 6 * 60 * 60 * 1000,
+  });
+  const stale = await collectStaleActiveJobs(reviewsDir);
+  const repairPreview = await repairLegacyReviewState({
+    repoRoot,
+    reviewsDir,
+    dryRun: true,
+  }).catch(() => null);
+  const reports = await recentReports(reviewsDir, filterSha);
+  const launchctlLines = readLaunchctlWorkerStatus(repoRoot);
+  const workerProcesses = processSnapshot(filterSha);
+  const workerCountLines =
+    !filterSha && hasRunningLaunchctlWorkers(launchctlLines)
+      ? launchctlLines
+      : workerProcesses;
+  const processLines =
+    !filterSha && workerProcesses.length === 0 && launchctlLines.length > 0
+      ? launchctlLines
+      : workerProcesses;
+  const codexWorkerCount = workerProcessCount(workerCountLines);
+  const codexSummary = summary.lanes?.codex ?? {
+    pending: 0,
+    active: 0,
+    oldestPendingAgeSeconds: 0,
+  };
+  const staleCodexJobs = stale.jobs.filter((entry) => entry.lane === "codex");
+  const codexEtaSeconds = estimateEtaSeconds(
+    coverage.codexBacklogTotal,
+    codexThroughput.windows["3h"].satisfiedPerHour,
+  );
+
+  console.log(`[codex-review-status] repo=${repoRoot}`);
+  console.log("[queue]");
+  console.log(
+    `lane=codex running=${codexWorkerCount} pending=${codexSummary.pending} active=${codexSummary.active} oldest_pending_age_seconds=${codexSummary.oldestPendingAgeSeconds ?? 0} oldest_active_age_seconds=${codexSummary.oldestActiveAgeSeconds ?? 0}`,
+  );
+  console.log("[pause]");
+  console.log(
+    `lane=codex paused=${pauseState.paused ? 1 : 0} reason=${pauseState.reason || "none"} sha=${pauseState.sha || "none"} updated_at=${pauseState.updated_at || "none"}`,
+  );
+  console.log("[backlog]");
+  console.log(
+    `lane=codex active=${backlogState.active ? 1 : 0} enqueue_after=${backlogState.enqueue_after || "none"} parked_pending=${codexSummary.pendingBlockedByBacklog ?? 0} reason=${backlogState.reason || "none"} updated_at=${backlogState.updated_at || "none"}`,
+  );
+  console.log("[coverage]");
+  console.log(
+    `codex_backlog_total=${coverage.codexBacklogTotal} codex_active=${coverage.codexActive}`,
+  );
+  console.log("[actionable]");
+  console.log(
+    `current_tip=${currentTipActionable.length} historical_unowned=${historicalUnownedActionable.length} remediation_owned=${remediationOwnedActionable.length} needs_adjudication=${adjudicationArtifacts.length} total_unowned=${currentTipActionable.length + historicalUnownedActionable.length + adjudicationArtifacts.length}`,
+  );
+  if (includeHistorical || filterSha) {
+    console.log("[actionable-shas]");
+    for (const entry of [
+      ...currentTipActionable,
+      ...historicalUnownedActionable,
+      ...remediationOwnedActionable,
+      ...adjudicationArtifacts,
+    ].slice(0, 12)) {
+      console.log(
+        `${entry.sha} scope=${entry.scope} ownership=${entry.ownership} findings=${entry.findingsCount} status=${entry.reviewStatus || "none"} adjudication=${entry.requiresAdjudication ? 1 : 0}`,
+      );
+    }
+    if (
+      currentTipActionable.length +
+        historicalUnownedActionable.length +
+        remediationOwnedActionable.length +
+        adjudicationArtifacts.length ===
+      0
+    ) {
+      console.log("none");
+    }
+  }
+  console.log("[throughput]");
+  console.log(
+    `lane=codex last_completed=${codexThroughput.lastCompletedAt || "none"} h1=${codexThroughput.windows["1h"].satisfiedPerHour.toFixed(2)}/h h3=${codexThroughput.windows["3h"].satisfiedPerHour.toFixed(2)}/h h6=${codexThroughput.windows["6h"].satisfiedPerHour.toFixed(2)}/h`,
+  );
+  console.log("[outcomes]");
+  console.log(`reports_last_6h=${codexOutcomes.totalReports}`);
+  if (codexOutcomes.top.length === 0) {
+    console.log("none");
+  } else {
+    for (const entry of codexOutcomes.top) {
+      console.log(`${entry.key} count=${entry.count}`);
+    }
+  }
+  console.log("[eta]");
+  console.log(`codex_backlog=${formatEta(codexEtaSeconds)}`);
+  console.log("[alerts]");
+  console.log(
+    `stale_active_jobs=${staleCodexJobs.length} shas=${
+      staleCodexJobs
+        .map((entry) => entry.sha)
+        .slice(0, 12)
+        .join(",") || "none"
+    }`,
+  );
+  console.log(
+    `backlog_freeze_active=${backlogState.active ? 1 : 0} parked_pending=${codexSummary.pendingBlockedByBacklog ?? 0}`,
+  );
+  if (repairPreview) {
+    console.log("[invariants]");
+    console.log(
+      `misplaced_log_reports=${repairPreview.movedMisplacedLogReports + repairPreview.deletedMisplacedLogReports} queue_recovery_reports=${repairPreview.removedQueueRecoveryReports} legacy_outcome_jobs=${repairPreview.removedLegacyOutcomeJobs} markdown_repairs=${repairPreview.regeneratedMarkdown} rerun_candidates=${repairPreview.requeuedMissingCanonicalReports} invariant_warnings=${repairPreview.invariantWarnings}`,
+    );
+  }
+  console.log("[recent-reports]");
+  for (const report of reports.length > 0 ? reports : [{ name: "none" }]) {
+    console.log(report.name);
+  }
+  console.log("[jobs]");
+  for (const line of renderJobs(summary, filterSha)) {
+    console.log(line);
+  }
+  console.log("[processes]");
+  for (const line of processLines.length > 0 ? processLines : ["none"]) {
+    console.log(line);
+  }
+}
+
+async function main() {
+  const args = parseArgs(process.argv);
+  if (args.clearPause) {
+    const { reviewsDir } = await resolveCodexReviewCliContext({
+      invocationCwd: process.cwd(),
+    });
+    await clearReviewQueuePause(reviewsDir, "codex");
+    console.log("[codex-review-status] cleared pause lane=codex");
+  }
+  do {
+    await renderStatus(args.sha, { includeHistorical: args.includeHistorical });
+    if (!args.watch) {
+      return;
+    }
+    await sleep(args.intervalSeconds * 1000);
+    console.log("");
+  } while (true);
+}
+
+main().catch((error) => {
+  console.error(`[codex-review-status] Failed: ${error.message}`);
+  process.exit(1);
+});

@@ -1,0 +1,389 @@
+#!/usr/bin/env node
+
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import {
+  ackPathForLane,
+  buildReportSuppressor,
+  collectReports,
+  defaultOpenReport,
+  pauseBacklogRemediationForManualFallback,
+  readAckState,
+  reportsDirForLane,
+  runCatchup,
+  shouldAutoOpenReport,
+} from "./codex-review-inbox-lib.mjs";
+import {
+  collectLiveBacklogArtifacts,
+  resolveArtifactOwnership,
+} from "./lib/codex-review-backlog-artifacts.mjs";
+import { prepareCodexReviewCliContext } from "./lib/codex-review-cli-bootstrap.mjs";
+import {
+  computeOutgoingShas,
+  defaultGitExec,
+  parseRefUpdates,
+} from "./codex-review-push-gate-lib.mjs";
+
+function usage() {
+  console.log(`Usage: scripts/codex-review-inbox [options]
+
+Options:
+  --mode <catch-up|list>      Operation mode (default: catch-up)
+  --max-opens <n>             Max reports to open in catch-up mode (default: 1)
+  --include-failed <0|1>      Surface failed reviews as actionable (default: 1)
+  --sha <sha>                 Limit results/openings to a specific review SHA (repeatable)
+  --context-file <path>       Limit results/openings to SHAs in a phase-0 pre-push context
+  --stdin-file <path>         Limit results/openings to SHAs in a pre-push stdin capture
+  --remote-name <name>        Remote name for --stdin-file SHA derivation
+  --reviews-dir <path>        Override reviews directory
+  --dry-run                   Simulate openings without writing ack state
+  -h, --help                  Show this help
+`);
+}
+
+function parseArgs(argv) {
+  const args = {
+    mode: "catch-up",
+    maxOpens: Number.parseInt(
+      process.env.CODEX_REVIEW_INBOX_MAX_OPENS ?? "1",
+      10,
+    ),
+    includeFailed:
+      (process.env.CODEX_REVIEW_INBOX_INCLUDE_FAILED ?? "1").trim() !== "0",
+    reviewsDir:
+      process.env.CODE_REVIEW_DIR && process.env.CODE_REVIEW_DIR.trim()
+        ? process.env.CODE_REVIEW_DIR.trim()
+        : process.env.CODEX_REVIEW_DIR && process.env.CODEX_REVIEW_DIR.trim()
+          ? process.env.CODEX_REVIEW_DIR.trim()
+          : "",
+    shaFilters: [],
+    contextFile: "",
+    stdinFile: "",
+    remoteName: "",
+    dryRun: false,
+  };
+
+  for (let i = 2; i < argv.length; i += 1) {
+    const arg = argv[i];
+    const next = argv[i + 1];
+    switch (arg) {
+      case "--mode":
+        args.mode = String(next ?? "");
+        i += 1;
+        break;
+      case "--max-opens":
+        args.maxOpens = Number.parseInt(next ?? "", 10);
+        i += 1;
+        break;
+      case "--include-failed":
+        args.includeFailed = String(next ?? "1") !== "0";
+        i += 1;
+        break;
+      case "--sha":
+        args.shaFilters.push(
+          String(next ?? "")
+            .trim()
+            .toLowerCase(),
+        );
+        i += 1;
+        break;
+      case "--context-file":
+        args.contextFile = String(next ?? "").trim();
+        i += 1;
+        break;
+      case "--stdin-file":
+        args.stdinFile = String(next ?? "").trim();
+        i += 1;
+        break;
+      case "--remote-name":
+        args.remoteName = String(next ?? "").trim();
+        i += 1;
+        break;
+      case "--reviews-dir":
+        args.reviewsDir = String(next ?? "");
+        i += 1;
+        break;
+      case "--dry-run":
+        args.dryRun = true;
+        break;
+      case "-h":
+      case "--help":
+        usage();
+        process.exit(0);
+        break;
+      default:
+        throw new Error(`Unknown argument: ${arg}`);
+    }
+  }
+
+  if (!["catch-up", "list"].includes(args.mode)) {
+    throw new Error(`Invalid --mode: ${args.mode}`);
+  }
+  if (!Number.isInteger(args.maxOpens) || args.maxOpens < 0) {
+    throw new Error(`Invalid --max-opens: ${args.maxOpens}`);
+  }
+
+  return args;
+}
+
+function shasFromPushContext(pushContext) {
+  return [
+    ...(Array.isArray(pushContext?.outgoingShas)
+      ? pushContext.outgoingShas
+      : []),
+    ...(Array.isArray(pushContext?.pushTipShas) ? pushContext.pushTipShas : []),
+  ]
+    .map((sha) =>
+      String(sha ?? "")
+        .trim()
+        .toLowerCase(),
+    )
+    .filter(Boolean);
+}
+
+async function resolveShaFilterSet(args, repoRoot) {
+  const selected = new Set(
+    args.shaFilters
+      .map((sha) =>
+        String(sha ?? "")
+          .trim()
+          .toLowerCase(),
+      )
+      .filter(Boolean),
+  );
+  if (args.contextFile) {
+    const pushContext = JSON.parse(await readFile(args.contextFile, "utf8"));
+    for (const sha of shasFromPushContext(pushContext)) {
+      selected.add(sha);
+    }
+  }
+  if (!args.stdinFile) {
+    return selected;
+  }
+
+  const stdinText = await readFile(args.stdinFile, "utf8");
+  const updates = parseRefUpdates(stdinText);
+  const outgoingShas = computeOutgoingShas({
+    updates,
+    remoteName: args.remoteName,
+    gitExec: (gitArgs) => defaultGitExec(gitArgs, repoRoot),
+  });
+  for (const sha of outgoingShas) {
+    selected.add(
+      String(sha ?? "")
+        .trim()
+        .toLowerCase(),
+    );
+  }
+  return selected;
+}
+
+async function main() {
+  if ((process.env.CODEX_REVIEW_INBOX_ENABLED ?? "1") === "0") {
+    return;
+  }
+
+  const args = parseArgs(process.argv);
+  const { repoRoot, reviewsDir } = await prepareCodexReviewCliContext({
+    invocationCwd: process.cwd(),
+    reviewsDirOverride: args.reviewsDir,
+    warnPrefix: "codex-review-inbox",
+  });
+  const shaFilter = await resolveShaFilterSet(args, repoRoot);
+  const hasExplicitShaSelection = shaFilter.size > 0;
+  const currentHeadSha = resolveCurrentHeadSha(repoRoot);
+  await collectLiveBacklogArtifacts(reviewsDir, { headSha: currentHeadSha });
+
+  if (args.mode === "list") {
+    const laneResults = await Promise.all(
+      ["codex", "incidents"].map(async (lane) => {
+        const laneReportsDir = reportsDirForLane(reviewsDir, lane);
+        const laneAckPath = ackPathForLane(reviewsDir, lane);
+        const backlogSuppressor = hasExplicitShaSelection
+          ? () => false
+          : await buildReportSuppressor(laneReportsDir);
+        const shouldSuppressReport = async (report) => {
+          if (
+            !shouldSurfaceReportByDefault({
+              lane,
+              reviewsDir,
+              reportSha: report?.sha,
+              currentHeadSha,
+              hasLiteralShaArgs: hasExplicitShaSelection,
+            })
+          ) {
+            return true;
+          }
+          return backlogSuppressor(report);
+        };
+        const [reports, ackState] = await Promise.all([
+          collectReports({
+            reviewsDir: laneReportsDir,
+            includeFailed: args.includeFailed,
+            shouldSuppressReport,
+          }),
+          readAckState(laneAckPath),
+        ]);
+        const filteredReports =
+          shaFilter.size > 0
+            ? reports.filter((report) => shaFilter.has(report.sha))
+            : reports;
+        const actionable = filteredReports
+          .filter((report) => report.actionable)
+          .map((report) => ({ ...report, lane }));
+        const pending = actionable.filter(
+          (report) =>
+            String(ackState.acks?.[report.sha]?.version_token ?? "") !==
+            report.versionToken,
+        );
+        return { actionable, pending, ackState };
+      }),
+    );
+    const actionable = laneResults.flatMap((item) => item.actionable);
+    const pending = laneResults.flatMap((item) => item.pending);
+    const ackedCount = laneResults.reduce(
+      (sum, item) => sum + Object.keys(item.ackState.acks).length,
+      0,
+    );
+    console.log(
+      `[codex-review-inbox] actionable=${actionable.length} pending=${pending.length} acked=${ackedCount}`,
+    );
+    for (const report of pending) {
+      const findings = Array.isArray(report.parsed?.findings)
+        ? report.parsed.findings.length
+        : 0;
+      console.log(
+        `- lane=${report.lane} sha=${report.sha} status=${String(report.parsed?.review_status ?? "")} findings=${findings} last_reviewed=${String(report.parsed?.last_reviewed ?? "")}`,
+      );
+    }
+    return;
+  }
+
+  let remainingBudget = args.maxOpens;
+  const results = [];
+  for (const lane of ["codex", "incidents"]) {
+    const laneReportsDir = reportsDirForLane(reviewsDir, lane);
+    const laneAckPath = ackPathForLane(reviewsDir, lane);
+    const backlogSuppressor = hasExplicitShaSelection
+      ? () => false
+      : await buildReportSuppressor(laneReportsDir);
+    const shouldSuppressReport = async (report) => {
+      if (
+        !shouldSurfaceReportByDefault({
+          lane,
+          reviewsDir,
+          reportSha: report?.sha,
+          currentHeadSha,
+          hasLiteralShaArgs: hasExplicitShaSelection,
+        })
+      ) {
+        return true;
+      }
+      return backlogSuppressor(report);
+    };
+    const result = await runCatchup({
+      reviewsDir: laneReportsDir,
+      ackPath: laneAckPath,
+      includeFailed: args.includeFailed,
+      maxOpens: remainingBudget,
+      shaFilter,
+      shouldSuppressReport,
+      comparePendingReports: createDefaultPendingComparator(currentHeadSha),
+      dryRun: args.dryRun,
+      shouldOpenReport: (report) =>
+        shouldAutoOpenReport({
+          lane,
+          report,
+          hasLiteralShaArgs: hasExplicitShaSelection,
+        }),
+      openReport:
+        lane === "codex"
+          ? async (mdPath) => {
+              const opened = defaultOpenReport(mdPath);
+              if (!opened) return false;
+              const sha = path.basename(String(mdPath ?? ""), ".md");
+              if (!hasExplicitShaSelection) {
+                await pauseBacklogRemediationForManualFallback(
+                  laneReportsDir,
+                  sha,
+                );
+              }
+              return true;
+            }
+          : undefined,
+    });
+    results.push(result);
+    remainingBudget = Math.max(0, remainingBudget - result.opened);
+    if (remainingBudget === 0) {
+      break;
+    }
+  }
+  const result = results.reduce(
+    (acc, item) => ({
+      actionable: [...acc.actionable, ...item.actionable],
+      pending: [...acc.pending, ...item.pending],
+      opened: acc.opened + item.opened,
+    }),
+    { actionable: [], pending: [], opened: 0 },
+  );
+  console.log(
+    `[codex-review-inbox] actionable=${result.actionable.length} pending=${result.pending.length} opened=${result.opened}`,
+  );
+}
+
+function resolveCurrentHeadSha(repoRoot) {
+  try {
+    return defaultGitExec(["rev-parse", "HEAD"], repoRoot).trim().toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function shouldSurfaceReportByDefault({
+  lane,
+  reviewsDir,
+  reportSha,
+  currentHeadSha,
+  hasLiteralShaArgs,
+}) {
+  if (String(lane) !== "codex" || hasLiteralShaArgs) {
+    return true;
+  }
+  const normalizedSha = String(reportSha ?? "")
+    .trim()
+    .toLowerCase();
+  const normalizedHeadSha = String(currentHeadSha ?? "")
+    .trim()
+    .toLowerCase();
+  if (!normalizedSha) {
+    return false;
+  }
+  if (!normalizedHeadSha || normalizedSha !== normalizedHeadSha) {
+    return false;
+  }
+  const ownership = resolveArtifactOwnership(reviewsDir, normalizedSha);
+  return ownership.ownership !== "remediation";
+}
+
+function createDefaultPendingComparator(currentHeadSha) {
+  const normalizedHeadSha = String(currentHeadSha ?? "")
+    .trim()
+    .toLowerCase();
+  return (left, right) => {
+    const leftIsHead =
+      normalizedHeadSha && left?.sha === normalizedHeadSha ? 1 : 0;
+    const rightIsHead =
+      normalizedHeadSha && right?.sha === normalizedHeadSha ? 1 : 0;
+    return rightIsHead - leftIsHead;
+  };
+}
+
+if (
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1] ?? "")).href
+) {
+  main().catch((error) => {
+    console.error(`[codex-review-inbox] Failed: ${error.message}`);
+    process.exit(1);
+  });
+}

@@ -1,0 +1,228 @@
+#!/usr/bin/env node
+
+import { execFileSync, spawnSync } from "node:child_process";
+import path from "node:path";
+import {
+  collectReviewCoverage,
+  collectStaleActiveJobs,
+} from "./codex-review-metrics.mjs";
+import { collectQueueSummary } from "./codex-review-queue-lib.mjs";
+import {
+  resolveDurableWorkerReviewsDir,
+  resolveRepoRoot,
+} from "./codex-review-inbox-lib.mjs";
+
+function usage() {
+  console.log(`Usage: scripts/codex-review-watchdog [options]
+
+Options:
+  --codex-workers <n>          Desired codex worker count (default: 2)
+  --idle-sleep-seconds <n>     Worker idle sleep in watch mode (default: 5)
+  --heartbeat-seconds <n>      Worker heartbeat interval (default: 5)
+  --reviews-dir <path>         Override reviews directory
+  -h, --help                   Show help
+`);
+}
+
+function parseArgs(argv) {
+  const args = {
+    codexWorkers: 2,
+    idleSleepSeconds: 5,
+    heartbeatSeconds: 5,
+    reviewsDir: "",
+  };
+  for (let index = 2; index < argv.length; index += 1) {
+    const arg = argv[index];
+    const next = argv[index + 1];
+    switch (arg) {
+      case "--codex-workers":
+        args.codexWorkers = Number.parseInt(String(next ?? "2"), 10);
+        index += 1;
+        break;
+      case "--idle-sleep-seconds":
+        args.idleSleepSeconds = Number.parseInt(String(next ?? "5"), 10);
+        index += 1;
+        break;
+      case "--heartbeat-seconds":
+        args.heartbeatSeconds = Number.parseInt(String(next ?? "5"), 10);
+        index += 1;
+        break;
+      case "--reviews-dir":
+        args.reviewsDir = String(next ?? "");
+        index += 1;
+        break;
+      case "-h":
+      case "--help":
+        usage();
+        process.exit(0);
+        break;
+      default:
+        throw new Error(`Unknown argument: ${arg}`);
+    }
+  }
+  if (!Number.isInteger(args.codexWorkers) || args.codexWorkers <= 0) {
+    throw new Error(`Invalid --codex-workers: ${args.codexWorkers}`);
+  }
+  if (!Number.isInteger(args.idleSleepSeconds) || args.idleSleepSeconds <= 0) {
+    throw new Error(`Invalid --idle-sleep-seconds: ${args.idleSleepSeconds}`);
+  }
+  if (!Number.isInteger(args.heartbeatSeconds) || args.heartbeatSeconds <= 0) {
+    throw new Error(`Invalid --heartbeat-seconds: ${args.heartbeatSeconds}`);
+  }
+  return args;
+}
+
+function readProcessLines(columns) {
+  for (const binary of ["/bin/ps", "/usr/bin/ps", "ps"]) {
+    const result = spawnSync(binary, ["-axo", columns], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+    });
+    if (result.status === 0) {
+      return String(result.stdout ?? "")
+        .split(/\r?\n/)
+        .map((line) => line.trim())
+        .filter(Boolean);
+    }
+  }
+  return [];
+}
+
+function readLaunchctlWorkerStatus(repoRoot) {
+  const launchctlScript = path.join(
+    repoRoot,
+    "scripts",
+    "codex-review-launchctl",
+  );
+  try {
+    const output = spawnSync(
+      process.execPath,
+      [launchctlScript, "status", "--lane", "all"],
+      {
+        cwd: repoRoot,
+        encoding: "utf8",
+        stdio: ["ignore", "pipe", "ignore"],
+        env: {
+          ...process.env,
+          CODEX_REVIEW_LAUNCHCTL_SKIP_WATCHDOG: "1",
+        },
+      },
+    );
+    if (output.status !== 0) {
+      return [];
+    }
+    return String(output.stdout ?? "")
+      .split(/\r?\n/)
+      .map((line) => line.trim())
+      .filter((line) =>
+        /^\[codex-review-launchctl\] lane=(codex|remediation) label=com\.contribution\.codex-review-(worker|remediation)\.[^ ]+ installed=\d running=\d /.test(
+          line,
+        ),
+      );
+  } catch {
+    return [];
+  }
+}
+
+function hasRunningLaunchctlWorkers(lines) {
+  return lines.some((line) => /running=1\b/.test(line));
+}
+
+function workerProcessCounts(repoRoot) {
+  const launchctlWorkers = readLaunchctlWorkerStatus(repoRoot);
+  if (hasRunningLaunchctlWorkers(launchctlWorkers)) {
+    return {
+      codex: launchctlWorkers.filter(
+        (line) => /lane=codex\b/.test(line) && /running=1\b/.test(line),
+      ).length,
+      remediation: launchctlWorkers.filter(
+        (line) => /lane=remediation\b/.test(line) && /running=1\b/.test(line),
+      ).length,
+    };
+  }
+  const counts = {
+    codex: 0,
+    remediation: 0,
+  };
+  const lines = readProcessLines("args=")
+    .filter((line) => line.includes(repoRoot))
+    .filter((line) =>
+      /codex-review-worker|codex-review-remediation-worker/.test(line),
+    );
+  for (const line of lines) {
+    if (/--lane codex/.test(line)) {
+      counts.codex += 1;
+    } else if (/codex-review-remediation-worker/.test(line)) {
+      counts.remediation += 1;
+    }
+  }
+  return counts;
+}
+
+function needsRepair(counts, args) {
+  return counts.codex < args.codexWorkers || counts.remediation < 1;
+}
+
+async function main() {
+  const args = parseArgs(process.argv);
+  const repoRoot = resolveRepoRoot(process.cwd());
+  const reviewsDir = await resolveDurableWorkerReviewsDir(
+    repoRoot,
+    args.reviewsDir,
+  );
+  const summary = await collectQueueSummary(reviewsDir, { lane: "all" });
+  const coverage = await collectReviewCoverage(reviewsDir);
+  const desiredCounts = {
+    codexWorkers: args.codexWorkers,
+  };
+  const counts = workerProcessCounts(repoRoot);
+  const staleActive = await collectStaleActiveJobs(reviewsDir, {
+    lane: "codex",
+  });
+  if (!needsRepair(counts, desiredCounts) && staleActive.jobs.length === 0) {
+    console.log(
+      `[codex-review-watchdog] healthy codex=${counts.codex}/${desiredCounts.codexWorkers} remediation=${counts.remediation}/1 stale_active=${staleActive.jobs.length} actionable_codex_backlog=${coverage.codexBacklogTotal} oldest_codex_pending_age_seconds=${summary.lanes.codex.oldestPendingAgeSeconds}`,
+    );
+    return;
+  }
+
+  const launchctlScript = path.join(
+    repoRoot,
+    "scripts",
+    "codex-review-launchctl",
+  );
+  execFileSync(
+    process.execPath,
+    [
+      launchctlScript,
+      "install",
+      "--lane",
+      "all",
+      "--codex-workers",
+      String(desiredCounts.codexWorkers),
+      "--idle-sleep-seconds",
+      String(args.idleSleepSeconds),
+      "--heartbeat-seconds",
+      String(args.heartbeatSeconds),
+      "--reviews-dir",
+      reviewsDir,
+    ],
+    {
+      cwd: repoRoot,
+      encoding: "utf8",
+      env: {
+        ...process.env,
+        CODEX_REVIEW_LAUNCHCTL_SKIP_WATCHDOG: "1",
+      },
+      stdio: ["ignore", "pipe", "pipe"],
+    },
+  );
+  console.log(
+    `[codex-review-watchdog] repaired codex=${counts.codex}/${desiredCounts.codexWorkers} remediation=${counts.remediation}/1 stale_active=${staleActive.jobs.length} actionable_codex_backlog=${coverage.codexBacklogTotal} oldest_codex_pending_age_seconds=${summary.lanes.codex.oldestPendingAgeSeconds}`,
+  );
+}
+
+main().catch((error) => {
+  console.error(`[codex-review-watchdog] Failed: ${error.message}`);
+  process.exit(1);
+});

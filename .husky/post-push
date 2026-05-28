@@ -1,0 +1,19 @@
+#!/bin/sh
+
+. "$(dirname "$0")/_/codex-bootstrap.sh"
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+
+if [ "${CODEX_REVIEW_ENABLED:-1}" = "0" ] || [ "${CODEX_REVIEW_POST_PUSH_ENABLED:-1}" = "0" ]; then
+  # Drain stdin to avoid broken pipe behavior in some git clients.
+  cat >/dev/null
+  exit 0
+fi
+
+TMP_INPUT="$(mktemp)"
+cat > "$TMP_INPUT"
+trap 'rm -f "$TMP_INPUT"' EXIT
+cd "$REPO_ROOT"
+scripts/codex-review-post-push "$TMP_INPUT" "${1:-}" || true
+
+exit 0

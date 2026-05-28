@@ -1,0 +1,54 @@
+{
+  "version": 1,
+  "riskTierPriority": ["high", "medium"],
+  "riskTierRules": {
+    "high": [
+      "cmd/**",
+      "internal/**",
+      "scripts/codex-review-*",
+      "scripts/risk-policy/**",
+      ".github/workflows/**",
+      ".goreleaser.yml",
+      "go.mod",
+      "go.sum"
+    ],
+    "medium": [
+      "scripts/**",
+      ".husky/**",
+      "AGENTS.md",
+      "docs/reference/**",
+      "docs/tooling-validation.md",
+      "package.json"
+    ]
+  },
+  "reviewAgent": {
+    "mode": "required",
+    "requiredTiers": ["high", "medium"],
+    "checkRunNamePatterns": [
+      "coderabbit",
+      "greptile",
+      "review agent",
+      "code review"
+    ]
+  },
+  "reviewAutomation": {
+    "rerun": {
+      "enabled": true,
+      "triggerOnStatuses": ["no-match", "pending", "non-success", "timeout"],
+      "marker": "<!-- review-agent-auto-rerun -->",
+      "shaTokenPrefix": "sha:",
+      "commentTemplate": "@review-agent please re-review"
+    },
+    "autoResolve": {
+      "enabled": true,
+      "requireCurrentHeadReviewSuccess": true,
+      "allowedBotAuthors": ["coderabbitai[bot]", "greptile-app[bot]"]
+    }
+  },
+  "remediationAgent": {
+    "enabled": true,
+    "requiredTiers": ["high"],
+    "blockedPaths": [],
+    "maxFindingsPerRun": 5
+  }
+}

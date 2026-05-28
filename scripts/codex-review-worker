@@ -1,0 +1,618 @@
+#!/usr/bin/env node
+
+import os from "node:os";
+import { execFileSync } from "node:child_process";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import { executeCodexReviewCommit } from "./codex-review-commit.mjs";
+import { main as runRemediationWorker } from "./codex-review-remediation-worker";
+import {
+  defaultOpenReport,
+  pauseBacklogRemediationForManualFallback,
+  runCatchup,
+  reportsDirForLane,
+  readBacklogRemediationAutomationConfig,
+} from "./codex-review-inbox-lib.mjs";
+import { buildStaleSupersessionArchiver } from "./lib/codex-review-backlog-artifacts.mjs";
+import {
+  claimNextReviewJob,
+  pauseReviewQueue,
+  ensureReviewQueue,
+  finalizeReviewJob,
+  heartbeatReviewJob,
+  readReviewJob,
+  readReviewQueuePause,
+  reclaimStaleActiveJobs,
+  requeueReviewJob,
+  writeSyntheticFailureReport,
+} from "./codex-review-queue-lib.mjs";
+import { prepareCodexReviewCliContext } from "./lib/codex-review-cli-bootstrap.mjs";
+import {
+  classifyReviewFailure,
+  computeRetryAfterAt,
+  shouldPauseReviewFailureKind,
+  shouldRequeueReviewFailureKind,
+} from "./lib/codex-review-failure.mjs";
+
+function usage() {
+  console.log(`Usage: scripts/codex-review-worker [options]
+
+Options:
+  --lane <codex>               Review lane to process (default: codex)
+  --worker-slot <n>           Worker slot index for process/log identification (default: 1)
+  --watch                     Keep polling for work (default)
+  --once                      Drain at most one available job and exit
+  --max-jobs <n>              Exit after processing n claimed jobs
+  --idle-sleep-seconds <n>    Sleep when queue is empty in watch mode (default: 5)
+  --heartbeat-seconds <n>     Lease heartbeat interval while a job is running (default: 5)
+  --reviews-dir <path>        Override review artifact directory
+  -h, --help                  Show help
+`);
+}
+
+export function parseArgs(argv) {
+  const args = {
+    lane: "codex",
+    workerSlot: 1,
+    watch: true,
+    maxJobs: 0,
+    idleSleepSeconds: 5,
+    heartbeatSeconds: 5,
+    reviewsDir: "",
+  };
+
+  for (let index = 2; index < argv.length; index += 1) {
+    const arg = argv[index];
+    const next = argv[index + 1];
+    switch (arg) {
+      case "--lane":
+        args.lane = String(next ?? "codex")
+          .trim()
+          .toLowerCase();
+        index += 1;
+        break;
+      case "--worker-slot":
+        args.workerSlot = Number.parseInt(String(next ?? "1"), 10);
+        index += 1;
+        break;
+      case "--watch":
+        args.watch = true;
+        break;
+      case "--once":
+        args.watch = false;
+        break;
+      case "--max-jobs":
+        args.maxJobs = Number.parseInt(String(next ?? "0"), 10);
+        index += 1;
+        break;
+      case "--idle-sleep-seconds":
+        args.idleSleepSeconds = Number.parseInt(String(next ?? "5"), 10);
+        index += 1;
+        break;
+      case "--heartbeat-seconds":
+        args.heartbeatSeconds = Number.parseInt(String(next ?? "5"), 10);
+        index += 1;
+        break;
+      case "--reviews-dir":
+        args.reviewsDir = String(next ?? "");
+        index += 1;
+        break;
+      case "-h":
+      case "--help":
+        usage();
+        process.exit(0);
+        break;
+      default:
+        throw new Error(`Unknown argument: ${arg}`);
+    }
+  }
+
+  if (!Number.isInteger(args.maxJobs) || args.maxJobs < 0) {
+    throw new Error(`Invalid --max-jobs: ${args.maxJobs}`);
+  }
+  if (!Number.isInteger(args.idleSleepSeconds) || args.idleSleepSeconds <= 0) {
+    throw new Error(`Invalid --idle-sleep-seconds: ${args.idleSleepSeconds}`);
+  }
+  if (!Number.isInteger(args.heartbeatSeconds) || args.heartbeatSeconds <= 0) {
+    throw new Error(`Invalid --heartbeat-seconds: ${args.heartbeatSeconds}`);
+  }
+  if (args.lane !== "codex") {
+    throw new Error(`Invalid --lane: ${args.lane}`);
+  }
+  if (!Number.isInteger(args.workerSlot) || args.workerSlot <= 0) {
+    throw new Error(`Invalid --worker-slot: ${args.workerSlot}`);
+  }
+
+  return args;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function workerIdentity(lane, workerSlot) {
+  return {
+    id: `worker-${lane}-${workerSlot}-${process.pid}-${Date.now()}`,
+    pid: process.pid,
+    host: os.hostname(),
+    slot: workerSlot,
+  };
+}
+
+function reviewExecutionEnabled(processEnv = process.env) {
+  return String(processEnv.CODEX_REVIEW_ENABLED ?? "1") !== "0";
+}
+
+function currentHeadSha(repoRoot) {
+  try {
+    return execFileSync("git", ["rev-parse", "HEAD"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    })
+      .trim()
+      .toLowerCase();
+  } catch {
+    return "";
+  }
+}
+
+function normalizeSha(value) {
+  return String(value ?? "")
+    .trim()
+    .toLowerCase();
+}
+
+export function preRemediationCatchupDecision({
+  lane = "codex",
+  jobSha = "",
+  headSha = "",
+  findingsCount = 0,
+  staleSuperseded = false,
+}) {
+  const normalizedJobSha = normalizeSha(jobSha);
+  const normalizedHeadSha = normalizeSha(headSha);
+  const fallback = {
+    suppressCatchup: false,
+    catchupSha: normalizedJobSha,
+  };
+
+  if (lane !== "codex") {
+    return fallback;
+  }
+  if (Number(findingsCount ?? 0) <= 0) {
+    return fallback;
+  }
+  if (!normalizedHeadSha || normalizedJobSha === normalizedHeadSha) {
+    return normalizedJobSha === normalizedHeadSha ? null : fallback;
+  }
+  if (staleSuperseded) {
+    return { suppressCatchup: true, catchupSha: "" };
+  }
+  return fallback;
+}
+
+async function maybeRunLatestTipRemediation({
+  repoRoot,
+  reviewsDir,
+  lane,
+  job,
+  sidecar,
+}) {
+  if (lane !== "codex") {
+    return { suppressCatchup: false, catchupSha: normalizeSha(job?.sha) };
+  }
+  const findings = Array.isArray(sidecar?.findings) ? sidecar.findings : [];
+  const jobSha = normalizeSha(job?.sha);
+  const headSha = currentHeadSha(repoRoot);
+  let staleSuperseded = false;
+  if (jobSha && headSha && jobSha !== headSha && findings.length > 0) {
+    const laneReportsDir = reportsDirForLane(reviewsDir, lane);
+    const archiver = await buildStaleSupersessionArchiver(laneReportsDir, {
+      headSha,
+    });
+    const suppression = await archiver({ sha: jobSha, report: sidecar });
+    staleSuperseded = suppression === true || suppression?.suppress === true;
+  }
+  const preDecision = preRemediationCatchupDecision({
+    lane,
+    jobSha,
+    headSha,
+    findingsCount: findings.length,
+    staleSuperseded,
+  });
+  if (preDecision) {
+    return preDecision;
+  }
+  const automation = await readBacklogRemediationAutomationConfig(reviewsDir);
+  if (!automation.enabled || automation.paused) {
+    return { suppressCatchup: false, catchupSha: jobSha };
+  }
+  const remediationResult = await runRemediationWorker([
+    "node",
+    "scripts/codex-review-remediation-worker",
+    "--once",
+    "--reviews-dir",
+    reviewsDir,
+  ]);
+  const automationAfter =
+    await readBacklogRemediationAutomationConfig(reviewsDir);
+  return remediationCatchupDecision({
+    automation,
+    remediationResult,
+    automationAfter,
+    jobSha,
+  });
+}
+
+export function remediationCatchupDecision({
+  automation,
+  remediationResult,
+  automationAfter,
+  jobSha = "",
+}) {
+  const normalizedJobSha = normalizeSha(jobSha);
+  const fallback = { suppressCatchup: false, catchupSha: normalizedJobSha };
+  if (!(automation?.enabled === true && automation?.paused !== true)) {
+    return fallback;
+  }
+  if (Number(remediationResult?.processed ?? 0) > 0) {
+    return { suppressCatchup: true, catchupSha: "" };
+  }
+  const isManualTakeover =
+    automationAfter?.enabled === true &&
+    automationAfter?.paused === true &&
+    String(automationAfter?.pause_reason ?? "").trim() === "manual_takeover";
+  if (isManualTakeover) {
+    return {
+      suppressCatchup: false,
+      catchupSha:
+        normalizeSha(automationAfter?.last_opened_sha) || normalizedJobSha,
+    };
+  }
+  return { suppressCatchup: true, catchupSha: "" };
+}
+
+async function runJob({
+  repoRoot,
+  reviewsDir,
+  job,
+  heartbeatSeconds,
+  workerId,
+  lane,
+}) {
+  const heartbeat = setInterval(() => {
+    heartbeatReviewJob(reviewsDir, job.sha, workerId, lane).catch(() => {});
+  }, heartbeatSeconds * 1000);
+  let result = {
+    code: 0,
+    signal: "",
+    review: null,
+  };
+  try {
+    const review = await executeCodexReviewCommit({
+      sha: job.sha,
+      trigger: job.trigger_last,
+      lane,
+      queueEnqueuedAt: String(job.enqueued_at ?? ""),
+      invocationCwd: repoRoot,
+      processEnv: {
+        ...process.env,
+        CODE_REVIEW_LANE: lane,
+        CODEX_REVIEW_CODEX_ENABLED:
+          process.env.CODEX_REVIEW_CODEX_ENABLED ?? "1",
+        CODEX_REVIEW_OLLAMA_ENABLED: "0",
+        CODEX_REVIEW_OPEN_ON_FINDINGS: "0",
+        CODEX_REVIEW_MAX_ATTEMPTS:
+          process.env.CODEX_REVIEW_CODEX_MAX_ATTEMPTS ??
+          process.env.CODEX_REVIEW_MAX_ATTEMPTS ??
+          "3",
+      },
+    });
+    if (!review?.sidecar || typeof review.sidecar !== "object") {
+      throw new Error("Review execution did not produce a canonical artifact");
+    }
+    result = {
+      code: review?.reviewStatus === "infra_error" ? 1 : 0,
+      signal:
+        review?.codexError === "none" ? "" : String(review?.codexError ?? ""),
+      review,
+    };
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const failure = classifyReviewFailure({
+      errorCode:
+        String(error?.failureKind ?? "").trim() ||
+        String(error?.codexError ?? "").trim() ||
+        String(error?.code ?? "").trim(),
+      message,
+      outputText: error?.outputText ?? "",
+      stderr: error?.stderr ?? "",
+    });
+    if (
+      !reviewExecutionEnabled() ||
+      message.includes("CODEX_REVIEW_ENABLED=0")
+    ) {
+      await requeueReviewJob(reviewsDir, job.sha, {
+        lane,
+        workerId,
+        reason: "disabled",
+      });
+      result = {
+        code: 0,
+        signal: "disabled",
+        review: null,
+        disabled: true,
+      };
+    } else if (shouldRequeueReviewFailureKind(failure.kind)) {
+      const reason = failure.kind || "exec_failed";
+      if (shouldPauseReviewFailureKind(failure.kind)) {
+        await pauseReviewQueue(reviewsDir, {
+          lane,
+          reason,
+          message:
+            message ||
+            `Codex review worker paused after a ${reason} failure from the Codex CLI.`,
+          sha: job.sha,
+          pausedBy: workerId,
+          resumeAfterAt: failure.resumeAfterAt,
+        });
+      }
+      await requeueReviewJob(reviewsDir, job.sha, {
+        lane,
+        workerId,
+        reason,
+        retryAfterAt:
+          failure.kind === "rate_limit" ||
+          failure.kind === "transient_transport"
+            ? computeRetryAfterAt({
+                attempt: Number(job.attempts ?? 1) || 1,
+                failureKind: failure.kind,
+              })
+            : "",
+      });
+      result = {
+        code: shouldPauseReviewFailureKind(failure.kind) ? 75 : 0,
+        signal: reason,
+        review: null,
+        paused: shouldPauseReviewFailureKind(failure.kind),
+        deferred:
+          failure.kind === "rate_limit" ||
+          failure.kind === "transient_transport",
+      };
+    } else {
+      const failureReason = message || "execution-error";
+      const syntheticSidecar = await writeSyntheticFailureReport({
+        reviewsDir,
+        sha: job.sha,
+        lane,
+        trigger: job.trigger_last,
+        repoRoot,
+        queueEnqueuedAt: String(job.enqueued_at ?? ""),
+        reviewStatus: "infra_error",
+        failureReason,
+        summary:
+          "The durable review worker exited before a canonical review artifact was confirmed. The worker wrote this terminal infra report so the SHA remains recoverable.",
+        codexStatus: "failed",
+      });
+      result = {
+        code: 1,
+        signal: message || "execution-error",
+        review: {
+          sidecar: syntheticSidecar,
+        },
+      };
+    }
+  } finally {
+    clearInterval(heartbeat);
+  }
+
+  if (result.paused || result.disabled || result.deferred) {
+    return result;
+  }
+
+  await finalizeReviewJob(reviewsDir, job.sha, {
+    lane,
+    workerId,
+    report: result.review?.sidecar ?? null,
+    exitCode: result.code,
+    failureReason:
+      result.signal || (result.code === 0 ? "" : `exit-${result.code}`),
+  });
+
+  let remediationDecision = {
+    suppressCatchup: false,
+    catchupSha: String(job.sha ?? "")
+      .trim()
+      .toLowerCase(),
+  };
+  try {
+    remediationDecision = await maybeRunLatestTipRemediation({
+      repoRoot,
+      reviewsDir,
+      lane,
+      job,
+      sidecar: result.review?.sidecar ?? null,
+    });
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    console.warn(
+      `[codex-review-worker] remediation trigger failed lane=${lane} sha=${job.sha}: ${message}`,
+    );
+  }
+
+  if (!remediationDecision.suppressCatchup) {
+    try {
+      await runCatchup({
+        reviewsDir: reportsDirForLane(reviewsDir, lane),
+        includeFailed: true,
+        maxOpens: 1,
+        shaFilter: [remediationDecision.catchupSha || job.sha],
+        shouldOpenReport: (candidate) =>
+          Array.isArray(candidate?.parsed?.findings) &&
+          candidate.parsed.findings.length > 0,
+        openReport:
+          lane === "codex"
+            ? async (mdPath) => {
+                const opened = defaultOpenReport(mdPath);
+                if (!opened) {
+                  return false;
+                }
+                const sha = path.basename(String(mdPath ?? ""), ".md");
+                await pauseBacklogRemediationForManualFallback(
+                  reportsDirForLane(reviewsDir, lane),
+                  sha,
+                );
+                return true;
+              }
+            : undefined,
+      });
+    } catch (error) {
+      const message = error instanceof Error ? error.message : String(error);
+      console.warn(
+        `[codex-review-worker] catchup failed lane=${lane} sha=${job.sha}: ${message}`,
+      );
+    }
+  }
+
+  return result;
+}
+
+export async function processQueue({
+  repoRoot,
+  reviewsDir,
+  lane = "codex",
+  watch = true,
+  maxJobs = 0,
+  idleSleepSeconds = 5,
+  heartbeatSeconds = 5,
+  workerSlot = 1,
+}) {
+  const worker = workerIdentity(lane, workerSlot);
+  let processed = 0;
+  let lastPauseMarker = "";
+
+  while (true) {
+    await reclaimStaleActiveJobs(reviewsDir, { lane });
+    if (!reviewExecutionEnabled()) {
+      if (!watch) {
+        return { processed };
+      }
+      await sleep(idleSleepSeconds * 1000);
+      continue;
+    }
+    const pauseState = await readReviewQueuePause(reviewsDir, lane);
+    if (pauseState.paused) {
+      const pauseMarker = `${pauseState.updated_at}:${pauseState.reason}:${pauseState.sha}`;
+      if (pauseMarker !== lastPauseMarker) {
+        console.warn(
+          `[codex-review-worker] lane=${lane} paused reason=${pauseState.reason || "unknown"} sha=${pauseState.sha || "none"}`,
+        );
+        lastPauseMarker = pauseMarker;
+      }
+      if (!watch) {
+        return { processed };
+      }
+      await sleep(idleSleepSeconds * 1000);
+      continue;
+    }
+    lastPauseMarker = "";
+    const claimed = await claimNextReviewJob(reviewsDir, worker, lane);
+    if (!claimed) {
+      if (!watch) {
+        return { processed };
+      }
+      if (maxJobs > 0 && processed >= maxJobs) {
+        return { processed };
+      }
+      await sleep(idleSleepSeconds * 1000);
+      continue;
+    }
+
+    const result = await runJob({
+      repoRoot,
+      reviewsDir,
+      job: claimed.job,
+      heartbeatSeconds,
+      workerId: worker.id,
+      lane,
+    });
+
+    if (result.paused) {
+      console.warn(
+        `[codex-review-worker] lane=${lane} paused reason=${result.signal || "unknown"} sha=${claimed.job.sha}`,
+      );
+      if (!watch) {
+        return { processed };
+      }
+      await sleep(idleSleepSeconds * 1000);
+      continue;
+    }
+    if (result.deferred) {
+      console.warn(
+        `[codex-review-worker] lane=${lane} deferred reason=${result.signal || "unknown"} sha=${claimed.job.sha}`,
+      );
+      if (!watch) {
+        return { processed };
+      }
+      await sleep(idleSleepSeconds * 1000);
+      continue;
+    }
+    if (result.disabled) {
+      await sleep(idleSleepSeconds * 1000);
+      continue;
+    }
+
+    processed += 1;
+    const refreshed = await readReviewJob(reviewsDir, claimed.job.sha, lane);
+    const finalStatus = refreshed
+      ? String(refreshed?.status ?? "unknown")
+      : "cleared";
+    console.log(
+      `[codex-review-worker] lane=${lane} processed sha=${claimed.job.sha} status=${finalStatus} review_status=${String(
+        result.review?.reviewStatus ?? "unknown",
+      )}`,
+    );
+
+    if (!watch) {
+      return { processed };
+    }
+    if (maxJobs > 0 && processed >= maxJobs) {
+      return { processed };
+    }
+  }
+}
+
+async function main() {
+  const invocationCwd = process.env.CODEX_REVIEW_CALLER_CWD || process.cwd();
+  const args = parseArgs(process.argv);
+  const { repoRoot, reviewsDir } = await prepareCodexReviewCliContext({
+    invocationCwd,
+    reviewsDirOverride: args.reviewsDir,
+    durableWorker: true,
+    warnPrefix: "codex-review-worker",
+  });
+  await ensureReviewQueue(reviewsDir, args.lane);
+  const result = await processQueue({
+    repoRoot,
+    reviewsDir,
+    lane: args.lane,
+    workerSlot: args.workerSlot,
+    watch: args.watch,
+    maxJobs: args.maxJobs,
+    idleSleepSeconds: args.idleSleepSeconds,
+    heartbeatSeconds: args.heartbeatSeconds,
+  });
+  console.log(
+    `[codex-review-worker] lane=${args.lane} exiting processed=${result.processed}`,
+  );
+}
+
+if (
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1] ?? "")).href
+) {
+  main().catch((error) => {
+    console.error(`[codex-review-worker] Failed: ${error.message}`);
+    process.exit(1);
+  });
+}

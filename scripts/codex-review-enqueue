@@ -1,0 +1,117 @@
+#!/usr/bin/env node
+
+import {
+  resolveRepoRoot,
+  resolveReviewsDir,
+} from "./codex-review-inbox-lib.mjs";
+import { enqueueReviewJob } from "./codex-review-queue-lib.mjs";
+
+function usage() {
+  console.log(`Usage: scripts/codex-review-enqueue --sha <commit-sha> [options]
+
+Options:
+  --sha <commit-sha>          Commit SHA to enqueue
+  --lane <codex>              Review lane to enqueue (default: codex)
+  --trigger <name>           Trigger source (post-commit|post-push|manual)
+  --source <name>            Enqueue source label
+  --reason <text>            Optional reason label
+  --force                    Requeue even if a prior completed job exists
+  --reviews-dir <path>       Override reviews directory
+  -h, --help                 Show help
+`);
+}
+
+function parseArgs(argv) {
+  const args = {
+    sha: "",
+    lane: "codex",
+    trigger: "manual",
+    source: "manual",
+    reason: "",
+    force: false,
+    reviewsDir: "",
+  };
+
+  for (let index = 2; index < argv.length; index += 1) {
+    const arg = argv[index];
+    const next = argv[index + 1];
+    switch (arg) {
+      case "--sha":
+        args.sha = String(next ?? "");
+        index += 1;
+        break;
+      case "--lane":
+        args.lane = String(next ?? "codex")
+          .trim()
+          .toLowerCase();
+        index += 1;
+        break;
+      case "--trigger":
+        args.trigger = String(next ?? "");
+        index += 1;
+        break;
+      case "--source":
+        args.source = String(next ?? "");
+        index += 1;
+        break;
+      case "--reason":
+        args.reason = String(next ?? "");
+        index += 1;
+        break;
+      case "--reviews-dir":
+        args.reviewsDir = String(next ?? "");
+        index += 1;
+        break;
+      case "--force":
+        args.force = true;
+        break;
+      case "-h":
+      case "--help":
+        usage();
+        process.exit(0);
+        break;
+      default:
+        throw new Error(`Unknown argument: ${arg}`);
+    }
+  }
+
+  if (!args.sha) {
+    throw new Error("--sha is required");
+  }
+  if (args.lane !== "codex") {
+    throw new Error(`Invalid --lane: ${args.lane}`);
+  }
+
+  return args;
+}
+
+async function main() {
+  const invocationCwd = process.env.CODEX_REVIEW_CALLER_CWD || process.cwd();
+  const args = parseArgs(process.argv);
+  const repoRoot = resolveRepoRoot(invocationCwd);
+  const reviewsDir = await resolveReviewsDir(
+    repoRoot,
+    args.reviewsDir,
+    invocationCwd,
+  );
+  const result = await enqueueReviewJob({
+    reviewsDir,
+    sha: args.sha,
+    lane: args.lane,
+    trigger: args.trigger,
+    source: args.source,
+    reason: args.reason,
+    force: args.force,
+  });
+  const resolvedSha = result.job?.sha ?? args.sha.toLowerCase();
+  console.log(
+    `[codex-review-enqueue] lane=${args.lane} sha=${resolvedSha} status=${result.status} enqueued=${
+      result.enqueued ? "1" : "0"
+    } deduped=${result.deduped ? "1" : "0"}`,
+  );
+}
+
+main().catch((error) => {
+  console.error(`[codex-review-enqueue] Failed: ${error.message}`);
+  process.exit(1);
+});

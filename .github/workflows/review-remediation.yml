@@ -1,0 +1,44 @@
+name: Review Remediation
+
+on:
+  workflow_run:
+    workflows: ["Review Agent Rerun"]
+    types: [completed]
+
+permissions:
+  contents: read
+  pull-requests: write
+
+jobs:
+  remediation:
+    if: >-
+      github.event.workflow_run.event == 'pull_request' &&
+      github.event.workflow_run.pull_requests[0].number != null
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          ref: ${{ github.event.repository.default_branch }}
+      - uses: actions/setup-node@v6
+        with:
+          node-version: 22.22.2
+      - name: Dispatch remediation agent
+        env:
+          GITHUB_TOKEN: ${{ secrets.GITHUB_TOKEN }}
+          PR_NUMBER: ${{ github.event.workflow_run.pull_requests[0].number }}
+          PR_HEAD_SHA: ${{ github.event.workflow_run.head_sha }}
+          REMEDIATION_WEBHOOK_URL: ${{ secrets.REMEDIATION_WEBHOOK_URL }}
+          REMEDIATION_WEBHOOK_TOKEN: ${{ secrets.REMEDIATION_WEBHOOK_TOKEN }}
+        run: |
+          node scripts/risk-policy/review-remediation-dispatch.mjs \
+            --owner "${{ github.repository_owner }}" \
+            --repo "${{ github.event.repository.name }}"
+      - name: Upload remediation report
+        if: always()
+        uses: actions/upload-artifact@v7
+        with:
+          name: review-remediation-dispatch
+          path: output/test-metrics/review-remediation-dispatch.json
+          if-no-files-found: ignore
+          retention-days: 1

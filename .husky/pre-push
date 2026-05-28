@@ -1,0 +1,505 @@
+#!/bin/sh
+
+echo "========================================"
+echo "PRE-PUSH: running checks"
+echo "========================================"
+
+REMOTE_NAME="${1:-}"
+TMP_PUSH_INPUT="$(mktemp "${TMPDIR:-/tmp}/contribution-pre-push.stdin.XXXXXX")"
+TMP_BRANCH_STATE="$(mktemp "${TMPDIR:-/tmp}/contribution-pre-push-branch-state.XXXXXX")"
+WATCHDOG_PID=""
+cleanup_pre_push() {
+  EXIT_CODE="${1:-$?}"
+  if [ "$EXIT_CODE" -ne 0 ] && command -v open_status_log_on_failure >/dev/null 2>&1; then
+    open_status_log_on_failure
+  fi
+  rm -f "$TMP_PUSH_INPUT"
+  rm -f "$TMP_BRANCH_STATE"
+  if [ -n "${WATCHDOG_PID:-}" ]; then
+    kill "$WATCHDOG_PID" 2>/dev/null || true
+  fi
+  return "$EXIT_CODE"
+}
+trap 'cleanup_pre_push "$?"' EXIT
+cat > "$TMP_PUSH_INPUT"
+
+CONTRIBUTION_PRE_PUSH_FAST="${CONTRIBUTION_PRE_PUSH_FAST:-1}"
+
+if [ "$CONTRIBUTION_PRE_PUSH_FAST" = "1" ]; then
+  : "${CODEX_REVIEW_PUSH_GATE_TIMEOUT_SECONDS:=900}"
+  : "${CODEX_REVIEW_PUSH_GATE_MIN_SEVERITY:=major}"
+  : "${CODEX_REVIEW_IN_PROGRESS_STALE_SECONDS:=120}"
+
+  export CODEX_REVIEW_PUSH_GATE_TIMEOUT_SECONDS
+  export CODEX_REVIEW_PUSH_GATE_MIN_SEVERITY
+  export CODEX_REVIEW_IN_PROGRESS_STALE_SECONDS
+
+  echo "Pre-push fast mode: CODEX_REVIEW_PUSH_GATE_TIMEOUT_SECONDS=$CODEX_REVIEW_PUSH_GATE_TIMEOUT_SECONDS, CODEX_REVIEW_PUSH_GATE_MIN_SEVERITY=$CODEX_REVIEW_PUSH_GATE_MIN_SEVERITY, CODEX_REVIEW_IN_PROGRESS_STALE_SECONDS=$CODEX_REVIEW_IN_PROGRESS_STALE_SECONDS"
+fi
+
+normalize_nonnegative_decimal() {
+  value="$(printf '%s' "${1:-}" | tr -d '[:space:]')"
+  fallback="$2"
+  case "$value" in
+    ''|*[!0-9]*)
+      printf '%s' "$fallback"
+      return
+      ;;
+  esac
+  while [ "$value" != "0" ] && [ "${value#0}" != "$value" ]; do
+    value="${value#0}"
+  done
+  printf '%s' "$value"
+}
+
+PUSH_GATE_TIMEOUT_SECONDS_FOR_WATCHDOG="$(normalize_nonnegative_decimal "${CODEX_REVIEW_PUSH_GATE_TIMEOUT_SECONDS:-}" "900")"
+DEFAULT_PUSH_WATCHDOG_SECONDS=$((PUSH_GATE_TIMEOUT_SECONDS_FOR_WATCHDOG + 900))
+if [ "$DEFAULT_PUSH_WATCHDOG_SECONDS" -lt 1800 ]; then
+  DEFAULT_PUSH_WATCHDOG_SECONDS=1800
+fi
+
+# Protect GUI/button-based pushes from hanging indefinitely by watching
+# the parent `git push` process and terminating it on timeout. The default
+# budget must exceed the review-gate wait budget so legitimate in-flight
+# commit reviews do not get killed mid-run.
+PUSH_PARENT_PID="$PPID"
+: "${CODEX_PUSH_WATCHDOG_SECONDS:=$DEFAULT_PUSH_WATCHDOG_SECONDS}"
+PUSH_WATCHDOG_SECONDS="$CODEX_PUSH_WATCHDOG_SECONDS"
+case "$PUSH_WATCHDOG_SECONDS" in
+  ''|*[!0-9]*)
+    PUSH_WATCHDOG_SECONDS="$DEFAULT_PUSH_WATCHDOG_SECONDS"
+    ;;
+  *)
+    if [ "$PUSH_WATCHDOG_SECONDS" -lt 0 ]; then
+      PUSH_WATCHDOG_SECONDS="$DEFAULT_PUSH_WATCHDOG_SECONDS"
+    fi
+    ;;
+esac
+if [ "$PUSH_WATCHDOG_SECONDS" -gt 0 ]; then
+  (
+    sleep "$PUSH_WATCHDOG_SECONDS"
+    if kill -0 "$PUSH_PARENT_PID" 2>/dev/null; then
+      PUSH_PARENT_CMD="$(ps -p "$PUSH_PARENT_PID" -o command= 2>/dev/null || true)"
+      case "$PUSH_PARENT_CMD" in
+        *"git push"*)
+          echo "[pre-push] ERROR: git push exceeded timeout (${PUSH_WATCHDOG_SECONDS}s). Terminating stuck push PID ${PUSH_PARENT_PID}." >&2
+          kill "$PUSH_PARENT_PID" 2>/dev/null || true
+          sleep 2
+          kill -9 "$PUSH_PARENT_PID" 2>/dev/null || true
+          ;;
+      esac
+    fi
+  ) >/dev/null &
+  WATCHDOG_PID="$!"
+fi
+
+: "${CODEX_PRE_PUSH_FETCH_REMOTE:=1}"
+: "${CODEX_PRE_PUSH_FETCH_TIMEOUT_SECONDS:=20}"
+: "${CODEX_PRE_PUSH_BLOCK_ON_REMOTE_DIVERGENCE:=1}"
+export CODEX_PRE_PUSH_FETCH_REMOTE
+export CODEX_PRE_PUSH_FETCH_TIMEOUT_SECONDS
+export CODEX_PRE_PUSH_BLOCK_ON_REMOTE_DIVERGENCE
+
+. "$(dirname "$0")/_/codex-bootstrap.sh"
+
+if ! command -v pnpm >/dev/null 2>&1; then
+  echo "========================================"
+  echo "PRE-PUSH FAILED: pnpm not found"
+  echo "FIX: npm install -g pnpm  # or: corepack enable"
+  echo "========================================"
+  exit 1
+fi
+
+if ! command -v node >/dev/null 2>&1; then
+  echo "========================================"
+  echo "PRE-PUSH FAILED: node not found in PATH"
+  echo "FIX: ensure your node runtime is loaded for git hooks"
+  echo "     (for nvm users, load nvm in your shell init file)"
+  echo "========================================"
+  exit 1
+fi
+
+REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
+. "$REPO_ROOT/scripts/codex-review-dir.sh"
+RESOLVED_REVIEWS_DIR="$(resolve_codex_reviews_dir "$REPO_ROOT" "${CODE_REVIEW_DIR:-${CODEX_REVIEW_DIR:-$REPO_ROOT/.code-reviews}}" 2>/dev/null || true)"
+if [ -z "$RESOLVED_REVIEWS_DIR" ]; then
+  echo "========================================"
+  echo "PRE-PUSH FAILED: unable to resolve writable codex review artifacts directory"
+  echo "FIX: ensure .code-reviews or /tmp is writable"
+  echo "========================================"
+  exit 1
+fi
+REVIEW_WRITE_PROBE="$(mktemp "$RESOLVED_REVIEWS_DIR/pre-push.write-probe.XXXXXX" 2>/dev/null || true)"
+if [ -z "$REVIEW_WRITE_PROBE" ]; then
+  echo "========================================"
+  echo "PRE-PUSH FAILED: codex review artifacts directory is not writable"
+  echo "DIR: $RESOLVED_REVIEWS_DIR"
+  echo "FIX: clear stale locks and fix permissions, then retry"
+  echo "TIP: scripts/codex-review-status"
+  echo "========================================"
+  exit 1
+fi
+rm -f "$REVIEW_WRITE_PROBE" 2>/dev/null || true
+
+LOG_DIR="$RESOLVED_REVIEWS_DIR/logs"
+mkdir -p "$LOG_DIR"
+PRE_PUSH_STATUS_LOG="${CODEX_PRE_PUSH_STATUS_LOG:-$LOG_DIR/pre-push-latest.log}"
+: > "$PRE_PUSH_STATUS_LOG"
+
+last_started_command() {
+  grep '^→ ' "$PRE_PUSH_STATUS_LOG" 2>/dev/null | tail -n 1 | sed 's/^→ //'
+}
+
+report_failure() {
+  FAIL_TITLE="$1"
+  FAIL_FIX="$2"
+  FAIL_DETAIL="$3"
+  LAST_COMMAND="$(last_started_command)"
+
+  if [ -n "$LAST_COMMAND" ]; then
+    echo "Last command: $LAST_COMMAND"
+  fi
+  echo "Status log: $PRE_PUSH_STATUS_LOG"
+  echo "========================================"
+  echo "PRE-PUSH FAILED: $FAIL_TITLE"
+  echo "FIX: $FAIL_FIX"
+  echo "========================================"
+  echo "ERROR: $FAIL_DETAIL"
+}
+
+log_status() {
+  LOG_TS="$(date '+%Y-%m-%d %H:%M:%S %Z')"
+  LOG_LINE="[$LOG_TS] $*"
+  echo "$LOG_LINE" >> "$PRE_PUSH_STATUS_LOG"
+  echo "$*"
+}
+
+open_status_log() {
+  if [ "${CODEX_PRE_PUSH_STATUS_OPEN:-0}" != "1" ]; then
+    return 0
+  fi
+
+  open_status_log_file
+}
+
+open_status_log_on_failure() {
+  if [ "${CODEX_PRE_PUSH_STATUS_OPEN_ON_FAILURE:-1}" != "1" ]; then
+    return 0
+  fi
+
+  open_status_log_file
+}
+
+open_status_log_file() {
+  if [ -z "${PRE_PUSH_STATUS_LOG:-}" ] || [ ! -f "$PRE_PUSH_STATUS_LOG" ]; then
+    return 0
+  fi
+
+  if command -v subl >/dev/null 2>&1; then
+    subl "$PRE_PUSH_STATUS_LOG" >/dev/null 2>&1 &
+    return 0
+  fi
+
+  if command -v open >/dev/null 2>&1; then
+    open -a "Sublime Text" "$PRE_PUSH_STATUS_LOG" >/dev/null 2>&1 && return 0
+  fi
+
+  if command -v cursor >/dev/null 2>&1; then
+    cursor "$PRE_PUSH_STATUS_LOG" >/dev/null 2>&1 && return 0
+  fi
+
+  if command -v code >/dev/null 2>&1; then
+    code -r "$PRE_PUSH_STATUS_LOG" >/dev/null 2>&1 && return 0
+  fi
+
+  if command -v open >/dev/null 2>&1; then
+    open "$PRE_PUSH_STATUS_LOG" >/dev/null 2>&1 && return 0
+  fi
+}
+
+open_status_log
+log_status "Starting pre-push checks"
+log_status "Status log: $PRE_PUSH_STATUS_LOG"
+
+PRE_PUSH_BASE_SHA=""
+PRE_PUSH_HAS_BRANCH_UPDATES="0"
+PRE_PUSH_HAS_NON_BRANCH_OBJECT_UPDATES="0"
+PRE_PUSH_BLOCKED_RELATION=""
+PRE_PUSH_BLOCKED_BRANCH=""
+
+run_full_pre_push_checks() {
+  log_status "→ pnpm format:check"
+  log_status "Running format check"
+  pnpm format:check >> "$PRE_PUSH_STATUS_LOG" 2>&1 || {
+    log_status "Phase 2/3 failed: format check"
+    report_failure "format check" "pnpm format:check" "Formatting issues found"
+    exit 1
+  }
+
+  log_status "→ pnpm lint"
+  log_status "Running lint"
+  pnpm lint >> "$PRE_PUSH_STATUS_LOG" 2>&1 || {
+    log_status "Phase 2/3 failed: lint"
+    report_failure "lint" "pnpm lint" "Lint failed"
+    exit 1
+  }
+
+  log_status "→ pnpm typecheck"
+  log_status "Running typecheck"
+  pnpm typecheck >> "$PRE_PUSH_STATUS_LOG" 2>&1 || {
+    log_status "Phase 2/3 failed: typecheck"
+    report_failure "typecheck" "pnpm typecheck" "TypeScript errors found"
+    exit 1
+  }
+
+  log_status "→ TZ=UTC pnpm test"
+  log_status "Running tests"
+  TZ=UTC pnpm test >> "$PRE_PUSH_STATUS_LOG" 2>&1 || {
+    log_status "Phase 2/3 failed: tests"
+    report_failure "tests" "TZ=UTC pnpm test" "Test failures found"
+    exit 1
+  }
+
+  log_status "→ pnpm agents:check"
+  log_status "Running AGENTS/docs validation"
+  pnpm agents:check >> "$PRE_PUSH_STATUS_LOG" 2>&1 || {
+    log_status "Phase 2/3 failed: AGENTS/docs validation"
+    report_failure "AGENTS/docs validation" "pnpm agents:check" "AGENTS/docs validation failed"
+    exit 1
+  }
+}
+
+log_status "Phase 0/3: branch state validation"
+if node scripts/pre-push-branch-state.mjs \
+  --stdin-file "$TMP_PUSH_INPUT" \
+  --remote-name "$REMOTE_NAME" \
+  --fetch-remote "$CODEX_PRE_PUSH_FETCH_REMOTE" \
+  --fetch-timeout-seconds "$CODEX_PRE_PUSH_FETCH_TIMEOUT_SECONDS" \
+  --block-on-remote-divergence "$CODEX_PRE_PUSH_BLOCK_ON_REMOTE_DIVERGENCE" \
+  --write-json "$TMP_BRANCH_STATE" >> "$PRE_PUSH_STATUS_LOG" 2>&1; then
+  PRE_PUSH_BRANCH_STATE="$(
+    node --input-type=module - "$TMP_BRANCH_STATE" <<'NODE'
+import { readFileSync } from "node:fs";
+const payload = JSON.parse(readFileSync(process.argv[2], "utf8"));
+const hasBranchUpdates =
+  payload.hasBranchUpdates === true ||
+  Number(payload.branches?.length ?? 0) > 0;
+const hasNonBranchObjectUpdates = payload.hasNonBranchObjectUpdates === true;
+const recommendedBaseSha = String(payload.recommendedBaseSha ?? "").trim();
+const blockedBranch =
+  (Array.isArray(payload.branches)
+    ? payload.branches.find((branch) =>
+        branch?.relation === "fetch_failed" ||
+        branch?.relation === "remote_moved_and_local_missing_it",
+      )
+    : null) ?? null;
+process.stdout.write(
+  [
+    hasBranchUpdates ? "1" : "0",
+    hasNonBranchObjectUpdates ? "1" : "0",
+    recommendedBaseSha,
+    String(blockedBranch?.relation ?? "").trim(),
+    String(blockedBranch?.branchName ?? "").trim(),
+  ].join("\t"),
+);
+NODE
+  )"
+  PRE_PUSH_HAS_BRANCH_UPDATES="$(printf '%s' "$PRE_PUSH_BRANCH_STATE" | cut -f 1)"
+  PRE_PUSH_HAS_NON_BRANCH_OBJECT_UPDATES="$(printf '%s' "$PRE_PUSH_BRANCH_STATE" | cut -f 2)"
+  PRE_PUSH_BASE_SHA="$(printf '%s' "$PRE_PUSH_BRANCH_STATE" | cut -f 3)"
+  PRE_PUSH_BLOCKED_RELATION="$(printf '%s' "$PRE_PUSH_BRANCH_STATE" | cut -f 4)"
+  PRE_PUSH_BLOCKED_BRANCH="$(printf '%s' "$PRE_PUSH_BRANCH_STATE" | cut -f 5)"
+  if [ "$PRE_PUSH_HAS_BRANCH_UPDATES" != "1" ]; then
+    PRE_PUSH_BASE_SHA=""
+    if [ "$PRE_PUSH_HAS_NON_BRANCH_OBJECT_UPDATES" = "1" ]; then
+      log_status "No branch ref updates detected, but non-branch refs will transfer objects; running full checks"
+    else
+      log_status "No branch ref updates detected; skipping canonical base requirement"
+    fi
+  elif [ -z "$PRE_PUSH_BASE_SHA" ]; then
+    log_status "Phase 0/3 failed: missing canonical base SHA after branch validation"
+    report_failure \
+      "branch state validation" \
+      "inspect .code-reviews/logs/pre-push-latest.log and rerun git fetch origin <branch>" \
+      "Pre-push branch validation succeeded but did not produce a canonical base SHA"
+    exit 1
+  fi
+  log_status "Canonical pre-push base: $PRE_PUSH_BASE_SHA"
+  log_status "Phase 0/3 complete: branch state validated"
+else
+  PRE_PUSH_BLOCKED_RELATION="$(
+    node --input-type=module - "$TMP_BRANCH_STATE" <<'NODE'
+import { readFileSync } from "node:fs";
+try {
+  const payload = JSON.parse(readFileSync(process.argv[2], "utf8"));
+  const blockedBranch =
+    (Array.isArray(payload.branches)
+      ? payload.branches.find((branch) =>
+          branch?.relation === "fetch_failed" ||
+          branch?.relation === "remote_moved_and_local_missing_it",
+        )
+      : null) ?? null;
+  process.stdout.write(String(blockedBranch?.relation ?? "").trim());
+} catch {
+  process.stdout.write("");
+}
+NODE
+  )"
+  PRE_PUSH_BLOCKED_BRANCH="$(
+    node --input-type=module - "$TMP_BRANCH_STATE" <<'NODE'
+import { readFileSync } from "node:fs";
+try {
+  const payload = JSON.parse(readFileSync(process.argv[2], "utf8"));
+  const blockedBranch =
+    (Array.isArray(payload.branches)
+      ? payload.branches.find((branch) =>
+          branch?.relation === "fetch_failed" ||
+          branch?.relation === "remote_moved_and_local_missing_it",
+        )
+      : null) ?? null;
+  process.stdout.write(String(blockedBranch?.branchName ?? "").trim());
+} catch {
+  process.stdout.write("");
+}
+NODE
+  )"
+  if [ "$PRE_PUSH_BLOCKED_RELATION" = "fetch_failed" ]; then
+    log_status "Phase 0/3 failed: branch state validation (fetch_failed)"
+    report_failure \
+      "branch state validation" \
+      "verify remote connectivity/credentials, then rerun git fetch ${REMOTE_NAME:-origin} ${PRE_PUSH_BLOCKED_BRANCH:-<branch>}" \
+      "Push blocked because live remote branch discovery failed"
+  else
+    log_status "Phase 0/3 failed: branch state validation"
+    report_failure \
+      "branch state validation" \
+      "git fetch origin <branch> && (git merge origin/<branch> || git rebase origin/<branch>)" \
+      "Push blocked because the live remote branch moved and the local branch does not yet contain that remote tip"
+  fi
+  exit 1
+fi
+
+QUEUE_STATUS_LINE="$(
+  node --input-type=module - "$REPO_ROOT" "$RESOLVED_REVIEWS_DIR" <<'NODE'
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+
+const repoRoot = process.argv[2];
+const reviewsDir = process.argv[3];
+const queueLib = await import(
+  pathToFileURL(
+    path.join(repoRoot, "scripts", "codex-review-queue-lib.mjs"),
+  ).href
+);
+const { collectQueueSummary, readReviewQueueBacklog } = queueLib;
+const summary = await collectQueueSummary(reviewsDir, { lane: "codex" });
+const backlog = await readReviewQueueBacklog(reviewsDir, "codex");
+const lane = summary.lanes?.codex ?? {};
+const parts = [
+  `running=${summary.running?.codex ?? 0}`,
+  `pending=${lane.pending ?? 0}`,
+  `active=${lane.active ?? 0}`,
+  `oldest_pending_age_seconds=${lane.oldestPendingAgeSeconds ?? 0}`,
+  `backlog_active=${backlog.active ? 1 : 0}`,
+  `parked_pending=${lane.pendingBlockedByBacklog ?? 0}`,
+];
+if (backlog.active) {
+  parts.push(`enqueue_after=${backlog.enqueue_after || "none"}`);
+  parts.push(`reason=${backlog.reason || "none"}`);
+}
+console.log(parts.join(" "));
+NODE
+)"
+if [ -n "$QUEUE_STATUS_LINE" ]; then
+  log_status "Review queue: $QUEUE_STATUS_LINE"
+fi
+
+# Warning-only: local edits under review artifact directories can cause confusing local state.
+if command -v git >/dev/null 2>&1; then
+  DIRTY_REVIEW_ARTIFACTS=""
+  for review_path in ".code-reviews" ".codex/reviews"; do
+    DIRTY_PATH_OUTPUT="$(git status --porcelain -- "$review_path" 2>/dev/null || true)"
+    if [ -n "$DIRTY_PATH_OUTPUT" ]; then
+      DIRTY_REVIEW_ARTIFACTS="${DIRTY_REVIEW_ARTIFACTS}${DIRTY_PATH_OUTPUT}
+"
+    fi
+  done
+  if [ -n "$DIRTY_REVIEW_ARTIFACTS" ]; then
+    echo "Warning: uncommitted changes detected under review artifact directories (non-blocking)"
+    printf '%s' "$DIRTY_REVIEW_ARTIFACTS"
+  fi
+fi
+
+STALE_REVIEW_SECONDS="${CODEX_REVIEW_STALE_SECONDS_PRE_PUSH:-120}"
+log_status "Cleaning stale review artifacts/locks (stale>${STALE_REVIEW_SECONDS}s)"
+node scripts/codex-review-clean-stale --stale-seconds "$STALE_REVIEW_SECONDS" >> "$PRE_PUSH_STATUS_LOG" 2>&1 || {
+  log_status "Warning: stale review cleanup failed (non-blocking)"
+}
+
+log_status "Live status command: scripts/codex-review-status --watch"
+log_status "Phase 1/3: review gate (fail-fast)"
+if scripts/codex-review-push-gate --context-file "$TMP_BRANCH_STATE" --push-parent-pid "$PUSH_PARENT_PID" --ui-runtime-gate 0 >> "$PRE_PUSH_STATUS_LOG" 2>&1; then
+  log_status "Phase 1/3 complete: review gate passed"
+else
+  log_status "Phase 1/3 failed: codex review gate"
+  scripts/codex-review-inbox \
+    --mode catch-up \
+    --context-file "$TMP_BRANCH_STATE" \
+    --max-opens "${CODEX_REVIEW_INBOX_MAX_OPENS:-1}" \
+    --include-failed "${CODEX_REVIEW_INBOX_INCLUDE_FAILED:-1}" >> "$PRE_PUSH_STATUS_LOG" 2>&1 || true
+  report_failure \
+    "codex review gate" \
+    "resolve findings in .code-reviews/*.md, or bypass with CODEX_REVIEW_PUSH_GATE_BYPASS=1" \
+    "Push blocked by unresolved review findings or incomplete commit review state"
+  exit 1
+fi
+
+PRE_PUSH_MODE="${CONTRIBUTION_PRE_PUSH_MODE:-risk}"
+if [ "${CONTRIBUTION_PRE_PUSH_FULL:-0}" = "1" ]; then
+  PRE_PUSH_MODE="strict"
+fi
+
+if [ "$PRE_PUSH_MODE" != "risk" ] && [ "$PRE_PUSH_MODE" != "strict" ]; then
+  echo "========================================"
+  echo "PRE-PUSH FAILED: invalid CONTRIBUTION_PRE_PUSH_MODE=$PRE_PUSH_MODE"
+  echo "FIX: set CONTRIBUTION_PRE_PUSH_MODE to risk or strict"
+  echo "========================================"
+  exit 1
+fi
+
+if [ "$PRE_PUSH_MODE" = "strict" ]; then
+  log_status "Phase 2/3: code checks"
+  log_status "Pre-push mode: strict (full checks)"
+  run_full_pre_push_checks
+  log_status "Phase 2/3 complete: strict checks passed"
+else
+  log_status "Phase 2/3: code checks"
+  log_status "Pre-push mode: risk (changed-aware checks)"
+  if [ "$PRE_PUSH_HAS_BRANCH_UPDATES" = "1" ]; then
+    node scripts/run-changed-checks.mjs --mode all --pre-push --base "$PRE_PUSH_BASE_SHA" >> "$PRE_PUSH_STATUS_LOG" 2>&1 || {
+      log_status "Phase 2/3 failed: risk-gated checks"
+      report_failure \
+        "risk-gated checks" \
+        "node scripts/run-changed-checks.mjs --mode all --pre-push --base <sha>" \
+        "Risk-gated checks failed"
+      exit 1
+    }
+  elif [ "$PRE_PUSH_HAS_NON_BRANCH_OBJECT_UPDATES" = "1" ]; then
+    log_status "No branch ref updates detected, but non-branch refs will transfer objects; running full checks"
+    run_full_pre_push_checks
+  else
+    log_status "No branch ref updates detected; skipping base-dependent code checks"
+  fi
+  log_status "Phase 2/3 complete: risk checks passed"
+fi
+
+# Optional: Create local database backup only after all blocking checks pass.
+if [ -f "scripts/backup-local.sh" ]; then
+  log_status "Phase 3/3: local backup (optional)"
+  ./scripts/backup-local.sh >> "$PRE_PUSH_STATUS_LOG" 2>&1 || log_status "Warning: Backup skipped (non-fatal)"
+fi
+
+# Build and E2E run in CI (GitHub Actions).
+# See .github/workflows/ci.yml for the full check matrix.
+# Branch protection on main requires all CI jobs to pass before merge.
+log_status "PASS: local pre-push checks completed"

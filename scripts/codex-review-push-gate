@@ -1,0 +1,294 @@
+#!/usr/bin/env node
+
+import { readFile } from "node:fs/promises";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import {
+  collectQueueSummary,
+  readReviewQueueBacklog,
+} from "./codex-review-queue-lib.mjs";
+import { prepareCodexReviewCliContext } from "./lib/codex-review-cli-bootstrap.mjs";
+import {
+  defaultGitExec,
+  executePushGate,
+  parseMinSeverity,
+} from "./codex-review-push-gate-lib.mjs";
+
+function usage() {
+  console.log(`Usage: scripts/codex-review-push-gate --context-file <path> [options]
+
+Options:
+  --context-file <path>       Path to phase-0 pre-push context JSON
+  --stdin-file <path>         Path to pre-push stdin capture file
+  --remote-name <name>        Remote name passed by git hook (required with --stdin-file)
+  --push-parent-pid <pid>     Parent git push PID; exits early if parent is gone
+  --reviews-dir <path>        Override reviews directory
+  --timeout-seconds <n>       Max wait for in-progress reviews (default: 900)
+  --min-severity <minor|major|blocker|none>
+                              Severity threshold for blocking (default: major)
+  --ui-runtime-gate <0|1>     Enable branch-scoped UI runtime report gate
+                              (default: from CODEX_UI_RUNTIME_REVIEW_GATE_ENABLED)
+  --ui-runtime-infra-blocking <0|1>
+                              Block on UI runtime infra failures (default: from CODEX_UI_RUNTIME_REVIEW_INFRA_BLOCKING)
+  -h, --help                  Show help
+`);
+}
+
+function parseArgs(argv) {
+  const args = {
+    contextFile: "",
+    stdinFile: "",
+    remoteName: "",
+    pushParentPid: Number.parseInt(
+      process.env.CODEX_PUSH_PARENT_PID ?? "0",
+      10,
+    ),
+    reviewsDir: "",
+    timeoutSeconds: Number.parseInt(
+      process.env.CODEX_REVIEW_PUSH_GATE_TIMEOUT_SECONDS ?? "900",
+      10,
+    ),
+    minSeverity: parseMinSeverity(
+      process.env.CODEX_REVIEW_PUSH_GATE_MIN_SEVERITY ?? "major",
+    ),
+    uiRuntimeGateEnabled:
+      (process.env.CODEX_UI_RUNTIME_REVIEW_GATE_ENABLED ?? "1").trim() !== "0",
+    uiRuntimeInfraBlocking:
+      (process.env.CODEX_UI_RUNTIME_REVIEW_INFRA_BLOCKING ?? "0").trim() !==
+      "0",
+  };
+
+  for (let i = 2; i < argv.length; i += 1) {
+    const arg = argv[i];
+    const next = argv[i + 1];
+    switch (arg) {
+      case "--context-file":
+        args.contextFile = String(next ?? "");
+        i += 1;
+        break;
+      case "--stdin-file":
+        args.stdinFile = String(next ?? "");
+        i += 1;
+        break;
+      case "--remote-name":
+        args.remoteName = String(next ?? "");
+        i += 1;
+        break;
+      case "--push-parent-pid":
+        args.pushParentPid = Number.parseInt(String(next ?? "0"), 10);
+        i += 1;
+        break;
+      case "--reviews-dir":
+        args.reviewsDir = String(next ?? "");
+        i += 1;
+        break;
+      case "--timeout-seconds":
+        args.timeoutSeconds = Number.parseInt(String(next ?? ""), 10);
+        i += 1;
+        break;
+      case "--min-severity":
+        args.minSeverity = parseMinSeverity(next ?? "major");
+        i += 1;
+        break;
+      case "--sync-allow-local-model":
+      case "--sync-missing":
+      case "--require-local-model":
+        throw new Error(
+          `${arg} is no longer supported; the push gate is validate-only`,
+        );
+      case "--ui-runtime-gate":
+        args.uiRuntimeGateEnabled = String(next ?? "1") !== "0";
+        i += 1;
+        break;
+      case "--ui-runtime-infra-blocking":
+        args.uiRuntimeInfraBlocking = String(next ?? "0") !== "0";
+        i += 1;
+        break;
+      case "-h":
+      case "--help":
+        usage();
+        process.exit(0);
+        break;
+      default:
+        throw new Error(`Unknown argument: ${arg}`);
+    }
+  }
+
+  if (!args.contextFile && !args.stdinFile) {
+    throw new Error("either --context-file or --stdin-file is required");
+  }
+  if (!args.contextFile && !args.remoteName) {
+    throw new Error("--remote-name is required with --stdin-file");
+  }
+  if (!Number.isInteger(args.timeoutSeconds) || args.timeoutSeconds < 0) {
+    throw new Error(`Invalid --timeout-seconds: ${args.timeoutSeconds}`);
+  }
+  if (!Number.isInteger(args.pushParentPid) || args.pushParentPid < 0) {
+    throw new Error(`Invalid --push-parent-pid: ${args.pushParentPid}`);
+  }
+
+  return args;
+}
+
+function assertNoLegacySyncFlags(argv) {
+  for (const arg of argv.slice(2)) {
+    if (
+      arg === "--sync-allow-local-model" ||
+      arg === "--sync-missing" ||
+      arg === "--require-local-model"
+    ) {
+      throw new Error(
+        `${arg} is no longer supported; the push gate is validate-only`,
+      );
+    }
+  }
+}
+
+function isPidAlive(pid) {
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return true;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function remediationHint(entry) {
+  const reason = String(entry?.reason ?? "");
+  if (reason === "review-in-progress") {
+    return "next: wait for review completion or run scripts/codex-review-clean-stale --dry-run";
+  }
+  if (
+    reason === "review-incomplete" ||
+    reason.startsWith("review-incomplete-")
+  ) {
+    return `next: rerun scripts/codex-review-commit --sha ${entry.sha} --trigger manual to finish the review, or inspect .code-reviews/*.md/.json`;
+  }
+  if (reason === "runner-unavailable") {
+    return "next: ensure codex is installed/authenticated (run: codex login status)";
+  }
+  if (reason === "review-report-missing") {
+    return `next: wait for the durable review worker, or run scripts/codex-review-commit --sha ${entry.sha} --trigger manual`;
+  }
+  if (reason === "local-review-missing") {
+    return `next: remove stale legacy local artifacts and rerun scripts/codex-review-prune-artifacts.mjs --reviews-dir .code-reviews`;
+  }
+  if (reason.startsWith("ui-runtime-")) {
+    return `next: resolve runtime findings in .code-reviews/*.ui-runtime.md or clear obsolete lane artifacts after fixes`;
+  }
+  if (
+    reason === "review-status-failed" ||
+    reason.startsWith("severity-threshold-")
+  ) {
+    return `next: resolve findings in .code-reviews/*.md/.json or close a specific false positive with scripts/codex-review-dismiss-finding --sha ${entry.sha} --index <1-based n>; use --all only to close an entire stale report intentionally`;
+  }
+  return "next: inspect review artifacts under .code-reviews";
+}
+
+async function main() {
+  assertNoLegacySyncFlags(process.argv);
+
+  if ((process.env.CODEX_REVIEW_ENABLED ?? "1") === "0") {
+    console.log("[codex-review-push-gate] disabled (CODEX_REVIEW_ENABLED=0)");
+    return;
+  }
+
+  if ((process.env.CODEX_REVIEW_PUSH_GATE_ENABLED ?? "1") === "0") {
+    console.log(
+      "[codex-review-push-gate] disabled (CODEX_REVIEW_PUSH_GATE_ENABLED=0)",
+    );
+    return;
+  }
+
+  if ((process.env.CODEX_REVIEW_PUSH_GATE_BYPASS ?? "0") === "1") {
+    console.log(
+      "[codex-review-push-gate] WARNING: bypass enabled (CODEX_REVIEW_PUSH_GATE_BYPASS=1)",
+    );
+    return;
+  }
+
+  const args = parseArgs(process.argv);
+  if (!isPidAlive(args.pushParentPid)) {
+    console.log(
+      "[codex-review-push-gate] parent push process already exited; skipping gate",
+    );
+    return;
+  }
+
+  const repoRoot = process.env.REPO_ROOT || process.cwd();
+  const { reviewsDir } = await prepareCodexReviewCliContext({
+    invocationCwd: repoRoot,
+    reviewsDirOverride: args.reviewsDir,
+    warnPrefix: "codex-review-push-gate",
+  });
+  const queueSummary = await collectQueueSummary(reviewsDir, {
+    lane: "codex",
+  }).catch(() => null);
+  const backlogState = await readReviewQueueBacklog(reviewsDir, "codex").catch(
+    () => null,
+  );
+  const pushContext = args.contextFile
+    ? JSON.parse(await readFile(args.contextFile, "utf8"))
+    : null;
+  const stdinText = args.stdinFile
+    ? await readFile(args.stdinFile, "utf8")
+    : "";
+
+  const result = await executePushGate({
+    repoRoot,
+    reviewsDir,
+    stdinText,
+    remoteName: args.remoteName || String(pushContext?.remoteName ?? "").trim(),
+    pushContext,
+    minSeverity: args.minSeverity,
+    timeoutMs: args.timeoutSeconds * 1000,
+    uiRuntimeGateEnabled: args.uiRuntimeGateEnabled,
+    uiRuntimeInfraBlocking: args.uiRuntimeInfraBlocking,
+    shouldContinue: () => isPidAlive(args.pushParentPid),
+    gitExec: (gitArgs) => defaultGitExec(gitArgs, repoRoot),
+  });
+
+  if (result.summary.blocked > 0) {
+    console.error(
+      `[codex-review-push-gate] FAIL: push blocked by review gate (blocked=${result.summary.blocked})`,
+    );
+    for (const entry of result.blocked) {
+      console.error(
+        `- ${entry.sha} status=${entry.status} severity=${entry.severity} findings=${entry.findings} reason=${entry.reason}`,
+      );
+      console.error(`  ${remediationHint(entry)}`);
+    }
+    console.error(
+      `[codex-review-push-gate] summary shas=${result.summary.shas} running_waited=${result.summary.running_waited} sync_reruns=${result.summary.sync_reruns} actionable=${result.summary.actionable} failed=${result.summary.failed} blocked=${result.summary.blocked}`,
+    );
+    process.exit(1);
+  }
+
+  const parkedPending =
+    queueSummary?.lanes?.codex?.pendingBlockedByBacklog ?? 0;
+  if (backlogState?.active) {
+    console.log(
+      `[codex-review-push-gate] backlog active enqueue_after=${backlogState.enqueue_after || "none"} parked_pending=${parkedPending} reason=${backlogState.reason || "none"}`,
+    );
+  }
+  if (result.summary.actionable > 0 || result.summary.failed > 0) {
+    console.log(
+      `[codex-review-push-gate] note actionable_non_blocking=${result.summary.actionable} failed_non_blocking=${result.summary.failed}`,
+    );
+  }
+  console.log(
+    `[codex-review-push-gate] PASS shas=${result.summary.shas} running_waited=${result.summary.running_waited} sync_reruns=${result.summary.sync_reruns} actionable=${result.summary.actionable} failed=${result.summary.failed} blocked=${result.summary.blocked}`,
+  );
+}
+
+if (
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1] ?? "")).href
+) {
+  main().catch((error) => {
+    console.error(`[codex-review-push-gate] Failed: ${error.message}`);
+    process.exit(1);
+  });
+}

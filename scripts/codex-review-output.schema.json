@@ -1,0 +1,84 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "summary", "findings"],
+  "properties": {
+    "schema_version": {
+      "type": "number",
+      "const": 2
+    },
+    "summary": {
+      "type": "string"
+    },
+    "findings": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "severity",
+          "confidence",
+          "title",
+          "finding_id",
+          "hypothesis",
+          "impact",
+          "failure_scenario",
+          "broken_invariant",
+          "evidence",
+          "recommended_direction",
+          "review_pass"
+        ],
+        "properties": {
+          "severity": {
+            "type": "string",
+            "enum": ["blocker", "major", "minor"]
+          },
+          "confidence": {
+            "type": "number",
+            "minimum": 0,
+            "maximum": 1
+          },
+          "title": {
+            "type": "string"
+          },
+          "finding_id": {
+            "type": "string",
+            "minLength": 3
+          },
+          "hypothesis": {
+            "type": "string"
+          },
+          "impact": {
+            "type": "string"
+          },
+          "failure_scenario": {
+            "type": "string"
+          },
+          "broken_invariant": {
+            "type": "string"
+          },
+          "evidence": {
+            "type": "array",
+            "items": {
+              "type": "object",
+              "additionalProperties": false,
+              "required": ["file", "lines", "reason"],
+              "properties": {
+                "file": { "type": "string" },
+                "lines": { "type": "string" },
+                "reason": { "type": "string" }
+              }
+            }
+          },
+          "recommended_direction": {
+            "type": "string"
+          },
+          "review_pass": {
+            "type": "string"
+          }
+        }
+      }
+    }
+  }
+}

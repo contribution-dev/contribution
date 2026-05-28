@@ -1,0 +1,203 @@
+#!/usr/bin/env node
+
+import path from "node:path";
+import { pathToFileURL } from "node:url";
+import {
+  ackPathForLane,
+  ackCurrentVersions,
+  clearMissingAcks,
+  collectReports,
+  readAckState,
+  reportsDirForLane,
+} from "./codex-review-inbox-lib.mjs";
+import { prepareCodexReviewCliContext } from "./lib/codex-review-cli-bootstrap.mjs";
+
+function usage() {
+  console.log(`Usage: scripts/codex-review-ack [options]
+
+Options:
+  --sha <commit-sha>          Ack current report version for one commit
+  --lane <codex>              Limit ack operations to the codex lane (default: codex)
+  --all                       Ack current report versions for all actionable reports
+  --list                      List current ack entries
+  --clear-missing             Remove ack entries for missing/outdated report versions
+  --include-failed <0|1>      Include failed reviews when --all is used (default: 1)
+  --reviews-dir <path>        Override reviews directory
+  -h, --help                  Show this help
+`);
+}
+
+function parseArgs(argv) {
+  const args = {
+    sha: "",
+    lane: "codex",
+    all: false,
+    list: false,
+    clearMissing: false,
+    includeFailed:
+      (process.env.CODEX_REVIEW_INBOX_INCLUDE_FAILED ?? "1").trim() !== "0",
+    reviewsDir:
+      process.env.CODE_REVIEW_DIR && process.env.CODE_REVIEW_DIR.trim()
+        ? process.env.CODE_REVIEW_DIR.trim()
+        : process.env.CODEX_REVIEW_DIR && process.env.CODEX_REVIEW_DIR.trim()
+          ? process.env.CODEX_REVIEW_DIR.trim()
+          : "",
+  };
+
+  for (let i = 2; i < argv.length; i += 1) {
+    const arg = argv[i];
+    const next = argv[i + 1];
+    switch (arg) {
+      case "--sha":
+        args.sha = String(next ?? "");
+        i += 1;
+        break;
+      case "--lane":
+        args.lane = String(next ?? "all")
+          .trim()
+          .toLowerCase();
+        i += 1;
+        break;
+      case "--all":
+        args.all = true;
+        break;
+      case "--list":
+        args.list = true;
+        break;
+      case "--clear-missing":
+        args.clearMissing = true;
+        break;
+      case "--include-failed":
+        args.includeFailed = String(next ?? "1") !== "0";
+        i += 1;
+        break;
+      case "--reviews-dir":
+        args.reviewsDir = String(next ?? "");
+        i += 1;
+        break;
+      case "-h":
+      case "--help":
+        usage();
+        process.exit(0);
+        break;
+      default:
+        throw new Error(`Unknown argument: ${arg}`);
+    }
+  }
+
+  const modeCount = [
+    args.sha ? 1 : 0,
+    args.all ? 1 : 0,
+    args.list ? 1 : 0,
+    args.clearMissing ? 1 : 0,
+  ].reduce((sum, value) => sum + value, 0);
+  if (modeCount !== 1) {
+    throw new Error(
+      "Specify exactly one of --sha, --all, --list, or --clear-missing.",
+    );
+  }
+  if (args.lane !== "codex") {
+    throw new Error(`Invalid --lane: ${args.lane}`);
+  }
+
+  return args;
+}
+
+async function main() {
+  const args = parseArgs(process.argv);
+  const { reviewsDir } = await prepareCodexReviewCliContext({
+    invocationCwd: process.cwd(),
+    reviewsDirOverride: args.reviewsDir,
+    warnPrefix: "codex-review-ack",
+  });
+  const lanes = ["codex"];
+
+  if (args.list) {
+    let acked = 0;
+    for (const lane of lanes) {
+      const ackState = await readAckState(ackPathForLane(reviewsDir, lane));
+      const entries = Object.entries(ackState.acks).sort(([left], [right]) =>
+        left.localeCompare(right),
+      );
+      acked += entries.length;
+      for (const [sha, entry] of entries) {
+        console.log(
+          `- lane=${lane} sha=${sha} version_token=${entry.version_token} acked_at=${entry.acked_at} source=${entry.source} reason=${entry.reason}`,
+        );
+      }
+    }
+    console.log(`[codex-review-ack] acked=${acked}`);
+    return;
+  }
+
+  const lanePayloads = await Promise.all(
+    lanes.map(async (lane) => ({
+      lane,
+      ackPath: ackPathForLane(reviewsDir, lane),
+      reports: await collectReports({
+        reviewsDir: reportsDirForLane(reviewsDir, lane),
+        includeFailed: args.includeFailed,
+        shouldSuppressReport: () => false,
+      }),
+    })),
+  );
+
+  if (args.clearMissing) {
+    let changed = false;
+    for (const item of lanePayloads) {
+      const result = await clearMissingAcks({
+        reports: item.reports,
+        ackPath: item.ackPath,
+      });
+      changed = changed || result.changed;
+    }
+    console.log(
+      `[codex-review-ack] clear-missing changed=${changed ? "1" : "0"}`,
+    );
+    return;
+  }
+
+  if (args.all) {
+    let changed = false;
+    for (const item of lanePayloads) {
+      const result = await ackCurrentVersions({
+        reports: item.reports,
+        ackPath: item.ackPath,
+        all: true,
+        source: "ack-script",
+        reason: "manual",
+      });
+      changed = changed || result.changed;
+    }
+    console.log(`[codex-review-ack] ack-all changed=${changed ? "1" : "0"}`);
+    return;
+  }
+
+  let found = false;
+  let changed = false;
+  for (const item of lanePayloads) {
+    const result = await ackCurrentVersions({
+      reports: item.reports,
+      ackPath: item.ackPath,
+      sha: args.sha,
+      all: false,
+      source: "ack-script",
+      reason: "manual",
+    });
+    found = found || result.found;
+    changed = changed || result.changed;
+  }
+  if (!found) {
+    throw new Error(`Report not found for sha: ${args.sha}`);
+  }
+  console.log(`[codex-review-ack] ack-sha changed=${changed ? "1" : "0"}`);
+}
+
+if (
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1] ?? "")).href
+) {
+  main().catch((error) => {
+    console.error(`[codex-review-ack] Failed: ${error.message}`);
+    process.exit(1);
+  });
+}

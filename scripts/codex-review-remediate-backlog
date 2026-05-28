@@ -1,0 +1,2999 @@
+#!/usr/bin/env node
+
+import { execFileSync, spawn, spawnSync } from "node:child_process";
+import {
+  closeSync,
+  existsSync,
+  mkdirSync,
+  openSync,
+  readdirSync,
+  readFileSync,
+  realpathSync,
+  renameSync,
+  rmSync,
+  statSync,
+  writeFileSync,
+} from "node:fs";
+import path from "node:path";
+import process from "node:process";
+import { fileURLToPath, pathToFileURL } from "node:url";
+import {
+  listBacklogArtifacts,
+  parseBacklogMeta,
+  summarizeFindingPriorityFromMeta,
+} from "./lib/codex-review-backlog-artifacts.mjs";
+import {
+  mergeReviewFindings,
+  normalizeReviewPayload,
+  writeReviewArtifacts,
+} from "./lib/codex-review-findings.mjs";
+import {
+  buildReviewPrompt,
+  DEFAULT_PROMPT_MAX_CHARS,
+  DEFAULT_PROMPT_MAX_FILE_CHARS,
+} from "./lib/codex-review-prompt.mjs";
+import {
+  resolveRepoRoot,
+  resolveReviewsDir,
+} from "./codex-review-inbox-lib.mjs";
+import { verifyFindings } from "./codex-review-verify-findings.mjs";
+
+const STATE_SCHEMA_VERSION = 1;
+const RUNNER_NAME = "codex-review-remediate-backlog";
+const DEFAULT_MAX_ATTEMPTS = 3;
+const DEFAULT_SCOPE = "head";
+const DEFAULT_HEARTBEAT_MS = 60_000;
+const DEFAULT_CONSECUTIVE_DEFERRED_LIMIT = 3;
+const DEFAULT_CODEX_ATTEMPT_TIMEOUT_MS = 15 * 60_000;
+const RESUMEABLE_STATUSES = new Set([
+  "claimed",
+  "in_progress",
+  "retryable_error",
+  "paused",
+  "deferred",
+]);
+const TERMINAL_STATUSES = new Set([
+  "completed",
+  "completed_no_commit",
+  "completed_external_validation_failed",
+  "blocked",
+]);
+const QUOTA_PATTERNS = [
+  "quota",
+  "usage limit",
+  "rate limit",
+  "credits",
+  "billing",
+  "429",
+  "too many requests",
+];
+const TRANSIENT_TRANSPORT_PATTERNS = [
+  "connection reset",
+  "socket hang up",
+  "network error",
+  "temporarily unavailable",
+  "econnreset",
+  "etimedout",
+  "ehostunreach",
+  "enotfound",
+  "fetch failed",
+  "transport error",
+];
+const SYSTEM_FAILURE_PATTERNS = [
+  "invalid output schema",
+  "codex is not authenticated",
+  "not authenticated",
+  "authentication failed",
+  "connector bootstrap",
+  "bootstrap error",
+  "configuration error",
+];
+const KNOWN_EXTERNAL_VALIDATION_PATTERNS = [];
+const TYPESCRIPT_DIAGNOSTIC_PATTERN =
+  /^(.+\(\d+,\d+\): error TS\d+(?::.*)?)$/gm;
+const TOOLING_DIR = path.dirname(fileURLToPath(import.meta.url));
+const REVIEW_OUTPUT_SCHEMA_PATH = path.join(
+  TOOLING_DIR,
+  "codex-review-output.schema.json",
+);
+const REUSED_PROCESS_START_TIME_CUTOFF_MS = Date.UTC(1975, 0, 1);
+const REMEDIATION_STRATEGIES = new Set([
+  "smallest_possible",
+  "narrow_root_cause",
+  "holistic_contract",
+  "not_applicable",
+]);
+const ROOT_CAUSE_SCOPES = new Set([
+  "isolated",
+  "sibling_paths",
+  "shared_contract",
+  "not_applicable",
+]);
+
+function looksLikePidReuseByStartTime(startTime) {
+  if (typeof startTime !== "string" || !startTime.trim()) {
+    return false;
+  }
+  const parsed = Date.parse(startTime);
+  return (
+    Number.isFinite(parsed) && parsed < REUSED_PROCESS_START_TIME_CUTOFF_MS
+  );
+}
+
+function usage() {
+  console.log(`Usage: scripts/codex-review-remediate-backlog [options]
+
+Process .code-reviews/*.md handoff files serially in the current checkout.
+Each file is archived when claimed, kept in place until terminal resolution,
+and committed or dismissed before the next backlog item begins.
+
+Options:
+  --reviews-dir <path>        Override review artifact directory
+  --scope <head|all>          Process only the current HEAD chain or the full backlog (default: head)
+  --max-items <n>             Stop after n backlog items (default: unlimited)
+  --max-attempts <n>          Retry a failing finding up to n times (default: 3)
+  --max-consecutive-deferred <n>
+                              Pause after n consecutive transient Codex deferrals (default: 3)
+  --codex-attempt-timeout-ms <n>
+                              Kill and defer a stuck Codex attempt after n ms (default: 900000)
+  --requeue-sha <sha>         Remove remediation state for a blocked/paused item (repeatable)
+  --model <name>              Override Codex model for remediation runs
+  --dry-run                   Claim and inspect findings without running Codex or committing
+  -h, --help                  Show help
+`);
+}
+
+function parsePositiveInt(value, fallback) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isInteger(parsed) || parsed <= 0) {
+    return fallback;
+  }
+  return parsed;
+}
+
+function parseArgs(argv) {
+  const args = {
+    reviewsDir: "",
+    scope: DEFAULT_SCOPE,
+    maxItems: 0,
+    maxAttempts: DEFAULT_MAX_ATTEMPTS,
+    maxConsecutiveDeferred: DEFAULT_CONSECUTIVE_DEFERRED_LIMIT,
+    codexAttemptTimeoutMs: DEFAULT_CODEX_ATTEMPT_TIMEOUT_MS,
+    allowDirtyRequested: false,
+    requeueShas: [],
+    model: "",
+    dryRun: false,
+  };
+
+  for (let index = 2; index < argv.length; index += 1) {
+    const arg = argv[index];
+    const next = argv[index + 1];
+    switch (arg) {
+      case "--":
+        break;
+      case "--reviews-dir":
+        args.reviewsDir = String(next ?? "").trim();
+        index += 1;
+        break;
+      case "--scope":
+        args.scope = String(next ?? DEFAULT_SCOPE)
+          .trim()
+          .toLowerCase();
+        index += 1;
+        break;
+      case "--max-items":
+        args.maxItems = Number.parseInt(String(next ?? "0"), 10);
+        index += 1;
+        break;
+      case "--max-attempts":
+        args.maxAttempts = Number.parseInt(
+          String(next ?? `${DEFAULT_MAX_ATTEMPTS}`),
+          10,
+        );
+        index += 1;
+        break;
+      case "--max-consecutive-deferred":
+        args.maxConsecutiveDeferred = Number.parseInt(
+          String(next ?? `${DEFAULT_CONSECUTIVE_DEFERRED_LIMIT}`),
+          10,
+        );
+        index += 1;
+        break;
+      case "--codex-attempt-timeout-ms":
+        args.codexAttemptTimeoutMs = Number.parseInt(
+          String(next ?? `${DEFAULT_CODEX_ATTEMPT_TIMEOUT_MS}`),
+          10,
+        );
+        index += 1;
+        break;
+      case "--allow-dirty":
+        args.allowDirtyRequested = true;
+        break;
+      case "--model":
+        args.model = String(next ?? "").trim();
+        index += 1;
+        break;
+      case "--requeue-sha":
+        args.requeueShas.push(String(next ?? "").trim());
+        index += 1;
+        break;
+      case "--dry-run":
+        args.dryRun = true;
+        break;
+      case "-h":
+      case "--help":
+        usage();
+        process.exit(0);
+        break;
+      default:
+        throw new Error(`Unknown argument: ${arg}`);
+    }
+  }
+
+  if (!Number.isInteger(args.maxItems) || args.maxItems < 0) {
+    throw new Error(`Invalid --max-items: ${args.maxItems}`);
+  }
+  if (!["head", "all"].includes(args.scope)) {
+    throw new Error(`Invalid --scope: ${args.scope}`);
+  }
+  if (!Number.isInteger(args.maxAttempts) || args.maxAttempts <= 0) {
+    throw new Error(`Invalid --max-attempts: ${args.maxAttempts}`);
+  }
+  if (
+    !Number.isInteger(args.maxConsecutiveDeferred) ||
+    args.maxConsecutiveDeferred <= 0
+  ) {
+    throw new Error(
+      `Invalid --max-consecutive-deferred: ${args.maxConsecutiveDeferred}`,
+    );
+  }
+  if (
+    !Number.isInteger(args.codexAttemptTimeoutMs) ||
+    args.codexAttemptTimeoutMs <= 0
+  ) {
+    throw new Error(
+      `Invalid --codex-attempt-timeout-ms: ${args.codexAttemptTimeoutMs}`,
+    );
+  }
+  for (const sha of args.requeueShas) {
+    if (!/^[0-9a-f]{40}$/.test(sha)) {
+      throw new Error(`Invalid --requeue-sha: ${sha}`);
+    }
+  }
+
+  return args;
+}
+
+function isoNow() {
+  return new Date().toISOString();
+}
+
+function git(repoRoot, args, options = {}) {
+  return execFileSync("git", args, {
+    cwd: repoRoot,
+    encoding: "utf8",
+    stdio: ["ignore", "pipe", "pipe"],
+    ...options,
+  }).trim();
+}
+
+function currentHeadSha(repoRoot) {
+  return git(repoRoot, ["rev-parse", "HEAD"]).toLowerCase();
+}
+
+function toPosixPath(value) {
+  return value.split(path.sep).join("/");
+}
+
+function backlogStateRoot(reviewsDir) {
+  return path.join(reviewsDir, "backlog-remediation");
+}
+
+function stateFilePath(stateRoot, sha) {
+  return path.join(stateRoot, "state", `${sha}.json`);
+}
+
+function claimFilePath(stateRoot, sha) {
+  return path.join(stateRoot, "claims", `${sha}.md`);
+}
+
+function blockedReportPath(stateRoot, sha) {
+  return path.join(stateRoot, "blocked", `${sha}.md`);
+}
+
+function resultFilePath(stateRoot, sha) {
+  return path.join(stateRoot, "results", `${sha}.json`);
+}
+
+function logFilePath(stateRoot, sha, attempts) {
+  return path.join(stateRoot, "logs", `${sha}.attempt-${attempts}.log`);
+}
+
+function validationLogPath(stateRoot, sha, attempts) {
+  return path.join(
+    stateRoot,
+    "logs",
+    `${sha}.attempt-${attempts}.validation.log`,
+  );
+}
+
+function requiresAgentsCheck(filePath) {
+  const posixPath = toPosixPath(filePath);
+  return (
+    posixPath === "AGENTS.md" ||
+    posixPath === "CLAUDE.md" ||
+    posixPath === "docs/agent-system.md" ||
+    posixPath === "docs/tooling-validation.md" ||
+    posixPath.startsWith("docs/reference/") ||
+    posixPath.startsWith("docs/runbooks/") ||
+    posixPath.startsWith("docs/strategy/") ||
+    posixPath.endsWith("/AGENTS.md")
+  );
+}
+
+function validationCommandsForChangedPaths(changedPaths) {
+  const commands = [];
+  const needsAgentsCheck = changedPaths.some((filePath) =>
+    requiresAgentsCheck(filePath),
+  );
+  const needsChangedChecks = changedPaths.some(
+    (filePath) => !requiresAgentsCheck(filePath),
+  );
+
+  if (needsAgentsCheck) {
+    commands.push(["pnpm", "agents:check"]);
+  }
+  if (needsChangedChecks) {
+    commands.push(["pnpm", "checks:changed"]);
+  }
+
+  return commands;
+}
+
+function remediationLogPaths(stateRoot, sha) {
+  const logsDir = path.join(stateRoot, "logs");
+  if (!existsSync(logsDir)) {
+    return [];
+  }
+  return readdirSync(logsDir)
+    .filter((entry) => entry.startsWith(`${sha}.`))
+    .map((entry) => path.join(logsDir, entry));
+}
+
+function runnerStatePath(stateRoot) {
+  return path.join(stateRoot, "runner.json");
+}
+
+function lockDirPath(stateRoot) {
+  return path.join(stateRoot, "lock");
+}
+
+function ownerPathForLock(lockDir) {
+  return path.join(lockDir, "owner.json");
+}
+
+function ensureDir(directory) {
+  mkdirSync(directory, { recursive: true, mode: 0o700 });
+}
+
+function writeJsonAtomic(filePath, payload) {
+  ensureDir(path.dirname(filePath));
+  const tempPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+  writeFileSync(tempPath, `${JSON.stringify(payload, null, 2)}\n`, {
+    encoding: "utf8",
+    mode: 0o600,
+  });
+  renameSync(tempPath, filePath);
+}
+
+function writeTextAtomic(filePath, value) {
+  ensureDir(path.dirname(filePath));
+  const tempPath = `${filePath}.tmp.${process.pid}.${Date.now()}`;
+  writeFileSync(tempPath, value, { encoding: "utf8", mode: 0o600 });
+  renameSync(tempPath, filePath);
+}
+
+function readJson(filePath) {
+  try {
+    return JSON.parse(readFileSync(filePath, "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+function listStateEntries(stateRoot) {
+  const dir = path.join(stateRoot, "state");
+  if (!existsSync(dir)) {
+    return [];
+  }
+  return readdirSync(dir)
+    .filter((entry) => entry.endsWith(".json"))
+    .map((entry) => readJson(path.join(dir, entry)))
+    .filter(Boolean)
+    .map((state) => ({
+      ...state,
+      ...derivePriorityForState(state),
+    }))
+    .sort((left, right) => {
+      const severityDelta =
+        Number(right.highest_severity ?? 0) -
+        Number(left.highest_severity ?? 0);
+      if (severityDelta !== 0) {
+        return severityDelta;
+      }
+      const confidenceDelta =
+        Number(right.highest_confidence ?? 0) -
+        Number(left.highest_confidence ?? 0);
+      if (confidenceDelta !== 0) {
+        return confidenceDelta;
+      }
+      const findingsDelta =
+        Number(right.findings_count ?? 0) - Number(left.findings_count ?? 0);
+      if (findingsDelta !== 0) {
+        return findingsDelta;
+      }
+      const updatedAtDelta = String(left.updated_at ?? "").localeCompare(
+        String(right.updated_at ?? ""),
+      );
+      if (updatedAtDelta !== 0) {
+        return updatedAtDelta;
+      }
+      return String(left.sha ?? "").localeCompare(String(right.sha ?? ""));
+    });
+}
+
+function readState(stateRoot, sha) {
+  return readJson(stateFilePath(stateRoot, sha));
+}
+
+function requeueSha(stateRoot, sha) {
+  const state = readState(stateRoot, sha);
+  if (!state) {
+    return {
+      sha,
+      changed: false,
+      reason: "missing-state",
+    };
+  }
+
+  rmSync(stateFilePath(stateRoot, sha), { force: true });
+  rmSync(resultFilePath(stateRoot, sha), { force: true });
+  rmSync(blockedReportPath(stateRoot, sha), { force: true });
+  for (const logPath of remediationLogPaths(stateRoot, sha)) {
+    rmSync(logPath, { force: true });
+  }
+
+  return {
+    sha,
+    changed: true,
+    previousStatus: String(state.status ?? ""),
+  };
+}
+
+function persistState(stateRoot, state) {
+  const payload = {
+    schema_version: STATE_SCHEMA_VERSION,
+    ...state,
+    updated_at: isoNow(),
+  };
+  writeJsonAtomic(stateFilePath(stateRoot, payload.sha), payload);
+  return payload;
+}
+
+function persistRunnerState(stateRoot, payload) {
+  writeJsonAtomic(runnerStatePath(stateRoot), {
+    schema_version: STATE_SCHEMA_VERSION,
+    updated_at: isoNow(),
+    ...payload,
+  });
+}
+
+function processAlive(pidRaw) {
+  const pid = Number.parseInt(String(pidRaw ?? ""), 10);
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return false;
+  }
+  try {
+    process.kill(pid, 0);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
+function getProcessStartTime(pidRaw) {
+  const pid = Number.parseInt(String(pidRaw ?? ""), 10);
+  if (!Number.isInteger(pid) || pid <= 0) {
+    return "";
+  }
+  let result;
+  try {
+    result = spawnSync("ps", ["-o", "lstart=", "-p", String(pid)], {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "ignore"],
+      env: {
+        ...process.env,
+        LC_ALL: "C",
+        LANG: "C",
+      },
+    });
+  } catch {
+    return "";
+  }
+  if (result.status !== 0) {
+    return "";
+  }
+  return String(result.stdout ?? "").trim();
+}
+
+function acquireRunnerLock(stateRoot) {
+  ensureDir(stateRoot);
+  const lockDir = lockDirPath(stateRoot);
+  const ownerPath = ownerPathForLock(lockDir);
+  try {
+    mkdirSync(lockDir, { mode: 0o700 });
+  } catch (error) {
+    if (error?.code !== "EEXIST") {
+      throw error;
+    }
+    const owner = readJson(ownerPath);
+    const lockInfo = statSync(lockDir, { throwIfNoEntry: false });
+    const ownerAlive = owner ? processAlive(owner.pid) : false;
+    const recordedStartTime =
+      owner && typeof owner.start_time === "string"
+        ? owner.start_time.trim()
+        : "";
+    const liveStartTime = ownerAlive ? getProcessStartTime(owner?.pid) : "";
+    const ownerIdentityMismatch = ownerAlive
+      ? recordedStartTime
+        ? liveStartTime
+          ? recordedStartTime !== liveStartTime
+          : looksLikePidReuseByStartTime(recordedStartTime)
+        : false
+      : false;
+    const stale = !owner || !lockInfo || !ownerAlive || ownerIdentityMismatch;
+    if (!stale) {
+      throw new Error(
+        `${RUNNER_NAME} is already active (pid=${String(owner?.pid ?? "unknown")})`,
+      );
+    }
+    rmSync(lockDir, { recursive: true, force: true });
+    mkdirSync(lockDir, { mode: 0o700 });
+  }
+
+  const owner = {
+    pid: process.pid,
+    token: `${process.pid}-${Date.now()}`,
+    started_at: isoNow(),
+    start_time: getProcessStartTime(process.pid),
+    cwd: process.cwd(),
+  };
+  writeJsonAtomic(ownerPath, owner);
+  return {
+    lockDir,
+    owner,
+  };
+}
+
+function releaseRunnerLock(lock) {
+  if (!lock) {
+    return;
+  }
+  const ownerPath = ownerPathForLock(lock.lockDir);
+  const current = readJson(ownerPath);
+  if (current?.token !== lock.owner.token) {
+    return;
+  }
+  rmSync(lock.lockDir, { recursive: true, force: true });
+}
+
+function summarizePriorityFromBacklogMeta(meta) {
+  if (!meta || typeof meta !== "object") {
+    return {
+      highestSeverity: 0,
+      highestConfidence: 0,
+      findingsCount: 0,
+    };
+  }
+
+  const highestSeverity = Number(
+    meta.highest_severity ?? meta.highestSeverity ?? 0,
+  );
+  const highestConfidence = Number(
+    meta.highest_confidence ?? meta.highestConfidence ?? 0,
+  );
+  const findingsCount = Number(meta.findings_count ?? meta.findingsCount ?? 0);
+
+  return {
+    highestSeverity: Number.isFinite(highestSeverity) ? highestSeverity : 0,
+    highestConfidence: Number.isFinite(highestConfidence)
+      ? highestConfidence
+      : 0,
+    findingsCount: Number.isFinite(findingsCount) ? findingsCount : 0,
+  };
+}
+
+function derivePriorityForState(state) {
+  const existingSeverity = Number(state?.highest_severity ?? NaN);
+  const existingConfidence = Number(state?.highest_confidence ?? NaN);
+  const existingCount = Number(state?.findings_count ?? NaN);
+  if (
+    Number.isFinite(existingSeverity) &&
+    Number.isFinite(existingConfidence) &&
+    Number.isFinite(existingCount)
+  ) {
+    return {
+      highest_severity: existingSeverity,
+      highest_confidence: existingConfidence,
+      findings_count: existingCount,
+    };
+  }
+
+  const candidatePaths = [state?.claim_path, state?.source_path]
+    .map((value) => String(value ?? "").trim())
+    .filter(Boolean);
+  if (Array.isArray(state?.structured_findings)) {
+    const priority = summarizeFindingPriorityFromMeta({
+      summary: String(state?.handoff_summary ?? state?.summary ?? ""),
+      findings: state.structured_findings,
+    });
+    return {
+      highest_severity: priority.highestSeverity,
+      highest_confidence: priority.highestConfidence,
+      findings_count: priority.findingsCount,
+    };
+  }
+  for (const candidatePath of candidatePaths) {
+    if (!existsSync(candidatePath)) {
+      continue;
+    }
+    const priority = summarizePriorityFromBacklogMeta(
+      parseBacklogMeta(readBacklogContent(candidatePath)),
+    );
+    return {
+      highest_severity: priority.highestSeverity,
+      highest_confidence: priority.highestConfidence,
+      findings_count: priority.findingsCount,
+    };
+  }
+
+  return {
+    highest_severity: 0,
+    highest_confidence: 0,
+    findings_count: 0,
+  };
+}
+
+function normalizeStructuredFindings(findings) {
+  return mergeReviewFindings(Array.isArray(findings) ? findings : []);
+}
+
+function artifactMatchesScope(entry, scope) {
+  if (scope === "all") {
+    return true;
+  }
+  return String(entry?.scope ?? "") === "head";
+}
+
+function stateMatchesScope(state, scope, headSha) {
+  if (scope === "all") {
+    return true;
+  }
+  const normalizedHeadSha = String(headSha ?? "")
+    .trim()
+    .toLowerCase();
+  if (!normalizedHeadSha) {
+    return false;
+  }
+  const pendingFollowOnSha = pendingFollowOnCommitSha(state).toLowerCase();
+  if (pendingFollowOnSha) {
+    return pendingFollowOnSha === normalizedHeadSha;
+  }
+  return (
+    String(state?.sha ?? "")
+      .trim()
+      .toLowerCase() === normalizedHeadSha
+  );
+}
+
+function findingTitleFromMarkdown(markdown) {
+  const meta = parseBacklogMeta(markdown);
+  const title = String(meta.findings?.[0]?.title ?? "").trim();
+  if (title) {
+    return title;
+  }
+  return String(meta.summary ?? "").trim();
+}
+
+function findingTitleFromMeta(meta) {
+  const title = String(meta?.findings?.[0]?.title ?? "").trim();
+  if (title) {
+    return title;
+  }
+  return String(meta?.summary ?? "").trim();
+}
+
+function firstSummaryLine(markdown) {
+  const meta = parseBacklogMeta(markdown);
+  const summary = String(meta.summary ?? "").trim();
+  if (summary) {
+    return summary;
+  }
+  const line = String(markdown ?? "")
+    .split(/\r?\n/)
+    .map((value) => value.trim())
+    .find((value) => value.startsWith("## Summary"));
+  return line ? line.replace(/^## Summary\s*/, "").trim() : "";
+}
+
+function firstSummaryLineFromMeta(meta, markdown = "") {
+  const summary = String(meta?.summary ?? "").trim();
+  if (summary) {
+    return summary;
+  }
+  return firstSummaryLine(markdown);
+}
+
+function listBacklogFiles(reviewsDir, { headSha = "" } = {}) {
+  return listBacklogArtifacts(reviewsDir, { headSha }).filter(
+    (entry) =>
+      entry.category === "actionable" || entry.category === "contradictory",
+  );
+}
+
+function readBacklogContent(filePath) {
+  const raw = readFileSync(filePath, "utf8");
+  return raw.replace(/\s+$/, "");
+}
+
+function activeSourcePathForState(state) {
+  const sourcePath = String(state?.source_path ?? "").trim();
+  if (sourcePath) {
+    return sourcePath;
+  }
+  return String(state?.claim_path ?? "").trim();
+}
+
+function unresolvedBlockedSources(
+  stateRoot,
+  { scope = DEFAULT_SCOPE, headSha = "" } = {},
+) {
+  const blocked = [];
+  for (const state of listStateEntries(stateRoot)) {
+    if (String(state?.status ?? "") !== "blocked") {
+      continue;
+    }
+    if (!stateMatchesScope(state, scope, headSha)) {
+      continue;
+    }
+    const filePath = activeSourcePathForState(state);
+    if (
+      !filePath ||
+      !existsSync(filePath) ||
+      !readBacklogContent(filePath).trim()
+    ) {
+      continue;
+    }
+    blocked.push({ sha: String(state.sha ?? ""), filePath, state });
+  }
+  return blocked;
+}
+
+function unresolvedDeferredSources(
+  stateRoot,
+  runId,
+  { scope = DEFAULT_SCOPE, headSha = "" } = {},
+) {
+  const deferred = [];
+  for (const state of listStateEntries(stateRoot)) {
+    if (String(state?.status ?? "") !== "deferred") {
+      continue;
+    }
+    if (!stateMatchesScope(state, scope, headSha)) {
+      continue;
+    }
+    if (String(state?.deferred_by_run ?? "") !== String(runId)) {
+      continue;
+    }
+    const filePath = activeSourcePathForState(state);
+    if (
+      !filePath ||
+      !existsSync(filePath) ||
+      !readBacklogContent(filePath).trim()
+    ) {
+      continue;
+    }
+    deferred.push({ sha: String(state.sha ?? ""), filePath, state });
+  }
+  return deferred;
+}
+
+function clearFindingSource(filePath) {
+  writeTextAtomic(filePath, "");
+}
+
+function repoIsDirty(repoRoot) {
+  return git(repoRoot, ["status", "--short"]).length > 0;
+}
+
+function changedTrackedPaths(repoRoot) {
+  const unstaged = git(repoRoot, ["diff", "--name-only"])
+    .split("\n")
+    .filter(Boolean);
+  const staged = git(repoRoot, ["diff", "--cached", "--name-only"])
+    .split("\n")
+    .filter(Boolean);
+  return [
+    ...new Set([...unstaged, ...staged].map((value) => toPosixPath(value))),
+  ].sort();
+}
+
+function untrackedPaths(repoRoot) {
+  const output = git(repoRoot, ["ls-files", "--others", "--exclude-standard"]);
+  if (!output) {
+    return [];
+  }
+  return output
+    .split("\n")
+    .map((line) => line.trim())
+    .filter(Boolean)
+    .map((line) => toPosixPath(line))
+    .sort();
+}
+
+function changedCommitPaths(repoRoot) {
+  return [
+    ...new Set([...changedTrackedPaths(repoRoot), ...untrackedPaths(repoRoot)]),
+  ]
+    .filter((value) => !value.startsWith(".code-reviews/"))
+    .sort();
+}
+
+function cleanupWorkingTree(repoRoot) {
+  const tracked = changedTrackedPaths(repoRoot);
+  if (tracked.length > 0) {
+    execFileSync(
+      "git",
+      ["restore", "--staged", "--worktree", "--source=HEAD", "--", ...tracked],
+      {
+        cwd: repoRoot,
+        stdio: ["ignore", "pipe", "pipe"],
+      },
+    );
+  }
+
+  for (const relativePath of untrackedPaths(repoRoot)) {
+    const absolutePath = path.join(repoRoot, relativePath);
+    const resolved = realpathSync.native(path.dirname(absolutePath));
+    const normalizedRepoRoot = realpathSync.native(repoRoot);
+    if (!resolved.startsWith(normalizedRepoRoot)) {
+      throw new Error(
+        `Refusing to delete untracked path outside repo root: ${relativePath}`,
+      );
+    }
+    rmSync(absolutePath, { recursive: true, force: true });
+  }
+}
+
+function detectQuota(text) {
+  const normalized = String(text ?? "").toLowerCase();
+  return QUOTA_PATTERNS.some((pattern) => normalized.includes(pattern));
+}
+
+function isTransientTransportFailureMessage(errorMessage) {
+  const normalized = String(errorMessage ?? "").toLowerCase();
+  return TRANSIENT_TRANSPORT_PATTERNS.some((pattern) =>
+    normalized.includes(pattern),
+  );
+}
+
+function isSystemFailureMessage(errorMessage) {
+  const normalized = String(errorMessage ?? "").toLowerCase();
+  return SYSTEM_FAILURE_PATTERNS.some((pattern) =>
+    normalized.includes(pattern),
+  );
+}
+
+function heartbeatMs() {
+  const raw = Number.parseInt(
+    String(
+      process.env.CONTRIBUTION_REVIEW_REMEDIATE_HEARTBEAT_MS ??
+        `${DEFAULT_HEARTBEAT_MS}`,
+    ),
+    10,
+  );
+  if (!Number.isInteger(raw) || raw <= 0) {
+    return DEFAULT_HEARTBEAT_MS;
+  }
+  return raw;
+}
+
+function shortTitle(text) {
+  const normalized = String(text ?? "")
+    .replace(/\s+/g, " ")
+    .trim();
+  if (!normalized) {
+    return "";
+  }
+  return normalized.length > 80
+    ? `${normalized.slice(0, 77).trimEnd()}...`
+    : normalized;
+}
+
+function codexSchemaPath(repoRoot) {
+  return path.join(
+    repoRoot,
+    "scripts",
+    "codex-review-remediate-backlog-output.schema.json",
+  );
+}
+
+function validateStructuredOutputSchemaNode(schema, pointer = "$") {
+  if (!schema || typeof schema !== "object" || Array.isArray(schema)) {
+    return;
+  }
+
+  const types = Array.isArray(schema.type)
+    ? schema.type
+    : [schema.type].filter(Boolean);
+  if (
+    types.includes("object") &&
+    schema.properties &&
+    typeof schema.properties === "object"
+  ) {
+    const propertyNames = Object.keys(schema.properties);
+    const required = Array.isArray(schema.required) ? schema.required : [];
+    const missingRequired = propertyNames.filter(
+      (name) => !required.includes(name),
+    );
+    if (missingRequired.length > 0) {
+      throw new Error(
+        `Invalid output schema at ${pointer}: required must include every declared property (${missingRequired.join(", ")})`,
+      );
+    }
+    for (const [key, value] of Object.entries(schema.properties)) {
+      validateStructuredOutputSchemaNode(value, `${pointer}.${key}`);
+    }
+  }
+
+  if (schema.items) {
+    validateStructuredOutputSchemaNode(schema.items, `${pointer}[]`);
+  }
+}
+
+function ensureValidStructuredOutputSchema(outputSchemaPath) {
+  const schema = readJson(outputSchemaPath);
+  if (!schema) {
+    throw new Error(
+      `Invalid output schema: could not read ${outputSchemaPath}`,
+    );
+  }
+  validateStructuredOutputSchemaNode(schema);
+}
+
+function commitMessageForState(state, result) {
+  const shortSha = String(state.sha).slice(0, 12);
+  const title =
+    String(result?.commit_title ?? "").trim() ||
+    String(state.title ?? "").trim() ||
+    String(state.summary ?? "").trim();
+  if (!title) {
+    return `fix(review): resolve findings for ${shortSha}`;
+  }
+  const normalized = title.replace(/\s+/g, " ").trim();
+  const clipped =
+    normalized.length > 60
+      ? `${normalized.slice(0, 57).trimEnd()}...`
+      : normalized;
+  return `fix(review): ${clipped} (${shortSha})`;
+}
+
+function normalizeModelLabel(model) {
+  return String(model ?? "").trim() || "codex-cli";
+}
+
+function pendingFollowOnCommitSha(state) {
+  const followOnCommitSha = String(
+    state?.follow_on_review_commit_sha ?? "",
+  ).trim();
+  if (/^[0-9a-f]{40}$/.test(followOnCommitSha)) {
+    return followOnCommitSha;
+  }
+  const commitSha = String(state?.commit_sha ?? "").trim();
+  if (
+    state?.follow_on_review_pending === true &&
+    /^[0-9a-f]{40}$/.test(commitSha)
+  ) {
+    return commitSha;
+  }
+  return "";
+}
+
+function clearPendingFollowOnReview(state) {
+  return {
+    ...state,
+    follow_on_review_pending: false,
+    follow_on_review_commit_sha: "",
+  };
+}
+
+function withPendingFollowOnReview(state, commitSha, result = state?.result) {
+  return {
+    ...state,
+    commit_sha: commitSha,
+    result,
+    follow_on_review_pending: true,
+    follow_on_review_commit_sha: commitSha,
+  };
+}
+
+function normalizeStateResult(result) {
+  return result && typeof result === "object" && !Array.isArray(result)
+    ? result
+    : {};
+}
+
+function followOnReviewFailureMessage(followOnReview) {
+  if (followOnReview.timedOut) {
+    return `Follow-on review timed out. See ${followOnReview.logPath || "the remediation log"}`;
+  }
+  if (followOnReview.failureReason === "system_error") {
+    return `Follow-on review failed with system_error: ${followOnReview.error || followOnReview.logPath || "unknown error"}`;
+  }
+  if (followOnReview.failureReason === "transient_transport") {
+    return `Follow-on review failed with transient transport error: ${followOnReview.error || followOnReview.logPath || "unknown error"}`;
+  }
+  if (followOnReview.failureReason === "invalid_output") {
+    return `Follow-on review completed without valid JSON output. See ${followOnReview.logPath || "the remediation log"}`;
+  }
+  if (followOnReview.error) {
+    return `Follow-on review failed: ${followOnReview.error}`;
+  }
+  return `Follow-on review failed. See ${followOnReview.logPath || "the remediation log"}`;
+}
+
+function buildPrompt({ repoRoot, branchName, claimPath, handoff }) {
+  const findings = Array.isArray(handoff?.findings) ? handoff.findings : [];
+  const findingSummary =
+    findings.length > 0
+      ? findings
+          .map((finding, index) => {
+            const evidence = Array.isArray(finding?.evidence)
+              ? finding.evidence
+                  .slice(0, 2)
+                  .map((item) => {
+                    const file = String(item?.file ?? "").trim();
+                    const lines = String(item?.lines ?? "").trim();
+                    const reason = String(item?.reason ?? "").trim();
+                    const location = [file, lines].filter(Boolean).join(":");
+                    return location && reason
+                      ? `${location} (${reason})`
+                      : location || reason;
+                  })
+                  .filter(Boolean)
+              : [];
+            return [
+              `${index + 1}. [${String(finding?.finding_id ?? "unknown")}] [${String(finding?.severity ?? "unknown").toUpperCase()}] ${String(finding?.title ?? "").trim() || "Untitled finding"}`,
+              `   Hypothesis: ${String(finding?.hypothesis ?? "").trim() || "none provided"}`,
+              `   Impact: ${String(finding?.impact ?? "").trim() || "none provided"}`,
+              `   Direction: ${String(finding?.recommended_direction ?? "").trim() || "none provided"}`,
+              ...(evidence.length > 0
+                ? [`   Evidence: ${evidence.join("; ")}`]
+                : []),
+            ].join("\n");
+          })
+          .join("\n")
+      : "No structured findings were recorded. Verify whether the review report is still actionable.";
+
+  return `You are resolving one commit-review backlog handoff in ${repoRoot}.
+
+Operate directly in the current checkout on branch ${branchName}. Do not create or use git worktrees. Do not commit. Do not push. Do not edit files under .code-reviews except to read the archived handoff at ${claimPath}.
+
+Required workflow:
+1. Validate every structured finding against the current checkout and current report state before changing code.
+2. If a finding is invalid or stale, explain why it is not reproducible or not a real bug.
+3. Before editing, choose the remediation strategy:
+   - "smallest_possible" when the bug is isolated to the changed path, the contract is already clear, and one narrow regression test covers the failure.
+   - "narrow_root_cause" when the issue is local to one domain but comes from duplicated logic, wrong helper use, or a missing invariant in nearby callers; fix the local shared path rather than each symptom.
+   - "holistic_contract" when the same invariant appears across commits, the finding cites AGENTS.md/docs/reference/stable tests, sibling implementations disagree, or the fix touches CLI compatibility, release artifacts, review automation, queue state, or credential handling.
+   - "not_applicable" only when no valid live finding requires a fix.
+4. If a finding is valid, implement the chosen safe fix and add or adjust regression coverage. Resolve every confirmed valid finding in this handoff before you return status "fixed". Do not bundle unrelated cleanup.
+5. Run the smallest relevant tests plus the narrowest repo-required validation command before you finish. Prefer changed-aware validation ("pnpm checks:changed" or the smaller "pnpm lint:changed", "pnpm typecheck:changed", "pnpm test:changed" equivalent). If you only change AGENTS/policy docs, run "pnpm agents:check" instead.
+6. Leave changes unstaged and summarize exactly what you validated.
+
+Return a final JSON object matching the provided schema with:
+- status: "fixed" only when every confirmed valid finding in this handoff is resolved, "invalid" when no code change was needed because the report was wrong, "no_change" when validation found nothing to change, or "blocked" if you could not finish.
+- summary: one short paragraph.
+- changed_files: repo-relative files you changed.
+- tests: commands you ran with a short result string.
+- commit_title: a short commit-title suggestion if you changed code, otherwise null. Always include this field.
+- remediation_strategy: "smallest_possible", "narrow_root_cause", "holistic_contract", or "not_applicable".
+- strategy_rationale: the pre-edit decision rationale, including why the chosen strategy is safer than the other two live options.
+- root_cause_scope: "isolated", "sibling_paths", "shared_contract", or "not_applicable".
+- scope_rationale: why the fix scope is sufficient, or why scope analysis is not applicable.
+- validated_equivalent_paths: sibling paths, callers, contracts, or flows you checked for the same issue. Use an empty array only when root_cause_scope is isolated or not_applicable.
+- why_no_broader_change_needed: the concrete reason no broader change is needed, or what broader change you made. For "holistic_contract", describe the durable contract/test or guardrail update.
+- finding_dispositions: always include this field. Use an empty array when this handoff has fewer than two structured findings; otherwise include one item per finding_id with status fixed, invalid, or unresolved plus a short summary.
+
+- Handoff title: ${String(handoff?.title ?? "").trim() || "none"}
+- Handoff summary: ${String(handoff?.summary ?? "").trim() || "none"}
+- Archived handoff path: ${claimPath}
+
+Structured findings:
+${findingSummary}
+`;
+}
+
+async function runCodex({
+  repoRoot,
+  stateRoot,
+  state,
+  prompt,
+  model,
+  attemptTimeoutMs,
+}) {
+  const attempts = Number(state.attempts ?? 0);
+  const outputPath = resultFilePath(stateRoot, state.sha);
+  const logPath = logFilePath(stateRoot, state.sha, attempts);
+  const result = await runCodexExec({
+    repoRoot,
+    prompt,
+    model,
+    attemptTimeoutMs,
+    outputPath,
+    logPath,
+    outputSchemaPath: codexSchemaPath(repoRoot),
+    heartbeatLabel: `sha=${state.sha} attempt=${attempts}`,
+  });
+  return {
+    attempts,
+    ...result,
+  };
+}
+
+async function runCodexExec({
+  repoRoot,
+  prompt,
+  model,
+  attemptTimeoutMs,
+  outputPath,
+  logPath,
+  outputSchemaPath,
+  heartbeatLabel,
+  extraEnv = {},
+}) {
+  ensureValidStructuredOutputSchema(outputSchemaPath);
+  ensureDir(path.dirname(outputPath));
+  ensureDir(path.dirname(logPath));
+  rmSync(outputPath, { force: true });
+  const logFd = openSync(logPath, "w", 0o600);
+
+  const args = ["-a", "never", "-s", "workspace-write"];
+  if (model) {
+    args.push("--model", model);
+  }
+  args.push("exec", "--output-schema", outputSchemaPath, "-o", outputPath, "-");
+
+  const startedAt = Date.now();
+  const child = spawn("codex", args, {
+    cwd: repoRoot,
+    env: {
+      ...process.env,
+      ...extraEnv,
+      OTEL_SDK_DISABLED: process.env.OTEL_SDK_DISABLED ?? "true",
+    },
+    stdio: ["pipe", logFd, logFd],
+  });
+  child.stdin.end(prompt, "utf8");
+
+  const killGraceMs = Math.min(
+    5_000,
+    Math.max(250, Math.floor(attemptTimeoutMs / 10)),
+  );
+  let timedOut = false;
+  let killTimer = null;
+  const timeoutTimer = setTimeout(() => {
+    timedOut = true;
+    writeFileSync(
+      logPath,
+      `\n[${RUNNER_NAME}] Codex attempt timed out after ${attemptTimeoutMs}ms; sending SIGTERM.\n`,
+      { encoding: "utf8", flag: "a" },
+    );
+    child.kill("SIGTERM");
+    killTimer = setTimeout(() => {
+      if (processAlive(child.pid)) {
+        writeFileSync(
+          logPath,
+          `[${RUNNER_NAME}] Codex attempt still alive after ${killGraceMs}ms grace; sending SIGKILL.\n`,
+          { encoding: "utf8", flag: "a" },
+        );
+        child.kill("SIGKILL");
+      }
+    }, killGraceMs);
+    killTimer.unref();
+  }, attemptTimeoutMs);
+  timeoutTimer.unref();
+
+  const interval = setInterval(() => {
+    const elapsedSeconds = Math.max(
+      1,
+      Math.floor((Date.now() - startedAt) / 1000),
+    );
+    console.log(
+      `[${RUNNER_NAME}] heartbeat ${heartbeatLabel} elapsed=${elapsedSeconds}s log=${logPath}`,
+    );
+  }, heartbeatMs());
+  interval.unref();
+
+  const result = await new Promise((resolve, reject) => {
+    child.on("error", reject);
+    child.on("close", (code, signal) => {
+      resolve({
+        status: code,
+        signal,
+      });
+    });
+  }).finally(() => {
+    clearTimeout(timeoutTimer);
+    if (killTimer) {
+      clearTimeout(killTimer);
+    }
+    clearInterval(interval);
+    closeSync(logFd);
+  });
+
+  const logText = readFileSync(logPath, "utf8");
+  const parsedResult = readJson(outputPath);
+  return {
+    exitCode: Number.isInteger(result.status) ? result.status : 1,
+    signal: result.signal ? String(result.signal) : "",
+    timedOut,
+    attemptTimeoutMs,
+    logPath,
+    outputPath,
+    logText,
+    parsedResult,
+  };
+}
+
+function runCommandWithLog(repoRoot, args, logPath) {
+  const fd = openSync(logPath, "a", 0o600);
+  try {
+    const result = spawnSync(args[0], args.slice(1), {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", fd, fd],
+    });
+    return {
+      exitCode: Number.isInteger(result.status) ? result.status : 1,
+      signal: result.signal ? String(result.signal) : "",
+    };
+  } finally {
+    closeSync(fd);
+  }
+}
+
+function validateCommitWork(repoRoot, stateRoot, state, changedPaths) {
+  const validationPath = validationLogPath(
+    stateRoot,
+    state.sha,
+    state.attempts,
+  );
+  writeTextAtomic(validationPath, "");
+  const commands = validationCommandsForChangedPaths(changedPaths);
+  for (const command of commands) {
+    writeFileSync(validationPath, `$ ${command.join(" ")}\n`, {
+      encoding: "utf8",
+      flag: "a",
+    });
+    const result = runCommandWithLog(repoRoot, command, validationPath);
+    if (result.exitCode !== 0) {
+      const logText = readFileSync(validationPath, "utf8");
+      return {
+        ok: false,
+        logPath: validationPath,
+        logText,
+        reason: result.signal || `${command.join(" ")} exit ${result.exitCode}`,
+      };
+    }
+    writeFileSync(validationPath, "\n", { encoding: "utf8", flag: "a" });
+  }
+
+  return {
+    ok: true,
+    logPath: validationPath,
+  };
+}
+
+function detectExternalValidationDebt(logText) {
+  const text = String(logText ?? "");
+  const diagnostics = [...text.matchAll(TYPESCRIPT_DIAGNOSTIC_PATTERN)].map(
+    (match) => match[1],
+  );
+  if (diagnostics.length === 0) {
+    return null;
+  }
+
+  const matchedEntries = [];
+  for (const diagnostic of diagnostics) {
+    const matched = KNOWN_EXTERNAL_VALIDATION_PATTERNS.find((entry) =>
+      diagnostic.includes(entry.pattern),
+    );
+    if (!matched) {
+      return null;
+    }
+    matchedEntries.push(matched);
+  }
+
+  const matches = matchedEntries.filter(
+    (entry, index) =>
+      matchedEntries.findIndex((candidate) => candidate.id === entry.id) ===
+      index,
+  );
+  return {
+    matches: matches.map((entry) => entry.id),
+    summary: matches.map((entry) => entry.summary).join("; "),
+  };
+}
+
+function commitWork(repoRoot, state, changedPaths, message) {
+  execFileSync("git", ["add", "--", ...changedPaths], {
+    cwd: repoRoot,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  execFileSync("git", ["commit", "-m", message], {
+    cwd: repoRoot,
+    stdio: ["ignore", "pipe", "pipe"],
+  });
+  return git(repoRoot, ["rev-parse", "HEAD"]);
+}
+
+async function reviewCommittedFix({
+  repoRoot,
+  reviewsDir,
+  commitSha,
+  model,
+  attemptTimeoutMs,
+}) {
+  try {
+    const actionFileJson = path.join(reviewsDir, `${commitSha}.json`);
+    const actionFileMd = path.join(reviewsDir, `${commitSha}.md`);
+    const promptMaxChars = parsePositiveInt(
+      process.env.CODEX_REVIEW_PROMPT_MAX_CHARS,
+      DEFAULT_PROMPT_MAX_CHARS,
+    );
+    const filePromptMaxChars = parsePositiveInt(
+      process.env.CODEX_REVIEW_PROMPT_MAX_FILE_CHARS,
+      DEFAULT_PROMPT_MAX_FILE_CHARS,
+    );
+    const generalPrompt = buildReviewPrompt({
+      repoRoot,
+      sha: commitSha,
+      trigger: "manual",
+      promptMaxChars,
+      filePromptMaxChars,
+      mode: "general",
+    });
+    const passModes = [
+      "general",
+      ...(generalPrompt.context.contractReviewModes ?? []),
+    ];
+    if (
+      generalPrompt.context.isHighRisk ||
+      generalPrompt.context.diffBundle.truncated
+    ) {
+      passModes.push("focused");
+    }
+
+    const prompts = [...new Set(passModes)].map((mode) =>
+      mode === "general"
+        ? { mode, prompt: generalPrompt.prompt }
+        : {
+            mode,
+            prompt: buildReviewPrompt({
+              repoRoot,
+              sha: commitSha,
+              trigger: "manual",
+              promptMaxChars,
+              filePromptMaxChars,
+              mode,
+              context: generalPrompt.context,
+            }).prompt,
+          },
+    );
+
+    let reviewStatus = "ok";
+    const summaries = [];
+    const aggregatedFindings = [];
+    const completedModes = [];
+    let attempts = 0;
+    let failureReason = "";
+    let failureLogPath = "";
+    let failureCode = "none";
+
+    for (const pass of prompts) {
+      attempts += 1;
+      const outputPath = path.join(
+        reviewsDir,
+        "backlog-remediation",
+        "results",
+        `${commitSha}.${pass.mode}.review.json`,
+      );
+      const logPath = path.join(
+        reviewsDir,
+        "backlog-remediation",
+        "logs",
+        `${commitSha}.${pass.mode}.review.log`,
+      );
+      const outcome = await runCodexExec({
+        repoRoot,
+        prompt: pass.prompt,
+        model,
+        attemptTimeoutMs,
+        outputPath,
+        logPath,
+        outputSchemaPath: REVIEW_OUTPUT_SCHEMA_PATH,
+        heartbeatLabel: `sha=${commitSha} pass=${pass.mode} review=follow-on`,
+        extraEnv: {
+          CODEX_REVIEW_OPEN_ON_FINDINGS: "0",
+        },
+      });
+
+      if (outcome.timedOut) {
+        reviewStatus =
+          completedModes.length > 0 ? "partial_success" : "infra_error";
+        failureReason = "timed_out";
+        failureCode = "codex-exec-timeout";
+        failureLogPath = outcome.logPath;
+        summaries.push(
+          `Codex review timed out during the ${pass.mode} pass for commit ${commitSha}.`,
+        );
+        break;
+      }
+
+      if (outcome.exitCode !== 0 || outcome.signal) {
+        reviewStatus =
+          completedModes.length > 0 ? "partial_success" : "infra_error";
+        if (detectQuota(outcome.logText)) {
+          failureReason = "quota";
+          failureCode = "codex-exec-quota";
+        } else if (isSystemFailureMessage(outcome.logText)) {
+          failureReason = "system_error";
+          failureCode = "codex-exec-system-error";
+        } else if (isTransientTransportFailureMessage(outcome.logText)) {
+          failureReason = "transient_transport";
+          failureCode = "codex-exec-transient-transport";
+        } else {
+          failureReason = "exec_failed";
+          failureCode = "codex-exec-failed";
+        }
+        failureLogPath = outcome.logPath;
+        summaries.push(
+          failureReason === "quota"
+            ? `Codex review hit a quota-like stop during the ${pass.mode} pass for commit ${commitSha}.`
+            : failureReason === "system_error"
+              ? `Codex review hit a system error during the ${pass.mode} pass for commit ${commitSha}.`
+              : failureReason === "transient_transport"
+                ? `Codex review hit a transient transport error during the ${pass.mode} pass for commit ${commitSha}.`
+                : `Codex review failed during the ${pass.mode} pass for commit ${commitSha}.`,
+        );
+        break;
+      }
+
+      if (!existsSync(outputPath) || !outcome.parsedResult) {
+        reviewStatus =
+          completedModes.length > 0 ? "partial_success" : "infra_error";
+        failureReason = "invalid_output";
+        failureCode = "codex-invalid-output";
+        failureLogPath = outcome.logPath;
+        summaries.push(
+          `Codex review completed without valid JSON output during the ${pass.mode} pass for commit ${commitSha}.`,
+        );
+        break;
+      }
+
+      const normalized = normalizeReviewPayload(outcome.parsedResult);
+      summaries.push(`[${pass.mode}] ${normalized.summary}`.trim());
+      aggregatedFindings.push(
+        ...normalized.findings.map((finding) => ({
+          ...finding,
+          review_pass: String(finding?.review_pass ?? "").trim() || pass.mode,
+        })),
+      );
+      completedModes.push(pass.mode);
+    }
+
+    const data =
+      completedModes.length === 0
+        ? {
+            schema_version: 2,
+            summary:
+              summaries.join(" ").trim() ||
+              `Codex review failed for commit ${commitSha}.`,
+            findings: [],
+          }
+        : {
+            schema_version: 2,
+            summary: summaries.filter(Boolean).join("\n").trim(),
+            findings: mergeReviewFindings(aggregatedFindings),
+          };
+    if (completedModes.length > 0) {
+      verifyFindings(data, repoRoot);
+    }
+
+    const result = writeReviewArtifacts({
+      newData: data,
+      targetJson: actionFileJson,
+      targetMd: actionFileMd,
+      commitSha,
+      triggerName: "manual",
+      reviewStatus,
+      findingModelLabel: "codex-cli",
+      repoName: path.basename(repoRoot),
+      repoRoot,
+      reviewLane: "codex",
+      reviewEngines: {
+        codex: {
+          status: reviewStatus === "ok" ? "ok" : "failed",
+          error_code: reviewStatus === "ok" ? "none" : failureCode,
+          attempts,
+          completed: true,
+          completed_at: isoNow().replace(/\.\d{3}Z$/, "Z"),
+          model: normalizeModelLabel(model),
+          review_passes: completedModes,
+        },
+      },
+      failureReason: reviewStatus === "ok" ? "" : failureCode,
+    });
+    cleanupWorkingTree(repoRoot);
+
+    return {
+      sha: commitSha,
+      reviewStatus,
+      succeeded: reviewStatus === "ok",
+      actionRequired: Boolean(result.actionRequired),
+      findingsCount: Number(result.findingsCount ?? 0),
+      actionFileJson,
+      actionFileMd,
+      failureReason,
+      logPath: failureLogPath,
+      quotaHit: failureReason === "quota",
+      timedOut: failureReason === "timed_out",
+      systemError: failureReason === "system_error",
+      transientError: failureReason === "transient_transport",
+      skipped: false,
+      error: "",
+    };
+  } catch (error) {
+    cleanupWorkingTree(repoRoot);
+    const errorMessage = error instanceof Error ? error.message : String(error);
+    const failureReason = isSystemFailureMessage(errorMessage)
+      ? "system_error"
+      : isTransientTransportFailureMessage(errorMessage)
+        ? "transient_transport"
+        : "exception";
+    return {
+      sha: commitSha,
+      reviewStatus: "skipped",
+      succeeded: false,
+      actionRequired: false,
+      findingsCount: 0,
+      actionFileJson: "",
+      actionFileMd: "",
+      failureReason,
+      logPath: "",
+      quotaHit: false,
+      timedOut: false,
+      systemError: failureReason === "system_error",
+      transientError: failureReason === "transient_transport",
+      skipped: true,
+      error: errorMessage,
+    };
+  }
+}
+
+function claimFinding(stateRoot, filePath, sha, markdown, meta) {
+  const claimPath = claimFilePath(stateRoot, sha);
+  const normalizedMeta =
+    meta && typeof meta === "object" && !Array.isArray(meta)
+      ? meta
+      : typeof parseBacklogMeta === "function"
+        ? parseBacklogMeta(markdown)
+        : {};
+  const structuredFindings = normalizeStructuredFindings(
+    normalizedMeta?.findings,
+  );
+  const priority = summarizeFindingPriorityFromMeta(normalizedMeta);
+  writeTextAtomic(claimPath, `${markdown}\n`);
+  const claimedState = persistState(stateRoot, {
+    sha,
+    source_path: filePath,
+    claim_path: claimPath,
+    status: "claimed",
+    attempts: 0,
+    started_at: isoNow(),
+    completed_at: "",
+    commit_sha: "",
+    follow_on_review_pending: false,
+    follow_on_review_commit_sha: "",
+    pause_reason: "",
+    last_error: "",
+    title:
+      findingTitleFromMeta(normalizedMeta) ||
+      findingTitleFromMarkdown(markdown),
+    summary: firstSummaryLineFromMeta(normalizedMeta, markdown),
+    handoff_summary: String(normalizedMeta?.summary ?? "").trim(),
+    structured_findings: structuredFindings,
+    highest_severity: priority.highestSeverity,
+    highest_confidence: priority.highestConfidence,
+    findings_count: priority.findingsCount,
+  });
+  return persistState(stateRoot, {
+    ...claimedState,
+    status: "in_progress",
+  });
+}
+
+function readClaimedMarkdown(state) {
+  return readFileSync(state.claim_path, "utf8").trim();
+}
+
+function nextBacklogItem(
+  reviewsDir,
+  stateRoot,
+  {
+    claim = true,
+    runId = "",
+    scope = DEFAULT_SCOPE,
+    headSha = "",
+    skippedShas = new Set(),
+  } = {},
+) {
+  for (const state of listStateEntries(stateRoot)) {
+    if (!RESUMEABLE_STATUSES.has(String(state.status ?? ""))) {
+      continue;
+    }
+    if (!stateMatchesScope(state, scope, headSha)) {
+      continue;
+    }
+    if (
+      String(state.status ?? "") === "deferred" &&
+      String(state.deferred_by_run ?? "") === String(runId)
+    ) {
+      continue;
+    }
+    if (!existsSync(String(state.claim_path ?? ""))) {
+      continue;
+    }
+    return {
+      state,
+      resumed: true,
+    };
+  }
+
+  for (const entry of listBacklogFiles(reviewsDir, { headSha })) {
+    if (!artifactMatchesScope(entry, scope)) {
+      continue;
+    }
+    if (
+      skippedShas.has(
+        String(entry.sha ?? "")
+          .trim()
+          .toLowerCase(),
+      )
+    ) {
+      continue;
+    }
+    const { filePath, sha, markdown } = entry;
+    const existingState = readState(stateRoot, sha);
+    if (
+      existingState &&
+      TERMINAL_STATUSES.has(String(existingState.status ?? ""))
+    ) {
+      continue;
+    }
+    if (
+      existingState &&
+      String(existingState.status ?? "") === "deferred" &&
+      String(existingState.deferred_by_run ?? "") === String(runId)
+    ) {
+      continue;
+    }
+    if (!markdown.trim()) {
+      continue;
+    }
+    return {
+      state: claim
+        ? claimFinding(stateRoot, filePath, sha, markdown, entry)
+        : {
+            sha,
+            source_path: filePath,
+            claim_path: filePath,
+            status: "preview",
+            attempts: 0,
+            pause_reason: "",
+            last_error: "",
+            title:
+              findingTitleFromMeta(entry) || findingTitleFromMarkdown(markdown),
+            summary: firstSummaryLineFromMeta(entry, markdown),
+            handoff_summary: String(entry?.summary ?? "").trim(),
+            structured_findings: normalizeStructuredFindings(entry?.findings),
+            highest_severity: entry.highestSeverity,
+            highest_confidence: entry.highestConfidence,
+            findings_count: entry.findingsCount,
+          },
+      resumed: false,
+    };
+  }
+
+  return null;
+}
+
+function pauseState(stateRoot, state, pauseReason, lastError = "") {
+  return persistState(stateRoot, {
+    ...state,
+    status: "paused",
+    pause_reason: pauseReason,
+    last_error: lastError,
+  });
+}
+
+function maybeRetryableFailure(stateRoot, state, errorMessage) {
+  return persistState(stateRoot, {
+    ...state,
+    status: "retryable_error",
+    last_error: errorMessage,
+  });
+}
+
+function deferState(stateRoot, state, reason, runId) {
+  return persistState(stateRoot, {
+    ...state,
+    status: "deferred",
+    completed_at: isoNow(),
+    last_error: reason,
+    deferred_by_run: runId,
+  });
+}
+
+function finalizeNoCommit(
+  stateRoot,
+  state,
+  result,
+  status = "completed_no_commit",
+) {
+  clearFindingSource(state.source_path);
+  return persistState(stateRoot, {
+    ...clearPendingFollowOnReview(state),
+    status,
+    completed_at: isoNow(),
+    result,
+  });
+}
+
+function validateFindingDispositions(result, findings) {
+  const structuredFindings = normalizeStructuredFindings(findings);
+  if (structuredFindings.length <= 1) {
+    return { ok: true };
+  }
+
+  const dispositions = Array.isArray(result?.finding_dispositions)
+    ? result.finding_dispositions
+    : [];
+  if (dispositions.length !== structuredFindings.length) {
+    return {
+      ok: false,
+      reason:
+        "multi-finding handoffs require finding_dispositions for every finding before completion can clear the source report",
+    };
+  }
+
+  const expectedIds = new Set(
+    structuredFindings
+      .map((finding) => String(finding?.finding_id ?? "").trim())
+      .filter(Boolean),
+  );
+  const seenIds = new Set();
+  let allInvalid = true;
+  let anyFixed = false;
+  let anyUnresolved = false;
+
+  for (const disposition of dispositions) {
+    const findingId = String(disposition?.finding_id ?? "").trim();
+    const status = String(disposition?.status ?? "").trim();
+    const summary = String(disposition?.summary ?? "").trim();
+    if (!findingId || !expectedIds.has(findingId) || seenIds.has(findingId)) {
+      return {
+        ok: false,
+        reason:
+          "finding_dispositions must cover each structured finding exactly once",
+      };
+    }
+    if (!["fixed", "invalid", "unresolved"].includes(status) || !summary) {
+      return {
+        ok: false,
+        reason:
+          "finding_dispositions entries must include a valid status and summary",
+      };
+    }
+    seenIds.add(findingId);
+    if (status !== "invalid") {
+      allInvalid = false;
+    }
+    if (status === "fixed") {
+      anyFixed = true;
+    }
+    if (status === "unresolved") {
+      anyUnresolved = true;
+    }
+  }
+
+  if (anyUnresolved) {
+    return {
+      ok: false,
+      reason:
+        "multi-finding handoffs cannot clear while any finding_dispositions entry remains unresolved",
+    };
+  }
+
+  const resultStatus = String(result?.status ?? "").trim();
+  if (resultStatus === "fixed" && !anyFixed) {
+    return {
+      ok: false,
+      reason:
+        "status fixed requires at least one finding_dispositions entry marked fixed",
+    };
+  }
+  if (resultStatus === "invalid" && !allInvalid) {
+    return {
+      ok: false,
+      reason:
+        "status invalid can clear a multi-finding handoff only when every finding_dispositions entry is invalid",
+    };
+  }
+
+  return { ok: true };
+}
+
+function validateResultChangeConsistency(result, changedPaths) {
+  const status = String(result?.status ?? "").trim();
+  const normalizedChangedPaths = Array.isArray(changedPaths)
+    ? changedPaths
+    : [];
+  if (status === "fixed" && normalizedChangedPaths.length === 0) {
+    return {
+      ok: false,
+      reason:
+        "status fixed requires tracked or untracked code/docs changes; use invalid or no_change when validation finds nothing to change",
+    };
+  }
+  if (
+    (status === "invalid" || status === "no_change") &&
+    normalizedChangedPaths.length > 0
+  ) {
+    return {
+      ok: false,
+      reason: `status ${status} cannot leave repo changes behind; use fixed for intentional changes or revert them before returning ${status}`,
+    };
+  }
+  return { ok: true };
+}
+
+function hasMeaningfulText(value) {
+  return String(value ?? "").trim().length > 0;
+}
+
+function hasDurableContractPath(changedPaths) {
+  return changedPaths.some((filePath) => {
+    const normalized = String(filePath ?? "").trim();
+    return (
+      normalized === "AGENTS.md" ||
+      normalized.endsWith("/AGENTS.md") ||
+      normalized.startsWith("docs/reference/")
+    );
+  });
+}
+
+function hasStableGuardrailPath(changedPaths) {
+  return changedPaths.some((filePath) => {
+    const normalized = String(filePath ?? "").trim();
+    return (
+      /\.(test|spec)\.[cm]?[jt]sx?$/.test(normalized) ||
+      normalized.startsWith("scripts/") ||
+      normalized.includes("/tests/") ||
+      normalized.includes("/__tests__/")
+    );
+  });
+}
+
+function validateStrategyDecision(result, changedPaths) {
+  const status = String(result?.status ?? "").trim();
+  const strategy = String(result?.remediation_strategy ?? "").trim();
+  const rootCauseScope = String(result?.root_cause_scope ?? "").trim();
+  const equivalentPaths = Array.isArray(result?.validated_equivalent_paths)
+    ? result.validated_equivalent_paths
+        .map((value) => String(value ?? "").trim())
+        .filter(Boolean)
+    : [];
+
+  if (!REMEDIATION_STRATEGIES.has(strategy)) {
+    return {
+      ok: false,
+      reason:
+        "remediation_strategy must be one of smallest_possible, narrow_root_cause, holistic_contract, or not_applicable",
+    };
+  }
+  if (!hasMeaningfulText(result?.strategy_rationale)) {
+    return {
+      ok: false,
+      reason:
+        "strategy_rationale is required so remediation records the pre-edit scope decision",
+    };
+  }
+  if (!ROOT_CAUSE_SCOPES.has(rootCauseScope)) {
+    return {
+      ok: false,
+      reason:
+        "root_cause_scope must be one of isolated, sibling_paths, shared_contract, or not_applicable",
+    };
+  }
+  if (!hasMeaningfulText(result?.scope_rationale)) {
+    return {
+      ok: false,
+      reason:
+        "scope_rationale is required so the selected fix scope can be audited",
+    };
+  }
+  if (!hasMeaningfulText(result?.why_no_broader_change_needed)) {
+    return {
+      ok: false,
+      reason:
+        "why_no_broader_change_needed is required to document why remediation stopped at the chosen scope",
+    };
+  }
+
+  if (status === "fixed" && strategy === "not_applicable") {
+    return {
+      ok: false,
+      reason: "status fixed cannot use remediation_strategy not_applicable",
+    };
+  }
+  if (
+    (status === "invalid" || status === "no_change") &&
+    strategy !== "not_applicable"
+  ) {
+    return {
+      ok: false,
+      reason: `status ${status} must use remediation_strategy not_applicable when no live fix is applied`,
+    };
+  }
+  if (strategy === "not_applicable" && rootCauseScope !== "not_applicable") {
+    return {
+      ok: false,
+      reason:
+        "remediation_strategy not_applicable requires root_cause_scope not_applicable",
+    };
+  }
+  if (strategy === "smallest_possible" && rootCauseScope !== "isolated") {
+    return {
+      ok: false,
+      reason:
+        "remediation_strategy smallest_possible requires root_cause_scope isolated",
+    };
+  }
+  if (
+    (strategy === "narrow_root_cause" || rootCauseScope === "sibling_paths") &&
+    equivalentPaths.length === 0
+  ) {
+    return {
+      ok: false,
+      reason:
+        "narrow root-cause or sibling-path remediation must list validated_equivalent_paths",
+    };
+  }
+  if (
+    rootCauseScope === "shared_contract" &&
+    strategy !== "holistic_contract"
+  ) {
+    return {
+      ok: false,
+      reason:
+        "root_cause_scope shared_contract requires remediation_strategy holistic_contract",
+    };
+  }
+  if (
+    strategy === "holistic_contract" &&
+    rootCauseScope !== "shared_contract"
+  ) {
+    return {
+      ok: false,
+      reason:
+        "remediation_strategy holistic_contract requires root_cause_scope shared_contract",
+    };
+  }
+  if (strategy === "holistic_contract") {
+    if (!hasDurableContractPath(changedPaths)) {
+      return {
+        ok: false,
+        reason:
+          "holistic_contract remediation must update AGENTS.md or docs/reference contract evidence",
+      };
+    }
+    if (!hasStableGuardrailPath(changedPaths)) {
+      return {
+        ok: false,
+        reason:
+          "holistic_contract remediation must update a stable test, script guardrail, or equivalent enforcement path",
+      };
+    }
+  }
+
+  return { ok: true };
+}
+
+function finalizeCommit(
+  stateRoot,
+  state,
+  result,
+  commitSha,
+  status = "completed",
+  lastError = "",
+) {
+  clearFindingSource(state.source_path);
+  return persistState(stateRoot, {
+    ...clearPendingFollowOnReview(state),
+    status,
+    completed_at: isoNow(),
+    commit_sha: commitSha,
+    last_error: lastError,
+    result,
+  });
+}
+
+function blockState(stateRoot, state, reason) {
+  const sourceMarkdown = existsSync(state.source_path)
+    ? readFileSync(state.source_path, "utf8")
+    : "";
+  if (sourceMarkdown.trim()) {
+    writeTextAtomic(
+      blockedReportPath(stateRoot, state.sha),
+      `${sourceMarkdown.trim()}\n\n---\n\nBlocked reason: ${reason}\n`,
+    );
+  }
+  return persistState(stateRoot, {
+    ...state,
+    status: "blocked",
+    completed_at: isoNow(),
+    last_error: reason,
+  });
+}
+
+function isTransientCodexFailureMessage(errorMessage) {
+  const lastError = String(errorMessage ?? "");
+  return (
+    detectQuota(lastError) ||
+    isTransientTransportFailureMessage(lastError) ||
+    lastError.includes("Codex attempt timed out") ||
+    lastError.includes("Follow-on review timed out") ||
+    lastError.includes("transient Codex failures")
+  );
+}
+
+function ensureCodexReady(repoRoot) {
+  try {
+    execFileSync("codex", ["login", "status"], {
+      cwd: repoRoot,
+      stdio: ["ignore", "ignore", "ignore"],
+    });
+  } catch {
+    throw new Error("codex is not authenticated (run: codex login)");
+  }
+}
+
+function markAttempt(stateRoot, state, attempts) {
+  return persistState(stateRoot, {
+    ...state,
+    attempts,
+    status: "in_progress",
+  });
+}
+
+function attemptBaselineForState(state) {
+  if (String(state?.status ?? "") === "deferred") {
+    return 0;
+  }
+  if (
+    String(state?.status ?? "") === "paused" &&
+    String(state?.pause_reason ?? "") === "quota"
+  ) {
+    return Math.max(0, Number(state?.attempts ?? 0) - 1);
+  }
+  return Number(state?.attempts ?? 0);
+}
+
+async function processOneItem({
+  repoRoot,
+  reviewsDir,
+  stateRoot,
+  scope,
+  headSha,
+  model,
+  maxAttempts,
+  codexAttemptTimeoutMs,
+  dryRun,
+  runId,
+  skippedShas,
+}) {
+  const next = nextBacklogItem(reviewsDir, stateRoot, {
+    claim: !dryRun,
+    runId,
+    scope,
+    headSha,
+    skippedShas,
+  });
+  if (!next) {
+    const blocked = unresolvedBlockedSources(stateRoot, { scope, headSha });
+    if (blocked.length > 0) {
+      return { kind: "blocked_only", blocked };
+    }
+    const deferred = unresolvedDeferredSources(stateRoot, runId, {
+      scope,
+      headSha,
+    });
+    if (deferred.length > 0) {
+      return { kind: "deferred_only", deferred };
+    }
+    return { kind: "empty" };
+  }
+
+  let state = next.state;
+  const handoffMarkdown = readClaimedMarkdown(state);
+  const handoffMeta =
+    Array.isArray(state?.structured_findings) &&
+    state.structured_findings.length > 0
+      ? {
+          summary: String(
+            state?.handoff_summary ?? state?.summary ?? "",
+          ).trim(),
+          findings: normalizeStructuredFindings(state.structured_findings),
+        }
+      : {
+          ...parseBacklogMeta(handoffMarkdown),
+          findings: normalizeStructuredFindings(
+            parseBacklogMeta(handoffMarkdown).findings,
+          ),
+        };
+  const branchName = git(repoRoot, ["branch", "--show-current"]);
+  persistRunnerState(stateRoot, {
+    status: "running",
+    active_sha: state.sha,
+    active_title: state.title,
+    branch: branchName,
+    dry_run: dryRun,
+  });
+  console.log(
+    `[${RUNNER_NAME}] starting sha=${state.sha} resumed=${next.resumed ? "1" : "0"} title="${shortTitle(state.title)}"`,
+  );
+
+  if (dryRun) {
+    return {
+      kind: "dry_run",
+      state,
+      resumed: next.resumed,
+      dryRun: true,
+    };
+  }
+
+  try {
+    ensureCodexReady(repoRoot);
+  } catch (error) {
+    const message = error instanceof Error ? error.message : String(error);
+    const paused = pauseState(stateRoot, state, "system_error", message);
+    return {
+      kind: "paused_system_error",
+      state: paused,
+    };
+  }
+
+  while (attemptBaselineForState(state) < maxAttempts) {
+    state = markAttempt(stateRoot, state, attemptBaselineForState(state) + 1);
+    console.log(
+      `[${RUNNER_NAME}] attempt sha=${state.sha} attempt=${state.attempts}/${maxAttempts}`,
+    );
+    try {
+      const followOnCommitSha = pendingFollowOnCommitSha(state);
+      if (followOnCommitSha) {
+        state = persistState(
+          stateRoot,
+          withPendingFollowOnReview(
+            state,
+            followOnCommitSha,
+            normalizeStateResult(state.result),
+          ),
+        );
+        const followOnReview = await reviewCommittedFix({
+          repoRoot,
+          reviewsDir,
+          commitSha: followOnCommitSha,
+          model,
+          attemptTimeoutMs: codexAttemptTimeoutMs,
+        });
+        const pendingResult = normalizeStateResult(state.result);
+        const pendingState = state;
+
+        if (followOnReview.timedOut) {
+          const deferred = deferState(
+            stateRoot,
+            pendingState,
+            followOnReviewFailureMessage(followOnReview),
+            runId,
+          );
+          return {
+            kind: "deferred",
+            state: deferred,
+          };
+        }
+
+        if (followOnReview.quotaHit) {
+          const paused = pauseState(
+            stateRoot,
+            pendingState,
+            "quota",
+            followOnReviewFailureMessage(followOnReview),
+          );
+          return {
+            kind: "paused_quota",
+            state: paused,
+            logPath: followOnReview.logPath,
+          };
+        }
+
+        if (followOnReview.systemError) {
+          const paused = pauseState(
+            stateRoot,
+            pendingState,
+            "system_error",
+            followOnReviewFailureMessage(followOnReview),
+          );
+          return {
+            kind: "paused_system_error",
+            state: paused,
+          };
+        }
+
+        if (!followOnReview.succeeded) {
+          if (followOnReview.transientError) {
+            state = maybeRetryableFailure(
+              stateRoot,
+              pendingState,
+              followOnReviewFailureMessage(followOnReview),
+            );
+            continue;
+          }
+          const blocked = blockState(
+            stateRoot,
+            pendingState,
+            followOnReviewFailureMessage(followOnReview),
+          );
+          return {
+            kind: "blocked",
+            state: blocked,
+          };
+        }
+
+        const resultWithFollowOnReview = {
+          ...pendingResult,
+          follow_on_review: followOnReview,
+        };
+        const completed = finalizeCommit(
+          stateRoot,
+          state,
+          resultWithFollowOnReview,
+          followOnCommitSha,
+        );
+        if (followOnReview.actionRequired) {
+          return {
+            kind: "completed_follow_on_findings",
+            state: completed,
+            commitSha: followOnCommitSha,
+            result: resultWithFollowOnReview,
+            changedPaths: [],
+            validationLogPath: "",
+            followOnReview,
+          };
+        }
+        return {
+          kind: "completed",
+          state: completed,
+          commitSha: followOnCommitSha,
+          result: resultWithFollowOnReview,
+          changedPaths: [],
+          validationLogPath: "",
+        };
+      }
+
+      const prompt = buildPrompt({
+        repoRoot,
+        branchName,
+        claimPath: state.claim_path,
+        handoff: {
+          title: state.title,
+          summary: state.summary || handoffMeta.summary,
+          findings: handoffMeta.findings,
+        },
+      });
+      const codexRun = await runCodex({
+        repoRoot,
+        stateRoot,
+        state,
+        prompt,
+        model,
+        attemptTimeoutMs: codexAttemptTimeoutMs,
+      });
+
+      if (codexRun.timedOut) {
+        cleanupWorkingTree(repoRoot);
+        const deferred = deferState(
+          stateRoot,
+          state,
+          `Codex attempt timed out after ${codexRun.attemptTimeoutMs}ms. See ${codexRun.logPath}`,
+          runId,
+        );
+        return {
+          kind: "deferred",
+          state: deferred,
+        };
+      }
+
+      if (codexRun.exitCode !== 0 || codexRun.signal) {
+        const quotaHit = detectQuota(codexRun.logText);
+        if (quotaHit) {
+          const paused = pauseState(
+            stateRoot,
+            state,
+            "quota",
+            `Codex stopped with a quota-like error. See ${codexRun.logPath}`,
+          );
+          return {
+            kind: "paused_quota",
+            state: paused,
+            logPath: codexRun.logPath,
+          };
+        }
+
+        cleanupWorkingTree(repoRoot);
+        const failureMessage = `Codex execution failed (code=${codexRun.exitCode}, signal=${codexRun.signal || "none"}). See ${codexRun.logPath}`;
+        if (isSystemFailureMessage(codexRun.logText)) {
+          const paused = pauseState(
+            stateRoot,
+            state,
+            "system_error",
+            failureMessage,
+          );
+          return {
+            kind: "paused_system_error",
+            state: paused,
+          };
+        }
+        if (isTransientTransportFailureMessage(codexRun.logText)) {
+          state = maybeRetryableFailure(
+            stateRoot,
+            state,
+            `Codex execution failed with transient transport error (code=${codexRun.exitCode}, signal=${codexRun.signal || "none"}). See ${codexRun.logPath}`,
+          );
+          continue;
+        }
+        const blocked = blockState(stateRoot, state, failureMessage);
+        return {
+          kind: "blocked",
+          state: blocked,
+        };
+      }
+
+      const result = codexRun.parsedResult;
+      if (!result || typeof result !== "object" || Array.isArray(result)) {
+        cleanupWorkingTree(repoRoot);
+        const blocked = blockState(
+          stateRoot,
+          state,
+          `Codex completed without valid JSON output. See ${codexRun.logPath}`,
+        );
+        return {
+          kind: "blocked",
+          state: blocked,
+        };
+      }
+
+      if (String(result.status ?? "").trim() === "blocked") {
+        cleanupWorkingTree(repoRoot);
+        const blocked = blockState(
+          stateRoot,
+          state,
+          `Codex reported a blocked remediation. See ${codexRun.logPath}`,
+        );
+        return {
+          kind: "blocked",
+          state: blocked,
+        };
+      }
+
+      const dispositionCheck = validateFindingDispositions(
+        result,
+        handoffMeta.findings,
+      );
+      if (!dispositionCheck.ok) {
+        cleanupWorkingTree(repoRoot);
+        const blocked = blockState(stateRoot, state, dispositionCheck.reason);
+        return {
+          kind: "blocked",
+          state: blocked,
+        };
+      }
+
+      const changedPaths = changedCommitPaths(repoRoot);
+      const consistencyCheck = validateResultChangeConsistency(
+        result,
+        changedPaths,
+      );
+      if (!consistencyCheck.ok) {
+        cleanupWorkingTree(repoRoot);
+        const blocked = blockState(stateRoot, state, consistencyCheck.reason);
+        return {
+          kind: "blocked",
+          state: blocked,
+        };
+      }
+      const strategyCheck = validateStrategyDecision(result, changedPaths);
+      if (!strategyCheck.ok) {
+        cleanupWorkingTree(repoRoot);
+        const blocked = blockState(stateRoot, state, strategyCheck.reason);
+        return {
+          kind: "blocked",
+          state: blocked,
+        };
+      }
+      if (changedPaths.length === 0) {
+        const completed = finalizeNoCommit(stateRoot, state, result);
+        return {
+          kind: "completed_no_commit",
+          state: completed,
+          result,
+        };
+      }
+
+      const validation = validateCommitWork(
+        repoRoot,
+        stateRoot,
+        state,
+        changedPaths,
+      );
+      if (!validation.ok) {
+        const externalValidationDebt = detectExternalValidationDebt(
+          validation.logText,
+        );
+        if (externalValidationDebt) {
+          const resultWithWarning = {
+            ...result,
+            validation_warning: {
+              kind: "external_repo_debt",
+              summary: externalValidationDebt.summary,
+              log_path: validation.logPath,
+              failed_command: validation.reason,
+              signatures: externalValidationDebt.matches,
+            },
+          };
+          const commitSha = commitWork(
+            repoRoot,
+            state,
+            changedPaths,
+            commitMessageForState(state, result),
+          );
+          const completed = finalizeCommit(
+            stateRoot,
+            state,
+            resultWithWarning,
+            commitSha,
+            "completed_external_validation_failed",
+            `Validation failed outside this remediation: ${externalValidationDebt.summary}. See ${validation.logPath}`,
+          );
+          return {
+            kind: "completed_external_validation_failed",
+            state: completed,
+            commitSha,
+            result: resultWithWarning,
+            changedPaths,
+            validationLogPath: validation.logPath,
+          };
+        }
+
+        cleanupWorkingTree(repoRoot);
+        const blocked = blockState(
+          stateRoot,
+          state,
+          `Validation failed: ${validation.reason}. See ${validation.logPath}`,
+        );
+        return {
+          kind: "blocked",
+          state: blocked,
+        };
+      }
+
+      const commitSha = commitWork(
+        repoRoot,
+        state,
+        changedPaths,
+        commitMessageForState(state, result),
+      );
+      state = persistState(
+        stateRoot,
+        withPendingFollowOnReview(state, commitSha, result),
+      );
+      const followOnReview = await reviewCommittedFix({
+        repoRoot,
+        reviewsDir,
+        commitSha,
+        model,
+        attemptTimeoutMs: codexAttemptTimeoutMs,
+      });
+      if (followOnReview.timedOut) {
+        const deferred = deferState(
+          stateRoot,
+          state,
+          followOnReviewFailureMessage(followOnReview),
+          runId,
+        );
+        return {
+          kind: "deferred",
+          state: deferred,
+        };
+      }
+      if (followOnReview.quotaHit) {
+        const paused = pauseState(
+          stateRoot,
+          state,
+          "quota",
+          followOnReviewFailureMessage(followOnReview),
+        );
+        return {
+          kind: "paused_quota",
+          state: paused,
+          logPath: followOnReview.logPath,
+        };
+      }
+      if (followOnReview.systemError) {
+        const paused = pauseState(
+          stateRoot,
+          state,
+          "system_error",
+          followOnReviewFailureMessage(followOnReview),
+        );
+        return {
+          kind: "paused_system_error",
+          state: paused,
+        };
+      }
+      if (!followOnReview.succeeded) {
+        if (followOnReview.transientError) {
+          state = maybeRetryableFailure(
+            stateRoot,
+            state,
+            followOnReviewFailureMessage(followOnReview),
+          );
+          continue;
+        }
+        const blocked = blockState(
+          stateRoot,
+          state,
+          followOnReviewFailureMessage(followOnReview),
+        );
+        return {
+          kind: "blocked",
+          state: blocked,
+        };
+      }
+      const resultWithFollowOnReview = {
+        ...result,
+        follow_on_review: followOnReview,
+      };
+      const completed = finalizeCommit(
+        stateRoot,
+        state,
+        resultWithFollowOnReview,
+        commitSha,
+      );
+      if (followOnReview.actionRequired) {
+        return {
+          kind: "completed_follow_on_findings",
+          state: completed,
+          commitSha,
+          result: resultWithFollowOnReview,
+          changedPaths,
+          validationLogPath: validation.logPath,
+          followOnReview,
+        };
+      }
+      return {
+        kind: "completed",
+        state: completed,
+        commitSha,
+        result: resultWithFollowOnReview,
+        changedPaths,
+        validationLogPath: validation.logPath,
+      };
+    } catch (error) {
+      try {
+        cleanupWorkingTree(repoRoot);
+      } catch {
+        // Best effort before surfacing a paused state.
+      }
+      const message = error instanceof Error ? error.message : String(error);
+      if (isSystemFailureMessage(message)) {
+        const paused = pauseState(stateRoot, state, "system_error", message);
+        return {
+          kind: "paused_system_error",
+          state: paused,
+        };
+      }
+      const blocked = blockState(stateRoot, state, message);
+      return {
+        kind: "blocked",
+        state: blocked,
+      };
+    }
+  }
+
+  const lastError = String(state.last_error ?? "");
+  const transientCodexFailure = isTransientCodexFailureMessage(lastError);
+  if (transientCodexFailure) {
+    const deferred = deferState(
+      stateRoot,
+      state,
+      `Backlog remediation deferred after ${maxAttempts} transient Codex failures for ${state.sha}. Last error: ${lastError}`,
+      runId,
+    );
+    return {
+      kind: "deferred",
+      state: deferred,
+    };
+  }
+
+  const blocked = blockState(
+    stateRoot,
+    state,
+    `Backlog remediation exhausted ${maxAttempts} attempts for ${state.sha}`,
+  );
+  return {
+    kind: "blocked",
+    state: blocked,
+  };
+}
+
+function deferredLooksTransient(state) {
+  return isTransientCodexFailureMessage(state?.last_error);
+}
+
+export async function main(argv = process.argv) {
+  const args = parseArgs(argv);
+  const repoRoot = resolveRepoRoot(process.cwd());
+  const reviewsDir = await resolveReviewsDir(repoRoot, args.reviewsDir);
+  const stateRoot = backlogStateRoot(reviewsDir);
+  const runId = `${process.pid}-${Date.now()}`;
+  let lock = null;
+
+  ensureDir(stateRoot);
+  ensureDir(path.join(stateRoot, "state"));
+  ensureDir(path.join(stateRoot, "claims"));
+  ensureDir(path.join(stateRoot, "results"));
+  ensureDir(path.join(stateRoot, "logs"));
+  ensureDir(path.join(stateRoot, "blocked"));
+
+  if (args.requeueShas.length > 0) {
+    lock = acquireRunnerLock(stateRoot);
+    try {
+      for (const sha of args.requeueShas) {
+        const result = requeueSha(stateRoot, sha);
+        console.log(
+          `[${RUNNER_NAME}] requeue sha=${sha} changed=${result.changed ? "1" : "0"} previous_status=${result.previousStatus ?? result.reason}`,
+        );
+      }
+      return 0;
+    } finally {
+      releaseRunnerLock(lock);
+    }
+  }
+
+  if (args.allowDirtyRequested) {
+    throw new Error(
+      `--allow-dirty is no longer supported for ${RUNNER_NAME}; start from a clean checkout.`,
+    );
+  }
+
+  if (repoIsDirty(repoRoot)) {
+    throw new Error(
+      `Refusing to start ${RUNNER_NAME} from a dirty checkout. Commit or stash existing work first.`,
+    );
+  }
+
+  lock = acquireRunnerLock(stateRoot);
+  let processed = 0;
+  let consecutiveDeferred = 0;
+  let lastResultKind = "";
+  let lastResultSha = "";
+  let lastFollowOnSha = "";
+  const skippedFollowOnShas = new Set();
+
+  try {
+    while (true) {
+      if (repoIsDirty(repoRoot)) {
+        throw new Error(
+          `${RUNNER_NAME} detected a dirty checkout before starting the next backlog item; stop and inspect the repo state.`,
+        );
+      }
+
+      const result = await processOneItem({
+        repoRoot,
+        reviewsDir,
+        stateRoot,
+        scope: args.scope,
+        headSha: currentHeadSha(repoRoot),
+        model: args.model,
+        maxAttempts: args.maxAttempts,
+        codexAttemptTimeoutMs: args.codexAttemptTimeoutMs,
+        dryRun: args.dryRun,
+        runId,
+        skippedShas: skippedFollowOnShas,
+      });
+
+      if (result.kind === "empty") {
+        if (skippedFollowOnShas.size > 0) {
+          const pendingManualTakeoverSha =
+            lastFollowOnSha || Array.from(skippedFollowOnShas).at(-1) || "";
+          persistRunnerState(stateRoot, {
+            status: "awaiting_manual_takeover",
+            pause_reason: "manual_takeover",
+            processed,
+            consecutive_deferred: consecutiveDeferred,
+            last_result_kind: lastResultKind || "completed_follow_on_findings",
+            last_result_sha: lastResultSha,
+            last_follow_on_sha: pendingManualTakeoverSha,
+            branch: git(repoRoot, ["branch", "--show-current"]),
+            active_sha: pendingManualTakeoverSha,
+            active_title: "follow-on review requires manual takeover",
+          });
+          console.log(
+            `[${RUNNER_NAME}] manual_takeover_remaining follow_on_sha=${pendingManualTakeoverSha || "none"} processed=${processed}`,
+          );
+          return 0;
+        }
+        persistRunnerState(stateRoot, {
+          status: "idle",
+          processed,
+          consecutive_deferred: consecutiveDeferred,
+          last_result_kind: lastResultKind || "empty",
+          last_result_sha: lastResultSha,
+          last_follow_on_sha: lastFollowOnSha,
+          branch: git(repoRoot, ["branch", "--show-current"]),
+          active_sha: "",
+          active_title: "",
+        });
+        console.log(`[${RUNNER_NAME}] backlog cleared processed=${processed}`);
+        return 0;
+      } else if (result.kind === "blocked_only") {
+        persistRunnerState(stateRoot, {
+          status: "blocked",
+          processed,
+          consecutive_deferred: consecutiveDeferred,
+          branch: git(repoRoot, ["branch", "--show-current"]),
+          blocked_count: result.blocked.length,
+          active_sha: "",
+          active_title: "",
+        });
+        console.log(
+          `[${RUNNER_NAME}] backlog blocked_remaining=${result.blocked.length} processed=${processed}`,
+        );
+        for (const item of result.blocked.slice(0, 20)) {
+          console.log(
+            `[${RUNNER_NAME}] blocked sha=${item.sha} file=${item.filePath} details="${String(
+              item.state?.last_error ?? "",
+            )}"`,
+          );
+        }
+        return 0;
+      } else if (result.kind === "deferred_only") {
+        persistRunnerState(stateRoot, {
+          status: "deferred",
+          processed,
+          consecutive_deferred: consecutiveDeferred,
+          branch: git(repoRoot, ["branch", "--show-current"]),
+          deferred_count: result.deferred.length,
+          active_sha: "",
+          active_title: "",
+        });
+        console.log(
+          `[${RUNNER_NAME}] backlog deferred_remaining=${result.deferred.length} processed=${processed}`,
+        );
+        for (const item of result.deferred.slice(0, 20)) {
+          console.log(
+            `[${RUNNER_NAME}] deferred sha=${item.sha} file=${item.filePath} details="${String(
+              item.state?.last_error ?? "",
+            )}"`,
+          );
+        }
+        return 0;
+      }
+
+      if (result.kind === "completed") {
+        processed += 1;
+        consecutiveDeferred = 0;
+        lastResultKind = result.kind;
+        lastResultSha = String(result.commitSha ?? result.state?.sha ?? "");
+        lastFollowOnSha = "";
+        console.log(
+          `[${RUNNER_NAME}] completed sha=${result.state.sha} commit=${result.commitSha} processed=${processed}`,
+        );
+      } else if (result.kind === "completed_follow_on_findings") {
+        processed += 1;
+        consecutiveDeferred = 0;
+        lastResultKind = result.kind;
+        lastResultSha = String(result.commitSha ?? result.state?.sha ?? "");
+        lastFollowOnSha = String(result.followOnReview?.sha ?? "");
+        console.log(
+          `[${RUNNER_NAME}] completed-follow-on-findings sha=${result.state.sha} commit=${result.commitSha} next_sha=${result.followOnReview.sha} findings=${result.followOnReview.findingsCount} processed=${processed}`,
+        );
+        if (args.scope === "head") {
+          persistRunnerState(stateRoot, {
+            status: "awaiting_manual_takeover",
+            pause_reason: "manual_takeover",
+            processed,
+            consecutive_deferred: consecutiveDeferred,
+            last_result_kind: lastResultKind,
+            last_result_sha: lastResultSha,
+            last_follow_on_sha: lastFollowOnSha,
+            active_sha: lastFollowOnSha,
+            active_title: result.followOnReview?.summary || result.state.title,
+            branch: git(repoRoot, ["branch", "--show-current"]),
+          });
+          return 0;
+        }
+        if (lastFollowOnSha) {
+          skippedFollowOnShas.add(lastFollowOnSha.toLowerCase());
+        }
+      } else if (result.kind === "dry_run") {
+        lastResultKind = result.kind;
+        lastResultSha = String(result.state?.sha ?? "");
+        lastFollowOnSha = "";
+        console.log(
+          `[${RUNNER_NAME}] dry-run sha=${result.state.sha} title="${result.state.title}"`,
+        );
+        return 0;
+      } else if (result.kind === "completed_no_commit") {
+        processed += 1;
+        consecutiveDeferred = 0;
+        lastResultKind = result.kind;
+        lastResultSha = String(result.state?.sha ?? "");
+        lastFollowOnSha = "";
+        console.log(
+          `[${RUNNER_NAME}] completed-no-commit sha=${result.state.sha} processed=${processed}`,
+        );
+      } else if (result.kind === "completed_external_validation_failed") {
+        processed += 1;
+        consecutiveDeferred = 0;
+        lastResultKind = result.kind;
+        lastResultSha = String(result.commitSha ?? result.state?.sha ?? "");
+        lastFollowOnSha = "";
+        console.log(
+          `[${RUNNER_NAME}] completed-with-external-validation-failure sha=${result.state.sha} commit=${result.commitSha} processed=${processed}`,
+        );
+      } else if (result.kind === "paused_quota") {
+        persistRunnerState(stateRoot, {
+          status: "paused",
+          pause_reason: "quota",
+          processed,
+          consecutive_deferred: consecutiveDeferred,
+          last_result_kind: lastResultKind || result.kind,
+          last_result_sha: lastResultSha || String(result.state?.sha ?? ""),
+          last_follow_on_sha: lastFollowOnSha,
+          active_sha: result.state.sha,
+          active_title: result.state.title,
+          branch: git(repoRoot, ["branch", "--show-current"]),
+          last_error: result.state.last_error,
+        });
+        console.error(
+          `[${RUNNER_NAME}] paused sha=${result.state.sha} reason=quota log=${result.logPath}`,
+        );
+        return 75;
+      } else if (result.kind === "paused_system_error") {
+        persistRunnerState(stateRoot, {
+          status: "paused",
+          pause_reason: "system_error",
+          processed,
+          consecutive_deferred: consecutiveDeferred,
+          last_result_kind: lastResultKind || result.kind,
+          last_result_sha: lastResultSha || String(result.state?.sha ?? ""),
+          last_follow_on_sha: lastFollowOnSha,
+          active_sha: result.state.sha,
+          active_title: result.state.title,
+          branch: git(repoRoot, ["branch", "--show-current"]),
+          last_error: result.state.last_error,
+        });
+        console.error(
+          `[${RUNNER_NAME}] paused sha=${result.state.sha} reason=system_error`,
+        );
+        return 75;
+      } else if (result.kind === "blocked") {
+        processed += 1;
+        consecutiveDeferred = 0;
+        lastResultKind = result.kind;
+        lastResultSha = String(result.state?.sha ?? "");
+        lastFollowOnSha = "";
+        console.error(
+          `[${RUNNER_NAME}] blocked sha=${result.state.sha} details="${result.state.last_error}" processed=${processed}`,
+        );
+      } else if (result.kind === "deferred") {
+        processed += 1;
+        consecutiveDeferred += deferredLooksTransient(result.state) ? 1 : 0;
+        lastResultKind = result.kind;
+        lastResultSha = String(result.state?.sha ?? "");
+        lastFollowOnSha = "";
+        console.error(
+          `[${RUNNER_NAME}] deferred sha=${result.state.sha} details="${result.state.last_error}" processed=${processed}`,
+        );
+        if (consecutiveDeferred >= args.maxConsecutiveDeferred) {
+          const pauseReason = `Reached ${consecutiveDeferred} consecutive transient Codex deferrals; pausing backlog remediation.`;
+          persistRunnerState(stateRoot, {
+            status: "paused",
+            pause_reason: "deferred_failures",
+            processed,
+            consecutive_deferred: consecutiveDeferred,
+            last_result_kind: lastResultKind,
+            last_result_sha: lastResultSha,
+            last_follow_on_sha: lastFollowOnSha,
+            active_sha: result.state.sha,
+            active_title: result.state.title,
+            branch: git(repoRoot, ["branch", "--show-current"]),
+            last_error: pauseReason,
+          });
+          console.error(
+            `[${RUNNER_NAME}] paused sha=${result.state.sha} reason=deferred_failures consecutive=${consecutiveDeferred}`,
+          );
+          return 75;
+        }
+      }
+
+      if (args.maxItems > 0 && processed >= args.maxItems) {
+        persistRunnerState(stateRoot, {
+          status: "stopped",
+          processed,
+          consecutive_deferred: consecutiveDeferred,
+          last_result_kind: lastResultKind || "stopped",
+          last_result_sha: lastResultSha,
+          last_follow_on_sha: lastFollowOnSha,
+          branch: git(repoRoot, ["branch", "--show-current"]),
+          active_sha: "",
+          active_title: "",
+        });
+        console.log(`[${RUNNER_NAME}] reached max-items=${args.maxItems}`);
+        return 0;
+      }
+    }
+  } finally {
+    releaseRunnerLock(lock);
+  }
+}
+
+const isEntrypoint =
+  process.argv[1] &&
+  pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
+
+if (isEntrypoint) {
+  main()
+    .then((code) => {
+      process.exit(code);
+    })
+    .catch((error) => {
+      console.error(
+        `[${RUNNER_NAME}] Failed: ${error instanceof Error ? error.message : String(error)}`,
+      );
+      process.exit(1);
+    });
+}

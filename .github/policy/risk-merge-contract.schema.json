@@ -1,0 +1,35 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "type": "object",
+  "required": ["version", "riskTierPriority", "riskTierRules", "reviewAgent"],
+  "properties": {
+    "version": { "type": "integer" },
+    "riskTierPriority": {
+      "type": "array",
+      "items": { "type": "string" }
+    },
+    "riskTierRules": {
+      "type": "object",
+      "additionalProperties": {
+        "type": "array",
+        "items": { "type": "string" }
+      }
+    },
+    "reviewAgent": {
+      "type": "object",
+      "required": ["mode", "requiredTiers", "checkRunNamePatterns"],
+      "properties": {
+        "mode": { "type": "string" },
+        "requiredTiers": {
+          "type": "array",
+          "items": { "type": "string" }
+        },
+        "checkRunNamePatterns": {
+          "type": "array",
+          "items": { "type": "string" }
+        }
+      }
+    }
+  },
+  "additionalProperties": true
+}

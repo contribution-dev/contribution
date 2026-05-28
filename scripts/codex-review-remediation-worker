@@ -1,0 +1,247 @@
+#!/usr/bin/env node
+
+import { execFileSync } from "node:child_process";
+import { readFileSync } from "node:fs";
+import { pathToFileURL } from "node:url";
+import path from "node:path";
+import { main as runBacklogRemediation } from "./codex-review-remediate-backlog";
+import {
+  readBacklogRemediationAutomationConfig,
+  writeBacklogRemediationAutomationConfig,
+} from "./codex-review-inbox-lib.mjs";
+import { prepareCodexReviewCliContext } from "./lib/codex-review-cli-bootstrap.mjs";
+
+function usage() {
+  console.log(`Usage: scripts/codex-review-remediation-worker [options]
+
+Options:
+  --watch                     Keep polling for backlog work (default)
+  --once                      Run one remediation pass and exit
+  --idle-sleep-seconds <n>    Sleep when backlog is empty or repo is busy (default: 15)
+  --reviews-dir <path>        Override review artifact directory
+  -h, --help                  Show help
+`);
+}
+
+export function parseArgs(argv) {
+  const args = {
+    watch: true,
+    idleSleepSeconds: 15,
+    reviewsDir: "",
+  };
+
+  for (let index = 2; index < argv.length; index += 1) {
+    const arg = argv[index];
+    const next = argv[index + 1];
+    switch (arg) {
+      case "--watch":
+        args.watch = true;
+        break;
+      case "--once":
+        args.watch = false;
+        break;
+      case "--idle-sleep-seconds":
+        args.idleSleepSeconds = Number.parseInt(String(next ?? "15"), 10);
+        index += 1;
+        break;
+      case "--reviews-dir":
+        args.reviewsDir = String(next ?? "").trim();
+        index += 1;
+        break;
+      case "-h":
+      case "--help":
+        usage();
+        process.exit(0);
+        break;
+      default:
+        throw new Error(`Unknown argument: ${arg}`);
+    }
+  }
+
+  if (!Number.isInteger(args.idleSleepSeconds) || args.idleSleepSeconds <= 0) {
+    throw new Error(`Invalid --idle-sleep-seconds: ${args.idleSleepSeconds}`);
+  }
+
+  return args;
+}
+
+function sleep(ms) {
+  return new Promise((resolve) => setTimeout(resolve, ms));
+}
+
+function repoIsDirty(repoRoot) {
+  return (
+    execFileSync("git", ["status", "--short"], {
+      cwd: repoRoot,
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+    }).trim().length > 0
+  );
+}
+
+function runnerStatePath(reviewsDir) {
+  return path.join(reviewsDir, "backlog-remediation", "runner.json");
+}
+
+function readRunnerState(reviewsDir) {
+  try {
+    return JSON.parse(readFileSync(runnerStatePath(reviewsDir), "utf8"));
+  } catch {
+    return null;
+  }
+}
+
+async function runOnePass({ repoRoot, reviewsDir }) {
+  const code = await runBacklogRemediation([
+    "node",
+    "scripts/codex-review-remediate-backlog",
+    "--reviews-dir",
+    reviewsDir,
+    "--scope",
+    "head",
+    "--max-attempts",
+    "2",
+    "--max-items",
+    "1",
+  ]);
+  return Number.isInteger(code) ? code : 1;
+}
+
+async function pauseAutomation({
+  reviewsDir,
+  automation,
+  pauseReason,
+  latestSha,
+}) {
+  return writeBacklogRemediationAutomationConfig(reviewsDir, {
+    ...automation,
+    paused: true,
+    pause_reason: pauseReason,
+    last_opened_sha: latestSha,
+  });
+}
+
+export async function main(argv = process.argv) {
+  const args = parseArgs(argv);
+  const { repoRoot, reviewsDir } = await prepareCodexReviewCliContext({
+    invocationCwd: process.cwd(),
+    reviewsDirOverride: args.reviewsDir,
+    durableWorker: true,
+    warnPrefix: "codex-review-remediation-worker",
+  });
+
+  let processed = 0;
+  while (true) {
+    const automation = await readBacklogRemediationAutomationConfig(reviewsDir);
+    if (!automation.enabled) {
+      console.log("[codex-review-remediation-worker] disabled enabled=0");
+      return { processed, disabled: true };
+    }
+    if (automation.paused) {
+      console.log(
+        `[codex-review-remediation-worker] paused reason=${automation.pause_reason || "unknown"} sleeping=${args.idleSleepSeconds}s`,
+      );
+      if (!args.watch) {
+        return { processed, paused: true };
+      }
+      await sleep(args.idleSleepSeconds * 1000);
+      continue;
+    }
+
+    if (repoIsDirty(repoRoot)) {
+      console.log(
+        `[codex-review-remediation-worker] repo_busy dirty=1 sleeping=${args.idleSleepSeconds}s`,
+      );
+      if (!args.watch) {
+        return { processed, busy: true };
+      }
+      await sleep(args.idleSleepSeconds * 1000);
+      continue;
+    }
+
+    const code = await runOnePass({ repoRoot, reviewsDir });
+    const runnerState = readRunnerState(reviewsDir);
+    const lastResultKind = String(runnerState?.last_result_kind ?? "").trim();
+    const latestSha = String(
+      runnerState?.last_follow_on_sha ?? runnerState?.last_result_sha ?? "",
+    ).trim();
+
+    if (lastResultKind === "completed_follow_on_findings") {
+      await pauseAutomation({
+        reviewsDir,
+        automation,
+        pauseReason: "manual_takeover",
+        latestSha,
+      });
+      console.error(
+        `[codex-review-remediation-worker] paused reason=manual_takeover sha=${latestSha || "none"} follow_on=1`,
+      );
+      if (!args.watch) {
+        return { processed, paused: true };
+      }
+      await sleep(args.idleSleepSeconds * 1000);
+      continue;
+    }
+
+    if (code === 0) {
+      if (lastResultKind === "empty") {
+        if (!args.watch) {
+          return { processed, idle: true };
+        }
+        await sleep(args.idleSleepSeconds * 1000);
+        continue;
+      }
+      processed += 1;
+      if (!args.watch) {
+        return { processed };
+      }
+      continue;
+    }
+
+    if (code === 75) {
+      const pauseReason =
+        String(runnerState?.pause_reason ?? "").trim() || "system_error";
+      const activeSha = String(
+        runnerState?.last_follow_on_sha ??
+          runnerState?.last_result_sha ??
+          runnerState?.active_sha ??
+          "",
+      ).trim();
+      await pauseAutomation({
+        reviewsDir,
+        automation,
+        pauseReason,
+        latestSha: activeSha,
+      });
+      console.log(
+        `[codex-review-remediation-worker] paused code=75 reason=${pauseReason} sleeping=${args.idleSleepSeconds}s`,
+      );
+      if (!args.watch) {
+        return { processed, paused: true };
+      }
+      await sleep(args.idleSleepSeconds * 1000);
+      continue;
+    }
+
+    throw new Error(`Backlog remediation exited with code ${code}`);
+  }
+}
+
+const isEntrypoint =
+  process.argv[1] &&
+  pathToFileURL(path.resolve(process.argv[1])).href === import.meta.url;
+
+if (isEntrypoint) {
+  main()
+    .then((result) => {
+      console.log(
+        `[codex-review-remediation-worker] exiting processed=${Number(result?.processed ?? 0)}`,
+      );
+    })
+    .catch((error) => {
+      console.error(
+        `[codex-review-remediation-worker] Failed: ${error.message}`,
+      );
+      process.exit(1);
+    });
+}

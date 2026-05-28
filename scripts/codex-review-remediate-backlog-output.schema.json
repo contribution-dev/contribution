@@ -1,0 +1,109 @@
+{
+  "$schema": "http://json-schema.org/draft-07/schema#",
+  "title": "Codex Review Backlog Remediation Result",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "status",
+    "summary",
+    "changed_files",
+    "tests",
+    "commit_title",
+    "remediation_strategy",
+    "strategy_rationale",
+    "root_cause_scope",
+    "scope_rationale",
+    "validated_equivalent_paths",
+    "why_no_broader_change_needed",
+    "finding_dispositions"
+  ],
+  "properties": {
+    "status": {
+      "type": "string",
+      "enum": ["fixed", "invalid", "no_change", "blocked"]
+    },
+    "summary": {
+      "type": "string",
+      "minLength": 1
+    },
+    "changed_files": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "tests": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["command", "result"],
+        "properties": {
+          "command": {
+            "type": "string",
+            "minLength": 1
+          },
+          "result": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    },
+    "commit_title": {
+      "type": ["string", "null"]
+    },
+    "remediation_strategy": {
+      "type": "string",
+      "enum": [
+        "smallest_possible",
+        "narrow_root_cause",
+        "holistic_contract",
+        "not_applicable"
+      ]
+    },
+    "strategy_rationale": {
+      "type": "string"
+    },
+    "root_cause_scope": {
+      "type": "string",
+      "enum": ["isolated", "sibling_paths", "shared_contract", "not_applicable"]
+    },
+    "scope_rationale": {
+      "type": "string"
+    },
+    "validated_equivalent_paths": {
+      "type": "array",
+      "items": {
+        "type": "string",
+        "minLength": 1
+      }
+    },
+    "why_no_broader_change_needed": {
+      "type": "string"
+    },
+    "finding_dispositions": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["finding_id", "status", "summary"],
+        "properties": {
+          "finding_id": {
+            "type": "string",
+            "minLength": 1
+          },
+          "status": {
+            "type": "string",
+            "enum": ["fixed", "invalid", "unresolved"]
+          },
+          "summary": {
+            "type": "string",
+            "minLength": 1
+          }
+        }
+      }
+    }
+  }
+}

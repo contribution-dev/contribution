@@ -1,0 +1,28 @@
+#!/bin/sh
+
+. "$(dirname "$0")/_/codex-bootstrap.sh"
+
+REPO_ROOT="$(git rev-parse --show-toplevel)"
+COMMIT_SHA="$(git rev-parse HEAD)"
+
+if [ "${CODEX_REVIEW_ENABLED:-1}" = "0" ]; then
+  exit 0
+fi
+
+cd "$REPO_ROOT"
+. "$REPO_ROOT/scripts/codex-review-dir.sh"
+if ! REVIEWS_DIR="$(resolve_codex_reviews_dir "$REPO_ROOT" "${CODE_REVIEW_DIR:-${CODEX_REVIEW_DIR:-$REPO_ROOT/.code-reviews}}")"; then
+  REVIEWS_DIR="${CODE_REVIEW_DIR:-${CODEX_REVIEW_DIR:-$REPO_ROOT/.code-reviews}}"
+fi
+LOG_DIR="$REVIEWS_DIR/logs"
+mkdir -p "$LOG_DIR" 2>/dev/null || true
+
+if ! scripts/codex-review-enqueue \
+  --sha "$COMMIT_SHA" \
+  --lane codex \
+  --trigger post-commit \
+  --source post-commit-hook >> "$LOG_DIR/post-commit.log" 2>&1; then
+  echo "[codex-review-post-commit] codex enqueue failed sha=$COMMIT_SHA" >&2
+fi
+
+exit 0

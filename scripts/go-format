@@ -1,0 +1,37 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+MODE="${1:-write}"
+
+SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+# shellcheck source=scripts/codex-env.sh
+source "$SCRIPT_DIR/codex-env.sh"
+
+mapfile -t GO_FILES < <(
+  find . \
+    -name '*.go' \
+    -not -path './vendor/*' \
+    -not -path './.tools/*' \
+    -not -path './node_modules/*'
+)
+
+if [ "${#GO_FILES[@]}" -eq 0 ]; then
+  exit 0
+fi
+
+case "$MODE" in
+  write)
+    gofmt -w "${GO_FILES[@]}"
+    ;;
+  check)
+    UNFORMATTED="$(gofmt -l "${GO_FILES[@]}")"
+    if [ -n "$UNFORMATTED" ]; then
+      printf '%s\n' "$UNFORMATTED"
+      exit 1
+    fi
+    ;;
+  *)
+    printf 'Usage: scripts/go-format [write|check]\n' >&2
+    exit 2
+    ;;
+esac

@@ -1,0 +1,125 @@
+name: Setup Node + pnpm
+
+description: Standardized Node and pnpm bootstrap for CI/nightly workflows.
+
+inputs:
+  node-version:
+    description: Node.js version to install
+    required: false
+    default: "22.22.2"
+  run-install:
+    description: Whether to run pnpm install with retries
+    required: false
+    default: "true"
+  cache-pnpm-store:
+    description: Whether to cache pnpm store for faster dependency installs
+    required: false
+    default: "false"
+  cache-playwright:
+    description: Whether to restore Playwright browser cache
+    required: false
+    default: "false"
+  playwright-cache-key:
+    description: Full cache key for Playwright browser cache
+    required: false
+    default: ""
+
+outputs:
+  playwright-cache-hit:
+    description: Whether the Playwright cache restore found an exact key match.
+    value: ${{ steps.playwright-cache.outputs.cache-hit }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-node@v6
+      with:
+        node-version: ${{ inputs.node-version }}
+
+    - uses: pnpm/action-setup@6e7bdbda5fe05107efc88b23b7ed00aa05f84ca0
+      with:
+        run_install: false
+
+    - name: Configure pnpm via corepack
+      shell: bash
+      run: |
+        corepack enable
+        corepack install
+        pnpm --version
+
+    - name: Resolve pnpm store path
+      if: ${{ inputs.cache-pnpm-store == 'true' }}
+      id: pnpm-store
+      shell: bash
+      run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
+
+    - name: Restore pnpm store cache
+      if: ${{ inputs.cache-pnpm-store == 'true' }}
+      id: pnpm-store-cache
+      uses: actions/cache/restore@v5
+      with:
+        path: ${{ steps.pnpm-store.outputs.path }}
+        key: ${{ runner.os }}-pnpm-store-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml') }}
+        restore-keys: |
+          ${{ runner.os }}-pnpm-store-${{ inputs.node-version }}-
+          ${{ runner.os }}-pnpm-store-
+
+    - name: Validate Playwright cache key input
+      if: ${{ inputs.cache-playwright == 'true' }}
+      env:
+        PLAYWRIGHT_CACHE_KEY: ${{ inputs.playwright-cache-key }}
+      shell: bash
+      run: |
+        if [[ -z "${PLAYWRIGHT_CACHE_KEY//[[:space:]]/}" ]]; then
+          echo "setup-node-pnpm: 'playwright-cache-key' must be non-empty when 'cache-playwright' is true." >&2
+          exit 1
+        fi
+
+    - name: Restore Playwright browser cache
+      if: ${{ inputs.cache-playwright == 'true' }}
+      id: playwright-cache
+      uses: actions/cache/restore@v5
+      with:
+        path: ~/.cache/ms-playwright
+        key: ${{ inputs.playwright-cache-key }}
+        restore-keys: |
+          ${{ runner.os }}-playwright-chromium-
+
+    - name: Install dependencies (retry up to 5 times)
+      if: ${{ inputs.run-install == 'true' }}
+      shell: bash
+      run: |
+        for attempt in 1 2 3 4 5; do
+          pnpm install --frozen-lockfile && exit 0
+          if [[ "$attempt" -lt 5 ]]; then
+            sleep_seconds="$((attempt * 15))"
+            echo "pnpm install failed on attempt ${attempt}; retrying in ${sleep_seconds}s..."
+            sleep "${sleep_seconds}"
+          fi
+        done
+        echo "pnpm install failed after 5 attempts."
+        exit 1
+
+    - name: Save pnpm store cache
+      if: >-
+        ${{
+          inputs.cache-pnpm-store == 'true' &&
+          inputs.run-install == 'true' &&
+          github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+          steps.pnpm-store-cache.outputs.cache-hit != 'true'
+        }}
+      shell: bash
+      run: pnpm store prune
+
+    - name: Persist pruned pnpm store cache
+      if: >-
+        ${{
+          inputs.cache-pnpm-store == 'true' &&
+          inputs.run-install == 'true' &&
+          github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
+          steps.pnpm-store-cache.outputs.cache-hit != 'true'
+        }}
+      uses: actions/cache/save@v5
+      with:
+        path: ${{ steps.pnpm-store.outputs.path }}
+        key: ${{ runner.os }}-pnpm-store-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml') }}

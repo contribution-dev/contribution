@@ -1,0 +1,251 @@
+#!/usr/bin/env node
+
+import { execFileSync } from "node:child_process";
+import { mkdir, readFile, rename, writeFile } from "node:fs/promises";
+import path from "node:path";
+import {
+  closedFindingStateKey,
+  findingSignature,
+  normalizeOperatorState,
+  resolveOperatorStatePath,
+  reviewVersionTokenForOperatorState,
+} from "./codex-review-push-gate-lib.mjs";
+import {
+  reportsDirForLane,
+  resolveReviewsDir,
+} from "./codex-review-inbox-lib.mjs";
+
+function usage() {
+  console.log(`Usage: scripts/codex-review-dismiss-finding --sha <commit-sha> [options]
+
+Options:
+  --lane <codex>             Review lane to close from (default: codex)
+  --index <n>                1-based finding index from the selected lane report (default: 1)
+  --all                      Close all findings for the selected lane report
+  --title <text>             Close by exact finding title match
+  --branch <name>            Compatibility no-op; closures are SHA-scoped
+  -h, --help                 Show help
+`);
+}
+
+function parseArgs(argv) {
+  const args = {
+    sha: "",
+    lane: "codex",
+    index: 1,
+    all: false,
+    title: "",
+    branch: "",
+  };
+
+  for (let i = 2; i < argv.length; i += 1) {
+    const arg = argv[i];
+    const next = argv[i + 1];
+    switch (arg) {
+      case "--sha":
+        args.sha = String(next ?? "").trim();
+        i += 1;
+        break;
+      case "--lane":
+        args.lane = String(next ?? "codex")
+          .trim()
+          .toLowerCase();
+        i += 1;
+        break;
+      case "--index":
+        args.index = Number.parseInt(String(next ?? ""), 10);
+        i += 1;
+        break;
+      case "--all":
+        args.all = true;
+        break;
+      case "--title":
+        args.title = String(next ?? "");
+        i += 1;
+        break;
+      case "--branch":
+        args.branch = String(next ?? "").trim();
+        i += 1;
+        break;
+      case "-h":
+      case "--help":
+        usage();
+        process.exit(0);
+        break;
+      default:
+        throw new Error(`Unknown argument: ${arg}`);
+    }
+  }
+
+  if (!args.sha) {
+    throw new Error("--sha is required");
+  }
+  if (args.all && args.title) {
+    throw new Error("--all cannot be combined with --title");
+  }
+  if (args.all && process.argv.includes("--index")) {
+    throw new Error("--all cannot be combined with --index");
+  }
+  if (
+    !args.all &&
+    !args.title &&
+    (!Number.isInteger(args.index) || args.index < 1)
+  ) {
+    throw new Error("--index must be an integer >= 1");
+  }
+  if (args.lane !== "codex") {
+    throw new Error(`Invalid --lane: ${args.lane}`);
+  }
+  return args;
+}
+
+function normalizeBranchName(branchName) {
+  return String(branchName ?? "").trim();
+}
+
+async function writeOperatorClosure({
+  operatorStatePath,
+  sha,
+  lane,
+  review,
+  selectedFindings,
+  closeWholeReport,
+}) {
+  await mkdir(path.dirname(operatorStatePath), { recursive: true });
+  let operatorState = normalizeOperatorState({});
+  try {
+    operatorState = normalizeOperatorState(
+      JSON.parse(await readFile(operatorStatePath, "utf8")),
+    );
+  } catch {
+    // Use a fresh operator-state payload for new repositories.
+  }
+
+  const now = new Date().toISOString();
+  const normalizedSha = String(sha ?? "")
+    .trim()
+    .toLowerCase();
+  const versionToken = reviewVersionTokenForOperatorState(
+    normalizedSha,
+    review,
+  );
+
+  if (closeWholeReport) {
+    operatorState.reports[normalizedSha] = {
+      closed_version_token: versionToken,
+      closed_at:
+        String(
+          operatorState.reports[normalizedSha]?.closed_version_token ?? "",
+        ) === versionToken &&
+        String(operatorState.reports[normalizedSha]?.closed_at ?? "").trim()
+          ? String(operatorState.reports[normalizedSha].closed_at).trim()
+          : now,
+      closed_source: "dismiss-finding",
+    };
+  } else {
+    for (const { finding } of selectedFindings) {
+      const signature = findingSignature(finding);
+      const key = closedFindingStateKey(normalizedSha, signature);
+      if (!key) continue;
+      const existing = operatorState.closed_findings[key];
+      operatorState.closed_findings[key] = {
+        sha: normalizedSha,
+        lane,
+        signature,
+        title: String(finding?.title ?? ""),
+        severity: String(finding?.severity ?? ""),
+        closed_at: String(existing?.closed_at ?? "").trim() || now,
+        closed_source: "dismiss-finding",
+        version_token: versionToken,
+      };
+    }
+  }
+
+  operatorState.updated_at = now;
+  const tempPath = `${operatorStatePath}.tmp.${process.pid}.${Date.now()}`;
+  await writeFile(
+    tempPath,
+    `${JSON.stringify(operatorState, null, 2)}\n`,
+    "utf8",
+  );
+  await rename(tempPath, operatorStatePath);
+}
+
+async function main() {
+  const args = parseArgs(process.argv);
+  const repoRoot = execFileSync("git", ["rev-parse", "--show-toplevel"], {
+    encoding: "utf8",
+  }).trim();
+
+  const reviewsDir = await resolveReviewsDir(repoRoot, "");
+  const reviewPath = path.join(
+    reportsDirForLane(reviewsDir, args.lane),
+    `${args.sha}.json`,
+  );
+  const reviewRaw = await readFile(reviewPath, "utf8");
+  const review = JSON.parse(reviewRaw);
+  const findings = Array.isArray(review?.findings) ? review.findings : [];
+  if (findings.length === 0) {
+    throw new Error(`No findings in ${reviewPath}`);
+  }
+
+  const selectedFindings = [];
+  if (args.all) {
+    selectedFindings.push(
+      ...findings.map((finding, index) => ({
+        finding,
+        index,
+      })),
+    );
+  } else if (args.title) {
+    const index = findings.findIndex(
+      (item) => String(item?.title ?? "") === args.title,
+    );
+    if (index < 0) {
+      throw new Error(`No finding with title: ${args.title}`);
+    }
+    selectedFindings.push({
+      finding: findings[index],
+      index,
+    });
+  } else {
+    const index = args.index - 1;
+    const finding = findings[index];
+    if (!finding) {
+      throw new Error(
+        `Index out of range: ${args.index} (findings=${findings.length}, index is 1-based)`,
+      );
+    }
+    selectedFindings.push({ finding, index });
+  }
+
+  const branchName = normalizeBranchName(args.branch);
+  const operatorStatePath = resolveOperatorStatePath(
+    reportsDirForLane(reviewsDir, args.lane),
+  );
+  await writeOperatorClosure({
+    operatorStatePath,
+    sha: args.sha,
+    lane: args.lane,
+    review,
+    selectedFindings,
+    closeWholeReport: args.all,
+  });
+
+  if (args.all) {
+    console.log(
+      `[codex-review-dismiss-finding] lane=${args.lane} closed sha=${args.sha} findings=${selectedFindings.length}${branchName ? ` branch=${branchName}` : ""}`,
+    );
+  } else {
+    const [{ finding, index }] = selectedFindings;
+    console.log(
+      `[codex-review-dismiss-finding] lane=${args.lane} closed sha=${args.sha} index=${index + 1}${branchName ? ` branch=${branchName}` : ""} title="${String(finding?.title ?? "")}"`,
+    );
+  }
+  console.log(`[codex-review-dismiss-finding] file=${operatorStatePath}`);
+}
+
+main().catch((error) => {
+  console.error(`[codex-review-dismiss-finding] Failed: ${error.message}`);
+  process.exit(1);
+});

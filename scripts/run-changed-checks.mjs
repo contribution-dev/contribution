@@ -4,7 +4,10 @@ import { spawnSync } from "node:child_process";
 import { resolve } from "node:path";
 import { pathToFileURL } from "node:url";
 import { classifyChangedFiles, getChangedFiles } from "./lib/changed-files.mjs";
-import { getContractFastValidationCommands } from "./lib/contract-sensitive-domains.mjs";
+import {
+  getContractCoverageValidationCommands,
+  getContractFastValidationCommands,
+} from "./lib/contract-sensitive-domains.mjs";
 import {
   buildControlPlaneDocSyncErrorMessage,
   hasControlPlaneChanges,
@@ -111,10 +114,6 @@ function buildFullCommands(mode) {
 
 function buildChangedCommands(mode, files, classification) {
   const commands = [];
-  const contractCommands =
-    mode === "test" || mode === "all"
-      ? getContractFastValidationCommands(files)
-      : [];
 
   if (mode === "lint" || mode === "all") {
     if (classification.tooling) {
@@ -133,15 +132,29 @@ function buildChangedCommands(mode, files, classification) {
   }
 
   if (mode === "test" || mode === "all") {
-    for (const command of contractCommands) {
-      commands.push([command.cmd, command.args]);
-    }
     if (classification.goRelevant || classification.rootConfig) {
       commands.push(["go", ["test", "./..."]]);
     }
   }
 
   return dedupeCommands(commands);
+}
+
+function appendContractCommands(commands, mode, files) {
+  if (mode !== "test" && mode !== "all") {
+    return commands;
+  }
+  const contractCommands = getContractFastValidationCommands(files).map(
+    (command) => [command.cmd, command.args],
+  );
+  return dedupeCommands([...commands, ...contractCommands]);
+}
+
+function runContractCoverageForDocsOnly(files) {
+  const commands = getContractCoverageValidationCommands(files).map(
+    (command) => [command.cmd, command.args],
+  );
+  runPlan(commands, "Running CLI contract coverage validation");
 }
 
 function dedupeCommands(commands) {
@@ -209,16 +222,20 @@ function runPrePushRoute(changes, classification, args) {
   const shouldRunAgentsCheck = hasAgentsCheckRelevantChanges(changes.files);
   if (shouldUseDocsOnlyFastPath(classification, args)) {
     console.log("Pre-push mode: docs-only change set, skipping code checks.");
+    runContractCoverageForDocsOnly(changes.files);
     if (shouldRunAgentsCheck) {
       runPlan([["pnpm", ["agents:check"]]], "Running AGENTS/docs validation");
     }
     return;
   }
 
-  const commands =
+  const commands = appendContractCommands(
     args.full || classification.rootConfig || classification.tooling
       ? buildFullCommands("all")
-      : buildChangedCommands("all", changes.files, classification);
+      : buildChangedCommands("all", changes.files, classification),
+    "all",
+    changes.files,
+  );
   runPlan(commands, "Running changed-aware check set");
 
   if (shouldRunAgentsCheck) {
@@ -258,16 +275,20 @@ function main() {
 
   if (shouldUseDocsOnlyFastPath(classification, args)) {
     console.log("Docs-only change set detected.");
+    runContractCoverageForDocsOnly(changes.files);
     if (shouldRunAgentsCheck) {
       runPlan([["pnpm", ["agents:check"]]], "Running AGENTS/docs validation");
     }
     return;
   }
 
-  const commands =
+  const commands = appendContractCommands(
     args.full || classification.rootConfig || classification.tooling
       ? buildFullCommands(args.mode)
-      : buildChangedCommands(args.mode, changes.files, classification);
+      : buildChangedCommands(args.mode, changes.files, classification),
+    args.mode,
+    changes.files,
+  );
   runPlan(commands, "Running changed-aware check set");
 
   if (shouldRunAgentsCheck) {

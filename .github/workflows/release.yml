@@ -9,7 +9,28 @@ permissions:
   contents: write
 
 jobs:
+  validate:
+    runs-on: ubuntu-latest
+    timeout-minutes: 30
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: actions/setup-go@v6
+        with:
+          go-version-file: .go-version
+          cache: true
+      - uses: ./.github/actions/setup-node-pnpm
+      - uses: goreleaser/goreleaser-action@v6
+        with:
+          distribution: goreleaser
+          version: latest
+          install-only: true
+      - run: pnpm validate:final
+      - run: pnpm dogfood:release
+
   goreleaser:
+    needs: validate
     runs-on: ubuntu-latest
     timeout-minutes: 20
     steps:

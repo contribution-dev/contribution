@@ -52,6 +52,7 @@ function main() {
     "bin/contribution",
     "./cmd/contribution",
   ]);
+  run("pnpm", ["dogfood:smoke"]);
   run("pnpm", ["lint:go"]);
   run("govulncheck", ["./..."], { optional: true });
 }

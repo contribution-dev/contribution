@@ -41,7 +41,9 @@ func runAnalyze(ctx context.Context, out io.Writer, opts analyzeOptions) (string
 	if err := validateFormat(opts.format, true); err != nil {
 		return "", err
 	}
-	fmt.Fprintln(out, "Analyzing repo...")
+	if err := writeLine(out, "Analyzing repo..."); err != nil {
+		return "", err
+	}
 	repo, err := gitrepo.Resolve(ctx, opts.repo)
 	if err != nil {
 		return "", err
@@ -68,7 +70,9 @@ func runAnalyze(ctx context.Context, out io.Writer, opts analyzeOptions) (string
 	outputDir := filepath.Join(outputRoot, timestamp(start))
 
 	tooling := tools.Discover(ctx, !opts.noExternalTools, start)
-	fmt.Fprintln(out, "Git history: collecting")
+	if err := writeLine(out, "Git history: collecting"); err != nil {
+		return "", err
+	}
 	inventory, inventorySignals, err := gitrepo.Inventory(repo.Path, repo.ID, start)
 	if err != nil {
 		return "", err
@@ -81,7 +85,9 @@ func runAnalyze(ctx context.Context, out io.Writer, opts analyzeOptions) (string
 	token, tokenAvailable := github.ResolveToken(opts.githubToken)
 	metadata := github.Metadata{Reason: "GitHub metadata was not requested; continuing local-only."}
 	if tokenAvailable && repo.GitHubOwner != "" && repo.GitHubRepo != "" {
-		fmt.Fprintln(out, "GitHub metadata: requested")
+		if err := writeLine(out, "GitHub metadata: requested"); err != nil {
+			return "", err
+		}
 		ghCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 		var ghErr error
@@ -90,7 +96,9 @@ func runAnalyze(ctx context.Context, out io.Writer, opts analyzeOptions) (string
 			metadata = github.Metadata{Reason: "GitHub metadata failed: " + ghErr.Error()}
 		}
 	} else {
-		fmt.Fprintln(out, "GitHub metadata: unavailable, continuing local-only")
+		if err := writeLine(out, "GitHub metadata: unavailable, continuing local-only"); err != nil {
+			return "", err
+		}
 	}
 
 	allSignals := append([]signals.Signal{}, inventorySignals...)
@@ -158,8 +166,31 @@ func runAnalyze(ctx context.Context, out io.Writer, opts analyzeOptions) (string
 	if err := report.WriteAnalysisBundle(outputDir, analysis, opts.format); err != nil {
 		return "", err
 	}
-	fmt.Fprintf(out, "Report written to %s\n", filepath.Join(outputDir, "report.md"))
+	switch opts.format {
+	case "json":
+		if err := writef(out, "Analysis artifacts written to %s\n", filepath.Join(outputDir, "analysis.json")); err != nil {
+			return "", err
+		}
+	case "markdown":
+		if err := writef(out, "Report written to %s\n", filepath.Join(outputDir, "report.md")); err != nil {
+			return "", err
+		}
+	default:
+		if err := writef(out, "Report artifacts written to %s\n", outputDir); err != nil {
+			return "", err
+		}
+	}
 	return outputDir, nil
+}
+
+func writeLine(out io.Writer, args ...any) error {
+	_, err := fmt.Fprintln(out, args...)
+	return err
+}
+
+func writef(out io.Writer, format string, args ...any) error {
+	_, err := fmt.Fprintf(out, format, args...)
+	return err
 }
 
 func currentRepo(ctx context.Context) (gitrepo.Repo, error) {

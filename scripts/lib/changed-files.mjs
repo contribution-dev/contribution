@@ -3,29 +3,30 @@ import { execFileSync } from "node:child_process";
 export const CHANGED_FILES_DIFF_FILTER = "ACMRD";
 
 function runGit(args, options = {}) {
+  const { trim = true, ...execOptions } = options;
   try {
-    return execFileSync("git", args, {
+    const output = execFileSync("git", args, {
       encoding: "utf8",
       stdio: ["ignore", "pipe", "ignore"],
-      ...options,
-    }).trim();
+      ...execOptions,
+    });
+    return trim ? output.trim() : output;
   } catch {
     return "";
   }
 }
 
 function collectWorktreeFiles(cwd) {
-  const output = runGit(["status", "--porcelain"], { cwd });
+  const output = runGit(["status", "--porcelain"], { cwd, trim: false });
   return output
     .split("\n")
-    .map((line) => line.trim())
-    .filter(Boolean)
+    .filter((line) => line.trim().length > 0)
     .map((line) => {
       const renamed = line.match(/^R.\s+(.+)\s+->\s+(.+)$/);
       if (renamed) {
         return renamed[2];
       }
-      return line.slice(3);
+      return line.slice(3).trim();
     })
     .map((file) => file.replaceAll("\\", "/"))
     .filter(Boolean);

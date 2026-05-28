@@ -1,6 +1,7 @@
 package cli
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"io"
@@ -24,9 +25,10 @@ func newDoctorCommand(out io.Writer) *cobra.Command {
 			defer cancel()
 			now := time.Now().UTC()
 			tooling := tools.Discover(ctx, true, now)
-			fmt.Fprintln(out, "Contribution.dev doctor")
-			fmt.Fprintln(out)
-			fmt.Fprintln(out, "Tools:")
+			var buf bytes.Buffer
+			fmt.Fprintln(&buf, "Contribution.dev doctor")
+			fmt.Fprintln(&buf)
+			fmt.Fprintln(&buf, "Tools:")
 			for _, tool := range tooling.Tools {
 				status := "missing"
 				if tool.Available {
@@ -40,45 +42,46 @@ func newDoctorCommand(out io.Writer) *cobra.Command {
 				if version == "" {
 					version = tool.Reason
 				}
-				fmt.Fprintf(out, "- %s: %s (%s) %s\n", tool.Name, status, required, version)
+				fmt.Fprintf(&buf, "- %s: %s (%s) %s\n", tool.Name, status, required, version)
 			}
-			fmt.Fprintln(out)
+			fmt.Fprintln(&buf)
 			if token, ok := github.ResolveToken(""); ok && token != "" {
-				fmt.Fprintln(out, "GitHub token: available from environment")
+				fmt.Fprintln(&buf, "GitHub token: available from environment")
 			} else {
-				fmt.Fprintln(out, "GitHub token: unavailable; PR review metadata will be skipped")
+				fmt.Fprintln(&buf, "GitHub token: unavailable; PR review metadata will be skipped")
 			}
 			repo, err := gitrepo.Resolve(ctx, ".")
 			if err != nil {
-				fmt.Fprintf(out, "Repo state: unavailable (%v)\n", err)
+				fmt.Fprintf(&buf, "Repo state: unavailable (%v)\n", err)
 			} else {
 				defer func() {
 					_ = repo.Close()
 				}()
-				fmt.Fprintf(out, "Repo state: ok (%s on %s)\n", repo.Name, repo.DefaultBranch)
+				fmt.Fprintf(&buf, "Repo state: ok (%s on %s)\n", repo.Name, repo.DefaultBranch)
 				cfg, warnings, cfgErr := config.Load(repo.Path)
 				if cfgErr != nil {
-					fmt.Fprintf(out, "Config: invalid (%v)\n", cfgErr)
+					fmt.Fprintf(&buf, "Config: invalid (%v)\n", cfgErr)
 				} else {
 					configPath := repo.Path + string(os.PathSeparator) + config.FileName
 					if _, statErr := os.Stat(configPath); os.IsNotExist(statErr) {
-						fmt.Fprintln(out, "Config: not found; safe defaults will be used")
+						fmt.Fprintln(&buf, "Config: not found; safe defaults will be used")
 					} else {
-						fmt.Fprintf(out, "Config: ok (since_days=%d, max_prs=%d)\n", cfg.Analysis.SinceDays, cfg.Analysis.MaxPRs)
+						fmt.Fprintf(&buf, "Config: ok (since_days=%d, max_prs=%d)\n", cfg.Analysis.SinceDays, cfg.Analysis.MaxPRs)
 					}
 					for _, warning := range warnings {
-						fmt.Fprintf(out, "- warning: %s\n", warning)
+						fmt.Fprintf(&buf, "- warning: %s\n", warning)
 					}
 				}
 			}
 			if len(tooling.Limitations) > 0 {
-				fmt.Fprintln(out)
-				fmt.Fprintln(out, "Degraded functionality:")
+				fmt.Fprintln(&buf)
+				fmt.Fprintln(&buf, "Degraded functionality:")
 				for _, limitation := range tooling.Limitations {
-					fmt.Fprintf(out, "- %s\n", limitation)
+					fmt.Fprintf(&buf, "- %s\n", limitation)
 				}
 			}
-			return nil
+			_, err = out.Write(buf.Bytes())
+			return err
 		},
 	}
 }

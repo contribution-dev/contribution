@@ -42,3 +42,91 @@ func TestVersionCommand(t *testing.T) {
 		}
 	}
 }
+
+func TestVersionCommandUsesFallbacks(t *testing.T) {
+	stdout, stderr, err := executeForTest([]string{"version"}, BuildInfo{})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	for _, want := range []string{"contribution dev", "commit: none", "date: unknown"} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("version fallback output missing %q: %q", want, stdout)
+		}
+	}
+}
+
+func TestInvalidFormatFailsBeforeRepoAccess(t *testing.T) {
+	stdout, stderr, err := executeForTest([]string{"preflight", "--format", "xml"}, BuildInfo{})
+	if err == nil {
+		t.Fatal("Execute() error = nil, want unsupported format")
+	}
+	if !strings.Contains(err.Error(), `unsupported format "xml"`) {
+		t.Fatalf("error = %v, want unsupported format", err)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty before process-level error handling", stderr)
+	}
+}
+
+func TestReportRequiresInput(t *testing.T) {
+	stdout, stderr, err := executeForTest([]string{"report"}, BuildInfo{})
+	if err == nil {
+		t.Fatal("Execute() error = nil, want missing input")
+	}
+	if !strings.Contains(err.Error(), "--input is required") {
+		t.Fatalf("error = %v, want missing input", err)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty before process-level error handling", stderr)
+	}
+}
+
+func TestPacketRequiresPR(t *testing.T) {
+	stdout, stderr, err := executeForTest([]string{"packet"}, BuildInfo{})
+	if err == nil {
+		t.Fatal("Execute() error = nil, want missing PR")
+	}
+	if !strings.Contains(err.Error(), "--pr is required") {
+		t.Fatalf("error = %v, want missing PR", err)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty before process-level error handling", stderr)
+	}
+}
+
+func TestUnknownCommandReturnsErrorWithoutStdout(t *testing.T) {
+	stdout, stderr, err := executeForTest([]string{"unknown-command"}, BuildInfo{})
+	if err == nil {
+		t.Fatal("Execute() error = nil, want unknown command")
+	}
+	if !strings.Contains(err.Error(), "unknown command") {
+		t.Fatalf("error = %v, want unknown command", err)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty before process-level error handling", stderr)
+	}
+}
+
+func executeForTest(args []string, info BuildInfo) (string, string, error) {
+	var stdout bytes.Buffer
+	var stderr bytes.Buffer
+	cmd := NewRootCommand(&stdout, &stderr, info)
+	cmd.SetArgs(args)
+	err := cmd.Execute()
+	return stdout.String(), stderr.String(), err
+}

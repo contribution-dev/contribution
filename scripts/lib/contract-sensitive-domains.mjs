@@ -10,7 +10,11 @@ const CONTRACT_SENSITIVE_DOMAINS = [
   {
     key: "cli-contract",
     reviewMode: "cli-contract",
-    authoritativeDocs: ["docs/reference/architecture.md"],
+    authoritativeDocs: [
+      "docs/reference/architecture.md",
+      "docs/cli-contract.md",
+      "docs/tooling-validation.md",
+    ],
     agentPaths: ["AGENTS.md"],
     reviewFocusLines: [
       "- did this change command names, flags, stdout, stderr, or exit behavior?",
@@ -22,11 +26,34 @@ const CONTRACT_SENSITIVE_DOMAINS = [
         cmd: "go",
         args: ["test", "./..."],
       },
+      {
+        cmd: "pnpm",
+        args: ["dogfood:smoke"],
+      },
+      {
+        cmd: "node",
+        args: ["scripts/check-cli-contract-coverage.mjs"],
+        receivesChangedFiles: true,
+      },
     ],
     pathPatterns: [
       /^cmd\//,
       /^internal\/cli\//,
+      /^internal\/config\//,
+      /^internal\/git\//,
+      /^internal\/report\//,
+      /^\.goreleaser\.yml$/,
+      /^README\.md$/,
+      /^docs\/cli-contract\.md$/,
+      /^docs\/prd-cli\.md$/,
+      /^docs\/product-architecture\.md$/,
       /^docs\/reference\/architecture\.md$/,
+      /^scripts\/dogfood-cli\.mjs$/,
+      /^scripts\/check-cli-contract-coverage\.mjs$/,
+      /^scripts\/lib\/contract-sensitive-domains\.mjs$/,
+      /^scripts\/run-changed-checks\.mjs$/,
+      /^\.github\/workflows\/ci\.yml$/,
+      /^\.github\/workflows\/release\.yml$/,
     ],
   },
 ];
@@ -45,6 +72,7 @@ export function getContractSensitiveDomains() {
     fastValidationCommands: domain.fastValidationCommands.map((command) => ({
       cmd: command.cmd,
       args: [...command.args],
+      receivesChangedFiles: command.receivesChangedFiles === true,
     })),
   }));
 }
@@ -95,12 +123,31 @@ export function getContractFastValidationCommands(files) {
       seen.add(key);
       commands.push({
         cmd: command.cmd,
-        args: [...command.args],
+        args:
+          command.receivesChangedFiles === true
+            ? [...command.args, "--files", ...files.map(normalizePath)]
+            : [...command.args],
       });
     }
   }
 
   return commands;
+}
+
+export function getContractCoverageValidationCommands(files) {
+  if (!hasContractSensitiveDomainChanges(files, "cli-contract")) {
+    return [];
+  }
+  return [
+    {
+      cmd: "node",
+      args: [
+        "scripts/check-cli-contract-coverage.mjs",
+        "--files",
+        ...files.map(normalizePath),
+      ],
+    },
+  ];
 }
 
 export function getContractReviewFocusLines(mode) {
@@ -121,6 +168,7 @@ export function isAuthoritativeContractEvidencePath(filePath) {
   return (
     normalized === "AGENTS.md" ||
     normalized.endsWith("/AGENTS.md") ||
+    normalized === "docs/cli-contract.md" ||
     normalized.startsWith("docs/reference/") ||
     normalized === "docs/tooling-validation.md"
   );

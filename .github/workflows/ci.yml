@@ -33,6 +33,7 @@ jobs:
       - run: go test ./...
       - run: go test -race ./...
       - run: go build -trimpath -o bin/contribution ./cmd/contribution
+      - run: scripts/with-tools node scripts/dogfood-cli.mjs --mode smoke --skip-build --binary bin/contribution
 
   lint:
     runs-on: ubuntu-latest

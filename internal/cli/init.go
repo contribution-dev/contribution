@@ -2,7 +2,6 @@ package cli
 
 import (
 	"context"
-	"fmt"
 	"io"
 	"os"
 	"path/filepath"
@@ -24,16 +23,14 @@ func newInitCommand(out io.Writer) *cobra.Command {
 			root, branch := initTarget(ctx)
 			path := filepath.Join(root, config.FileName)
 			if _, err := os.Stat(path); err == nil {
-				fmt.Fprintf(out, "%s already exists\n", path)
-				return nil
+				return writef(out, "%s already exists\n", path)
 			} else if !os.IsNotExist(err) {
 				return err
 			}
 			if err := config.WriteDefault(path, branch); err != nil {
 				return err
 			}
-			fmt.Fprintf(out, "Created %s\n", path)
-			return nil
+			return writef(out, "Created %s\n", path)
 		},
 	}
 }

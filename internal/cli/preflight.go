@@ -61,8 +61,7 @@ func newPreflightCommand(out io.Writer) *cobra.Command {
 			if err := report.WritePreflight(outputDir, preflight, format); err != nil {
 				return err
 			}
-			fmt.Fprintf(out, "Preflight written to %s\n", outputDir)
-			return nil
+			return writef(out, "Preflight written to %s\n", outputDir)
 		},
 	}
 	cmd.Flags().StringVar(&base, "base", "", "Base branch or SHA.")

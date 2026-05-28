@@ -59,8 +59,7 @@ func newPacketCommand(out io.Writer) *cobra.Command {
 			if err := report.WritePacket(outputDir, packet); err != nil {
 				return err
 			}
-			fmt.Fprintf(out, "Friend-review packet written to %s\n", outputDir)
-			return nil
+			return writef(out, "Friend-review packet written to %s\n", outputDir)
 		},
 	}
 	cmd.Flags().IntVar(&pr, "pr", 0, "PR number.")

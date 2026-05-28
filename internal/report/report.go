@@ -14,7 +14,7 @@ import (
 
 // WriteAnalysisBundle writes the V1 analysis artifacts.
 func WriteAnalysisBundle(outputDir string, analysis signals.AnalysisReport, format string) error {
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+	if err := os.MkdirAll(outputDir, 0o750); err != nil {
 		return fmt.Errorf("create output directory: %w", err)
 	}
 	if format == "" {
@@ -30,7 +30,7 @@ func WriteAnalysisBundle(outputDir string, analysis signals.AnalysisReport, form
 		return fmt.Errorf("unsupported format %q", format)
 	}
 	if format == "all" || format == "markdown" {
-		if err := os.WriteFile(filepath.Join(outputDir, "report.md"), []byte(Markdown(analysis)), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(outputDir, "report.md"), []byte(Markdown(analysis)), 0o600); err != nil {
 			return fmt.Errorf("write report.md: %w", err)
 		}
 	}
@@ -48,7 +48,7 @@ func WriteAnalysisBundle(outputDir string, analysis signals.AnalysisReport, form
 
 // WriteReportOnly regenerates report artifacts from analysis.
 func WriteReportOnly(outputDir string, analysis signals.AnalysisReport, format string) error {
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+	if err := os.MkdirAll(outputDir, 0o750); err != nil {
 		return fmt.Errorf("create output directory: %w", err)
 	}
 	if format == "" {
@@ -59,7 +59,7 @@ func WriteReportOnly(outputDir string, analysis signals.AnalysisReport, format s
 		if err := writeJSON(filepath.Join(outputDir, "analysis.json"), analysis); err != nil {
 			return err
 		}
-		if err := os.WriteFile(filepath.Join(outputDir, "report.md"), []byte(Markdown(analysis)), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(outputDir, "report.md"), []byte(Markdown(analysis)), 0o600); err != nil {
 			return fmt.Errorf("write report.md: %w", err)
 		}
 	case "json":
@@ -67,7 +67,7 @@ func WriteReportOnly(outputDir string, analysis signals.AnalysisReport, format s
 			return err
 		}
 	case "markdown":
-		if err := os.WriteFile(filepath.Join(outputDir, "report.md"), []byte(Markdown(analysis)), 0o644); err != nil {
+		if err := os.WriteFile(filepath.Join(outputDir, "report.md"), []byte(Markdown(analysis)), 0o600); err != nil {
 			return fmt.Errorf("write report.md: %w", err)
 		}
 	default:
@@ -82,6 +82,7 @@ func WriteReportOnly(outputDir string, analysis signals.AnalysisReport, format s
 // ReadAnalysis reads analysis.json.
 func ReadAnalysis(path string) (signals.AnalysisReport, error) {
 	var analysis signals.AnalysisReport
+	// #nosec G304 -- the CLI intentionally reads a user-provided analysis.json path.
 	data, err := os.ReadFile(path)
 	if err != nil {
 		return analysis, fmt.Errorf("read analysis: %w", err)
@@ -219,7 +220,7 @@ func ShareCard(analysis signals.AnalysisReport) signals.ShareCard {
 
 // WritePreflight writes current-diff preflight artifacts.
 func WritePreflight(outputDir string, preflight signals.PreflightReport, format string) error {
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+	if err := os.MkdirAll(outputDir, 0o750); err != nil {
 		return fmt.Errorf("create output directory: %w", err)
 	}
 	if format == "" {
@@ -230,11 +231,11 @@ func WritePreflight(outputDir string, preflight signals.PreflightReport, format 
 		if err := writeJSON(filepath.Join(outputDir, "preflight.json"), preflight); err != nil {
 			return err
 		}
-		return os.WriteFile(filepath.Join(outputDir, "preflight.md"), []byte(PreflightMarkdown(preflight)), 0o644)
+		return os.WriteFile(filepath.Join(outputDir, "preflight.md"), []byte(PreflightMarkdown(preflight)), 0o600)
 	case "json":
 		return writeJSON(filepath.Join(outputDir, "preflight.json"), preflight)
 	case "markdown":
-		return os.WriteFile(filepath.Join(outputDir, "preflight.md"), []byte(PreflightMarkdown(preflight)), 0o644)
+		return os.WriteFile(filepath.Join(outputDir, "preflight.md"), []byte(PreflightMarkdown(preflight)), 0o600)
 	default:
 		return fmt.Errorf("unsupported format %q", format)
 	}
@@ -282,13 +283,13 @@ func PreflightMarkdown(preflight signals.PreflightReport) string {
 
 // WritePacket writes friend-review packet artifacts.
 func WritePacket(outputDir string, packet signals.FriendReviewPacket) error {
-	if err := os.MkdirAll(outputDir, 0o755); err != nil {
+	if err := os.MkdirAll(outputDir, 0o750); err != nil {
 		return fmt.Errorf("create output directory: %w", err)
 	}
 	if err := writeJSON(filepath.Join(outputDir, "friend-review-packet.json"), packet); err != nil {
 		return err
 	}
-	return os.WriteFile(filepath.Join(outputDir, "friend-review-packet.md"), []byte(PacketMarkdown(packet)), 0o644)
+	return os.WriteFile(filepath.Join(outputDir, "friend-review-packet.md"), []byte(PacketMarkdown(packet)), 0o600)
 }
 
 // PacketMarkdown renders a friend-review packet.
@@ -322,7 +323,7 @@ func writeJSON(path string, value any) error {
 		return fmt.Errorf("marshal %s: %w", filepath.Base(path), err)
 	}
 	data = append(data, '\n')
-	if err := os.WriteFile(path, data, 0o644); err != nil {
+	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("write %s: %w", filepath.Base(path), err)
 	}
 	return nil

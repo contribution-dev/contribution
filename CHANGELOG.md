@@ -6,6 +6,8 @@ All notable changes to this project will be documented in this file.
 
 - Add repo-owned CLI dogfood, contract coverage routing, and release artifact
   smoke validation.
+- Make final validation headless-safe and include Node script regression tests
+  in final and CI gates.
 - Fix `analyze --format json` completion output so it does not point at a
   markdown report that was not written.
 - Add the V1 local contribution intelligence CLI foundation with private

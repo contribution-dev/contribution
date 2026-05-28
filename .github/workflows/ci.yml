@@ -28,6 +28,7 @@ jobs:
       - uses: ./.github/actions/setup-node-pnpm
       - run: pnpm agents:check
       - run: pnpm lint:scripts
+      - run: pnpm test:scripts
       - run: pnpm format:check
       - run: go vet ./...
       - run: go test ./...

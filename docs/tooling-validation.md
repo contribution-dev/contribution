@@ -36,9 +36,11 @@ Fast rerun variant:
 pnpm validate:final:skip-install
 ```
 
-The command runs install when needed, AGENTS checks, formatting checks, Go vet,
-Go tests, race tests, build, CLI dogfood smoke, and vulnerability scan when the
-required tools are available.
+The command runs install when needed, AGENTS checks, script tests, formatting
+checks, Go vet, Go tests, race tests, build, CLI dogfood smoke, and
+vulnerability scan when the required tools are available. Its install step runs
+with `CI=true` when `CI` is unset and `HUSKY=0`, so the full gate is safe in
+headless shells and does not rewrite local Git hook state.
 
 ## Changed-aware commands
 

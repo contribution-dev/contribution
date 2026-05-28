@@ -25,7 +25,7 @@
     "format": "prettier --write . && scripts/go-format write",
     "format:check": "prettier --check . && scripts/go-format check",
     "vuln": "scripts/with-tools govulncheck ./...",
-    "ci": "pnpm lint:scripts && pnpm format:check && pnpm typecheck && pnpm test && pnpm test:race && pnpm build && pnpm dogfood:smoke",
+    "ci": "pnpm lint:scripts && pnpm test:scripts && pnpm format:check && pnpm typecheck && pnpm test && pnpm test:race && pnpm build && pnpm dogfood:smoke",
     "agents:check": "node scripts/check-install-prereqs.mjs && node scripts/check-agents-drift.mjs && node scripts/check-workflow-parity.mjs",
     "tools:preflight": "scripts/with-tools bash scripts/preflight-tools.sh",
     "validate:final": "scripts/with-tools node scripts/validate-and-report.mjs",

@@ -85,7 +85,7 @@ function runCommand(command, args) {
   console.log(`[run-changed-checks] PASS command=${printable}`);
 }
 
-function buildFullCommands(mode) {
+export function buildFullCommands(mode) {
   if (mode === "lint") {
     return [
       ["pnpm", ["lint:scripts"]],
@@ -97,10 +97,14 @@ function buildFullCommands(mode) {
     return [["go", ["vet", "./..."]]];
   }
   if (mode === "test") {
-    return [["go", ["test", "./..."]]];
+    return [
+      ["pnpm", ["test:scripts"]],
+      ["go", ["test", "./..."]],
+    ];
   }
   return [
     ["pnpm", ["lint:scripts"]],
+    ["pnpm", ["test:scripts"]],
     ["pnpm", ["format:check"]],
     ["go", ["vet", "./..."]],
     ["go", ["test", "./..."]],
@@ -112,7 +116,7 @@ function buildFullCommands(mode) {
   ];
 }
 
-function buildChangedCommands(mode, files, classification) {
+export function buildChangedCommands(mode, files, classification) {
   const commands = [];
 
   if (mode === "lint" || mode === "all") {
@@ -132,6 +136,9 @@ function buildChangedCommands(mode, files, classification) {
   }
 
   if (mode === "test" || mode === "all") {
+    if (classification.tooling) {
+      commands.push(["pnpm", ["test:scripts"]]);
+    }
     if (classification.goRelevant || classification.rootConfig) {
       commands.push(["go", ["test", "./..."]]);
     }

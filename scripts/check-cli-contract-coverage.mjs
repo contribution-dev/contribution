@@ -1,5 +1,6 @@
 #!/usr/bin/env node
 
+import { readFileSync } from "node:fs";
 import { getChangedFiles } from "./lib/changed-files.mjs";
 
 function normalizePath(value) {
@@ -14,6 +15,7 @@ function parseArgs(argv) {
   const args = {
     base: "",
     files: [],
+    filesFrom: "",
   };
 
   for (let i = 0; i < argv.length; i += 1) {
@@ -26,6 +28,11 @@ function parseArgs(argv) {
     if (token === "--files") {
       args.files = argv.slice(i + 1);
       break;
+    }
+    if (token === "--files-from") {
+      args.filesFrom = argv[i + 1] ?? "";
+      i += 1;
+      continue;
     }
     if (token === "-h" || token === "--help") {
       printHelp();
@@ -43,8 +50,16 @@ function printHelp() {
 Options:
   --base <sha/ref>       Diff base when discovering changed files
   --files <paths...>     Explicit changed file list
+  --files-from <path>    Newline-delimited explicit changed file list
   -h, --help             Show help
 `);
+}
+
+function readFilesFromList(path) {
+  return readFileSync(path, "utf8")
+    .split(/\r?\n/u)
+    .map((value) => value.trim())
+    .filter(Boolean);
 }
 
 function isCliFacingPath(file) {
@@ -84,10 +99,15 @@ function isCoveragePath(file) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
+  if (args.files.length > 0 && args.filesFrom) {
+    throw new Error("Use only one of --files or --files-from.");
+  }
   const files =
     args.files.length > 0
       ? args.files
-      : getChangedFiles({ explicitBase: args.base }).files;
+      : args.filesFrom
+        ? readFilesFromList(args.filesFrom)
+        : getChangedFiles({ explicitBase: args.base }).files;
   const normalized = files.map(normalizePath).filter(Boolean);
   const cliFacing = normalized.filter(isCliFacingPath);
 

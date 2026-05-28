@@ -42,6 +42,12 @@ vulnerability scan when the required tools are available. Its install step runs
 with `CI=true` when `CI` is unset and `HUSKY=0`, so the full gate is safe in
 headless shells and does not rewrite local Git hook state.
 
+## Local CI parity
+
+Use `pnpm ci:local` when you want the CI-style fast gate without the final
+validation install and vulnerability-scan steps. Do not use `pnpm ci`; that is a
+pnpm built-in command, not a repo script.
+
 ## Changed-aware commands
 
 - `pnpm agents:check`
@@ -58,14 +64,17 @@ changes.
 - `pnpm dogfood:smoke` builds the real CLI and exercises it against temporary
   Git repos under `/tmp/contribution-*`.
 - `pnpm dogfood:release` runs the smoke flow, creates a GoReleaser snapshot,
-  unpacks the current runner artifact, and runs a clean-environment smoke.
+  unpacks the current runner artifact, and runs a clean-environment smoke. This
+  current-runner artifact check is the intended default; add cross-OS artifact
+  execution only if release risk justifies the extra CI cost.
 - `docs/cli-contract.md` is the compact contract map for user-visible command
   behavior and required coverage.
 
 ## Manual release-candidate dogfood
 
-For meaningful product releases, optionally ask an AI agent to install or use
+For meaningful release candidates, optionally ask an AI agent to install or use
 the candidate from public instructions in a clean workspace, analyze a realistic
 repo, generate a public-safe report, and judge install clarity, command
 discoverability, report usefulness, privacy confidence, and confusing output.
-This is qualitative release confidence, not a deploy gate.
+This is qualitative release confidence, not an automated deploy gate or a check
+for every patch release.

@@ -110,7 +110,7 @@ export function getContractAgentPaths(files) {
   );
 }
 
-export function getContractFastValidationCommands(files) {
+export function getContractFastValidationCommands(files, options = {}) {
   const commands = [];
   const seen = new Set();
 
@@ -125,7 +125,9 @@ export function getContractFastValidationCommands(files) {
         cmd: command.cmd,
         args:
           command.receivesChangedFiles === true
-            ? [...command.args, "--files", ...files.map(normalizePath)]
+            ? options.filesFrom
+              ? [...command.args, "--files-from", options.filesFrom]
+              : [...command.args, "--files", ...files.map(normalizePath)]
             : [...command.args],
       });
     }
@@ -134,18 +136,24 @@ export function getContractFastValidationCommands(files) {
   return commands;
 }
 
-export function getContractCoverageValidationCommands(files) {
+export function getContractCoverageValidationCommands(files, options = {}) {
   if (!hasContractSensitiveDomainChanges(files, "cli-contract")) {
     return [];
   }
   return [
     {
       cmd: "node",
-      args: [
-        "scripts/check-cli-contract-coverage.mjs",
-        "--files",
-        ...files.map(normalizePath),
-      ],
+      args: options.filesFrom
+        ? [
+            "scripts/check-cli-contract-coverage.mjs",
+            "--files-from",
+            options.filesFrom,
+          ]
+        : [
+            "scripts/check-cli-contract-coverage.mjs",
+            "--files",
+            ...files.map(normalizePath),
+          ],
     },
   ];
 }

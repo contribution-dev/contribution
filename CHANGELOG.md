@@ -8,6 +8,8 @@ All notable changes to this project will be documented in this file.
   smoke validation.
 - Make final validation headless-safe and include Node script regression tests
   in final and CI gates.
+- Rename the local CI-style package script to `ci:local` and route CLI contract
+  coverage through file-list input to keep changed-aware logs readable.
 - Fix `analyze --format json` completion output so it does not point at a
   markdown report that was not written.
 - Add the V1 local contribution intelligence CLI foundation with private

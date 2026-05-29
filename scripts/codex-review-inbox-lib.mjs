@@ -24,8 +24,6 @@ import {
   defaultReviewsDir,
   isActionableCodexReviewReport,
   isNonFindingCodexReviewStatusActionable,
-  isQueueRecoveryReport,
-  legacyReviewsDir,
   normalizeReviewRootOverride,
   resolveRepoRoot,
   resolveReviewRootOverride,
@@ -124,143 +122,6 @@ export async function writeBacklogRemediationAutomationConfig(
   });
   await rename(tempPath, filePath);
   return payload;
-}
-
-function compareAckEntries(left, right) {
-  const leftAckedAt = toEpochMs(left?.acked_at);
-  const rightAckedAt = toEpochMs(right?.acked_at);
-  if (leftAckedAt !== rightAckedAt) {
-    return leftAckedAt - rightAckedAt;
-  }
-
-  const leftToken = String(left?.version_token ?? "");
-  const rightToken = String(right?.version_token ?? "");
-  const tokenOrder = leftToken.localeCompare(rightToken);
-  if (tokenOrder !== 0) return tokenOrder;
-
-  const leftSource = String(left?.source ?? "");
-  const rightSource = String(right?.source ?? "");
-  const sourceOrder = leftSource.localeCompare(rightSource);
-  if (sourceOrder !== 0) return sourceOrder;
-
-  return String(left?.reason ?? "").localeCompare(String(right?.reason ?? ""));
-}
-
-async function readAckStateForMerge(ackPath) {
-  try {
-    const parsed = await readJsonFile(ackPath);
-    return normalizeAckState(parsed);
-  } catch {
-    return normalizeAckState({});
-  }
-}
-
-async function withAckLocks(ackPaths, fn, lockOptions = {}, logger = console) {
-  const uniquePaths = [
-    ...new Set(ackPaths.map((ackPath) => path.resolve(ackPath))),
-  ].sort();
-  const locks = [];
-  try {
-    for (const ackPath of uniquePaths) {
-      locks.push(await acquireAckLock({ ackPath, ...lockOptions }));
-    }
-    return await fn();
-  } finally {
-    for (const lock of locks.reverse()) {
-      await releaseAckLock(lock, logger);
-    }
-  }
-}
-
-async function mergeAckFiles(sourcePath, targetPath) {
-  await withAckLocks([sourcePath, targetPath], async () => {
-    const [sourceState, targetState] = await Promise.all([
-      readAckStateForMerge(sourcePath),
-      readAckStateForMerge(targetPath),
-    ]);
-
-    const mergedAcks = { ...targetState.acks };
-    for (const [sha, sourceAck] of Object.entries(sourceState.acks)) {
-      const current = mergedAcks[sha];
-      if (!current || compareAckEntries(sourceAck, current) > 0) {
-        mergedAcks[sha] = sourceAck;
-      }
-    }
-
-    const sourceUpdatedAt = String(sourceState.updated_at ?? "");
-    const targetUpdatedAt = String(targetState.updated_at ?? "");
-    const mergedUpdatedAt =
-      compareAckEntries(
-        { acked_at: sourceUpdatedAt },
-        { acked_at: targetUpdatedAt },
-      ) > 0
-        ? sourceUpdatedAt
-        : targetUpdatedAt;
-
-    await writeAckStateAtomic(
-      targetPath,
-      {
-        schema_version: ACK_SCHEMA_VERSION,
-        updated_at: mergedUpdatedAt,
-        acks: mergedAcks,
-      },
-      mergedUpdatedAt || isoNow(),
-    );
-    await rm(sourcePath, { force: true }).catch(() => {});
-  });
-}
-
-async function mergeLegacyReviewTree(sourceDir, targetDir) {
-  const sourceInfo = await stat(sourceDir).catch(() => null);
-  if (!sourceInfo?.isDirectory()) {
-    return;
-  }
-  await mkdir(targetDir, { recursive: true, mode: 0o700 }).catch(() => {});
-  const entries = await readdir(sourceDir, { withFileTypes: true }).catch(
-    () => [],
-  );
-  for (const entry of entries) {
-    const sourcePath = path.join(sourceDir, entry.name);
-    const targetPath = path.join(targetDir, entry.name);
-    const targetInfo = await stat(targetPath).catch(() => null);
-    if (!targetInfo) {
-      await rename(sourcePath, targetPath).catch(() => {});
-      continue;
-    }
-    if (entry.isFile() && targetInfo.isFile() && entry.name === ".ack.json") {
-      await mergeAckFiles(sourcePath, targetPath);
-      continue;
-    }
-    if (entry.isDirectory() && targetInfo.isDirectory()) {
-      await mergeLegacyReviewTree(sourcePath, targetPath);
-    }
-  }
-  const remaining = await readdir(sourceDir).catch(() => []);
-  if (remaining.length === 0) {
-    await rm(sourceDir, { recursive: true, force: true }).catch(() => {});
-  }
-}
-
-async function migrateLegacyReviewsDir(repoRoot, targetDir) {
-  const legacyDir = legacyReviewsDir(repoRoot);
-  if (path.resolve(targetDir) === path.resolve(legacyDir)) {
-    return;
-  }
-  const [targetInfo, legacyInfo] = await Promise.all([
-    stat(targetDir).catch(() => null),
-    stat(legacyDir).catch(() => null),
-  ]);
-  if (!legacyInfo?.isDirectory()) {
-    return;
-  }
-  if (targetInfo?.isDirectory()) {
-    await mergeLegacyReviewTree(legacyDir, targetDir);
-    return;
-  }
-  await mkdir(path.dirname(targetDir), { recursive: true, mode: 0o700 }).catch(
-    () => {},
-  );
-  await rename(legacyDir, targetDir).catch(() => {});
 }
 
 function stableEvidence(item) {
@@ -449,9 +310,7 @@ function reportSortKey(report) {
     .toLowerCase();
   const hasFindings = findings.length > 0;
   const actionableClass = hasFindings
-    ? isQueueRecoveryReport(report)
-      ? 1
-      : 3
+    ? 3
     : isNonFindingCodexReviewStatusActionable(reviewStatus)
       ? 2
       : 0;
@@ -642,53 +501,6 @@ function reportContentHash(report) {
   return crypto.createHash("sha1").update(raw, "utf8").digest("hex");
 }
 
-export function reportContentHashLegacyV2(report) {
-  const normalized = {
-    review_status: String(report?.review_status ?? "")
-      .trim()
-      .toLowerCase(),
-    failure_reason: String(report?.failure_reason ?? "")
-      .trim()
-      .toLowerCase(),
-    summary: String(report?.summary ?? ""),
-    findings: Array.isArray(report?.findings)
-      ? report.findings
-          .map((finding) => {
-            if (
-              !finding ||
-              typeof finding !== "object" ||
-              Array.isArray(finding)
-            ) {
-              return null;
-            }
-            return {
-              finding_id: String(finding?.finding_id ?? ""),
-              title: String(finding?.title ?? ""),
-              severity: String(finding?.severity ?? "")
-                .trim()
-                .toLowerCase(),
-              confidence: Number(finding?.confidence ?? 0),
-              hypothesis: String(finding?.hypothesis ?? ""),
-              impact: String(finding?.impact ?? ""),
-              recommended_direction: String(
-                finding?.recommended_direction ?? "",
-              ),
-              evidence: Array.isArray(finding?.evidence)
-                ? finding.evidence.map((item) => ({
-                    file: String(item?.file ?? ""),
-                    lines: String(item?.lines ?? ""),
-                    reason: String(item?.reason ?? ""),
-                  }))
-                : [],
-            };
-          })
-          .filter(Boolean)
-      : [],
-  };
-  const raw = JSON.stringify(normalized);
-  return crypto.createHash("sha1").update(raw, "utf8").digest("hex");
-}
-
 export function versionTokenForReport(sha, report) {
   return `v2:${sha}:${reportContentHash(report)}`;
 }
@@ -698,15 +510,7 @@ export function ackMatchesReportVersion(sha, report, ackVersionToken) {
   if (!normalizedAck) return false;
 
   const nextToken = versionTokenForReport(sha, report);
-  if (normalizedAck === nextToken) return true;
-
-  const legacyV2Prefix = `v2:${sha}:`;
-  if (normalizedAck.startsWith(legacyV2Prefix)) {
-    const legacyHash = reportContentHashLegacyV2(report);
-    return normalizedAck === `${legacyV2Prefix}${legacyHash}`;
-  }
-
-  return false;
+  return normalizedAck === nextToken;
 }
 
 export function normalizeAckState(parsed) {
@@ -911,15 +715,7 @@ export async function resolveReviewsDir(
     cwd,
   );
   const canonical = defaultReviewsDir(repoRoot);
-  const legacy = legacyReviewsDir(repoRoot);
-  let preferred = override || canonical;
-  if (path.resolve(preferred) === path.resolve(legacy)) {
-    const canonicalInfo = await stat(canonical).catch(() => null);
-    if (canonicalInfo?.isDirectory()) {
-      preferred = canonical;
-    }
-  }
-  await migrateLegacyReviewsDir(repoRoot, preferred);
+  const preferred = override || canonical;
   try {
     await mkdir(path.join(preferred, "logs"), { recursive: true, mode: 0o700 });
     return preferred;
@@ -946,17 +742,7 @@ export async function resolveDurableWorkerReviewsDir(
   preferredDir,
   cwd = process.cwd(),
 ) {
-  const resolved = await resolveReviewsDir(repoRoot, preferredDir, cwd);
-  const legacyDir = legacyReviewsDir(repoRoot);
-  const canonicalDir = defaultReviewsDir(repoRoot);
-  if (path.resolve(resolved) !== path.resolve(legacyDir)) {
-    return resolved;
-  }
-  const canonicalInfo = await stat(canonicalDir).catch(() => null);
-  if (canonicalInfo?.isDirectory()) {
-    return canonicalDir;
-  }
-  return resolved;
+  return resolveReviewsDir(repoRoot, preferredDir, cwd);
 }
 
 export async function collectReports({

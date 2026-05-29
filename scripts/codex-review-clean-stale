@@ -1,15 +1,13 @@
 #!/usr/bin/env node
 
 import { spawnSync } from "node:child_process";
-import { readFile, rm, readdir, stat } from "node:fs/promises";
+import { rm, readdir, stat } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import { resolveReviewsDir } from "./codex-review-inbox-lib.mjs";
-import {
-  DEFAULT_IN_PROGRESS_STALE_MS,
-  isReviewProcessRunningForSha,
-  resolveInProgressStaleMs,
-} from "./codex-review-push-gate-lib.mjs";
+import { isReviewProcessRunningForSha } from "./codex-review-push-gate-lib.mjs";
+
+const DEFAULT_STALE_MS = 10 * 60 * 1000;
 
 const IN_PROGRESS_PATTERNS = [
   /\.patch\./,
@@ -24,7 +22,7 @@ const IN_PROGRESS_PATTERNS = [
 ];
 
 function usage() {
-  const defaultSeconds = Math.floor(DEFAULT_IN_PROGRESS_STALE_MS / 1000);
+  const defaultSeconds = Math.floor(DEFAULT_STALE_MS / 1000);
   console.log(`Usage: scripts/codex-review-clean-stale [options]
 
 Options:
@@ -40,10 +38,8 @@ function parseArgs(argv) {
     reviewsDir:
       process.env.CODE_REVIEW_DIR && process.env.CODE_REVIEW_DIR.trim()
         ? process.env.CODE_REVIEW_DIR.trim()
-        : process.env.CODEX_REVIEW_DIR && process.env.CODEX_REVIEW_DIR.trim()
-          ? process.env.CODEX_REVIEW_DIR.trim()
-          : "",
-    staleMs: resolveInProgressStaleMs(),
+        : "",
+    staleMs: resolveStaleMs(),
     dryRun: false,
   };
 
@@ -80,6 +76,22 @@ function parseArgs(argv) {
   return args;
 }
 
+function parseNonNegativeInt(value) {
+  const parsed = Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed) || parsed < 0) return null;
+  return parsed;
+}
+
+function resolveStaleMs() {
+  const fromEnv = parseNonNegativeInt(
+    process.env.CODEX_REVIEW_IN_PROGRESS_STALE_SECONDS,
+  );
+  if (fromEnv !== null) {
+    return fromEnv * 1000;
+  }
+  return DEFAULT_STALE_MS;
+}
+
 function extractSha(name) {
   const match = /^([0-9a-f]{40})\./i.exec(name);
   return match ? match[1] : "";
@@ -87,75 +99,6 @@ function extractSha(name) {
 
 function isTempInProgressArtifact(name) {
   return IN_PROGRESS_PATTERNS.some((pattern) => pattern.test(name));
-}
-
-async function parseLockOwner(lockDir) {
-  const ownerPath = path.join(lockDir, "owner");
-  const raw = await readFile(ownerPath, "utf8").catch(() => "");
-  const owner = { pid: "", trigger: "", startedAt: "" };
-  for (const line of raw.split(/\r?\n/)) {
-    const [key, ...rest] = line.split("=");
-    const value = rest.join("=").trim();
-    if (!key || !value) continue;
-    if (key === "pid") owner.pid = value;
-    if (key === "trigger") owner.trigger = value;
-    if (key === "started_at") owner.startedAt = value;
-  }
-  return owner;
-}
-
-function isPidAlive(pidRaw) {
-  const pid = Number.parseInt(String(pidRaw || ""), 10);
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
-function classifyReviewOwnerCommandForSha(command, sha) {
-  const value = String(command ?? "");
-  if (!value || !sha) return "inconclusive";
-  if (!/codex-review-commit/i.test(value)) return "mismatch";
-  if (!/--sha\b/i.test(value)) return "inconclusive";
-  const escapedSha = String(sha).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const withShaPattern = new RegExp(
-    `codex-review-commit[^\\n]*--sha\\s+${escapedSha}|--sha\\s+${escapedSha}[^\\n]*codex-review-commit`,
-    "i",
-  );
-  if (withShaPattern.test(value)) return "match";
-  return "inconclusive";
-}
-
-function parseProcessTable(processTableText) {
-  const map = new Map();
-  const lines = String(processTableText ?? "")
-    .split(/\r?\n/)
-    .map((line) => line.trim())
-    .filter(Boolean);
-  for (const line of lines) {
-    const match = /^(\d+)\s+(.+)$/.exec(line);
-    if (!match) continue;
-    map.set(match[1], match[2]);
-  }
-  return map;
-}
-
-function isReviewOwnerProcessForSha({
-  ownerPid,
-  sha,
-  processTable = new Map(),
-  processInspectionAvailable = false,
-}) {
-  if (!ownerPid || !sha) return false;
-  if (!isPidAlive(ownerPid)) return false;
-  if (!processInspectionAvailable) return true;
-
-  const command = processTable.get(String(ownerPid));
-  const classification = classifyReviewOwnerCommandForSha(command, sha);
-  return classification !== "mismatch";
 }
 
 function snapshotProcessTable() {
@@ -169,18 +112,9 @@ function snapshotProcessTable() {
       stdio: ["ignore", "pipe", "ignore"],
     });
     if (ps.status !== 0) continue;
-    const processTableText = String(ps.stdout ?? "");
-    return {
-      available: true,
-      processTableText,
-      processTable: parseProcessTable(processTableText),
-    };
+    return String(ps.stdout ?? "");
   }
-  return {
-    available: false,
-    processTableText: "",
-    processTable: new Map(),
-  };
+  return "";
 }
 
 async function main() {
@@ -188,15 +122,11 @@ async function main() {
   const repoRoot = process.env.REPO_ROOT || process.cwd();
   const reviewsDir = await resolveReviewsDir(repoRoot, args.reviewsDir);
 
-  const snapshot = snapshotProcessTable();
-  const processTable = snapshot.processTable;
-  const processListText = Array.from(processTable.values()).join("\n");
-  const processInspectionAvailable = snapshot.available;
+  const processListText = snapshotProcessTable();
 
   const nowMs = Date.now();
   const scanDirs = [reviewsDir];
   const removable = [];
-  const removableLocks = [];
 
   for (const scanDir of scanDirs) {
     const fileNames = await readdir(scanDir).catch(() => []);
@@ -214,39 +144,11 @@ async function main() {
 
       removable.push(fullPath);
     }
-
-    for (const name of fileNames) {
-      if (!name.endsWith(".review.lock")) continue;
-
-      const fullPath = path.join(scanDir, name);
-      const info = await stat(fullPath).catch(() => null);
-      if (!info || !Number.isFinite(info.mtimeMs)) continue;
-      if (nowMs - info.mtimeMs < args.staleMs) continue;
-
-      const owner = await parseLockOwner(fullPath);
-      const lockSha = extractSha(name);
-      if (
-        isReviewOwnerProcessForSha({
-          ownerPid: owner.pid,
-          sha: lockSha,
-          processTable,
-          processInspectionAvailable,
-        })
-      ) {
-        continue;
-      }
-
-      removableLocks.push({
-        path: fullPath,
-        ownerPid: owner.pid || "unknown",
-        trigger: owner.trigger || "unknown",
-      });
-    }
   }
 
-  if (removable.length === 0 && removableLocks.length === 0) {
+  if (removable.length === 0) {
     console.log(
-      "[codex-review-clean-stale] no stale review temp artifacts or locks found",
+      "[codex-review-clean-stale] no stale review temp artifacts found",
     );
     return;
   }
@@ -258,17 +160,8 @@ async function main() {
     console.log(`${args.dryRun ? "would-delete" : "deleted"} ${filePath}`);
   }
 
-  for (const lock of removableLocks) {
-    if (!args.dryRun) {
-      await rm(lock.path, { recursive: true, force: true });
-    }
-    console.log(
-      `${args.dryRun ? "would-delete" : "deleted"} ${lock.path} (owner_pid=${lock.ownerPid} trigger=${lock.trigger})`,
-    );
-  }
-
   console.log(
-    `[codex-review-clean-stale] ${args.dryRun ? "would_remove" : "removed"} temp_artifacts=${removable.length} stale_locks=${removableLocks.length} stale_seconds=${Math.floor(args.staleMs / 1000)}`,
+    `[codex-review-clean-stale] ${args.dryRun ? "would_remove" : "removed"} temp_artifacts=${removable.length} stale_seconds=${Math.floor(args.staleMs / 1000)}`,
   );
 }
 

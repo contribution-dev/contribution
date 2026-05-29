@@ -176,8 +176,6 @@ async function collectQueuedShas(reviewsDir) {
   const dirPaths = [
     path.join(reviewsDir, "queue", "codex", "pending"),
     path.join(reviewsDir, "queue", "codex", "active"),
-    path.join(reviewsDir, "queue", "pending"),
-    path.join(reviewsDir, "queue", "active"),
   ];
   for (const dirPath of dirPaths) {
     const entries = await readdir(dirPath, { withFileTypes: true }).catch(

@@ -23,7 +23,6 @@ import {
   readReviewQueueBacklog,
   readReviewQueuePause,
 } from "./codex-review-queue-lib.mjs";
-import { repairLegacyReviewState } from "./codex-review-repair-state.mjs";
 import { resolveCodexReviewCliContext } from "./lib/codex-review-cli-bootstrap.mjs";
 
 function usage() {
@@ -273,11 +272,6 @@ async function renderStatus(
     sinceMs: Date.now() - 6 * 60 * 60 * 1000,
   });
   const stale = await collectStaleActiveJobs(reviewsDir);
-  const repairPreview = await repairLegacyReviewState({
-    repoRoot,
-    reviewsDir,
-    dryRun: true,
-  }).catch(() => null);
   const reports = await recentReports(reviewsDir, filterSha);
   const launchctlLines = readLaunchctlWorkerStatus(repoRoot);
   const workerProcesses = processSnapshot(filterSha);
@@ -371,12 +365,6 @@ async function renderStatus(
   console.log(
     `backlog_freeze_active=${backlogState.active ? 1 : 0} parked_pending=${codexSummary.pendingBlockedByBacklog ?? 0}`,
   );
-  if (repairPreview) {
-    console.log("[invariants]");
-    console.log(
-      `misplaced_log_reports=${repairPreview.movedMisplacedLogReports + repairPreview.deletedMisplacedLogReports} queue_recovery_reports=${repairPreview.removedQueueRecoveryReports} legacy_outcome_jobs=${repairPreview.removedLegacyOutcomeJobs} markdown_repairs=${repairPreview.regeneratedMarkdown} rerun_candidates=${repairPreview.requeuedMissingCanonicalReports} invariant_warnings=${repairPreview.invariantWarnings}`,
-    );
-  }
   console.log("[recent-reports]");
   for (const report of reports.length > 0 ? reports : [{ name: "none" }]) {
     console.log(report.name);

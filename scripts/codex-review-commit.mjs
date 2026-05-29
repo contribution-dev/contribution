@@ -542,9 +542,7 @@ export async function executeCodexReviewCommit({
 
   const reviewsDir = await resolveReviewsDir(
     repoRoot,
-    processEnv.CODE_REVIEW_DIR ??
-      processEnv.CODEX_REVIEW_DIR ??
-      path.join(repoRoot, ".code-reviews"),
+    processEnv.CODE_REVIEW_DIR ?? path.join(repoRoot, ".code-reviews"),
     repoRoot,
   );
   const actionFileJson = path.join(reviewsDir, `${sha}.json`);

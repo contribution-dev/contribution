@@ -19,6 +19,9 @@ This repo uses Go for product code and Node/pnpm for repository automation.
   blocker findings.
 - Codex review is the only active review lane. Do not add dormant lane plumbing
   without a runnable producer, gate, and tests.
+- Review state is canonical under `.code-reviews` with Codex queue jobs in
+  `.code-reviews/queue/codex/{pending,active}`. Historical `.codex/reviews`
+  roots and top-level `queue/{pending,active}` layouts are not auto-migrated.
 - Review severity parsing and rank comparisons are centralized in
   `scripts/lib/review-severity.mjs`; control-plane and risk-policy scripts
   should import that helper instead of carrying local rank tables.

@@ -6,7 +6,6 @@ import {
   resolveRepoRoot,
   resolveReviewsDir,
 } from "../codex-review-inbox-lib.mjs";
-import { repairLegacyReviewState } from "../codex-review-repair-state.mjs";
 
 export async function prepareCodexReviewCliContext({
   invocationCwd = process.cwd(),
@@ -31,13 +30,9 @@ export async function prepareCodexReviewCliContext({
     path.resolve(reviewsDir) !== path.resolve(reviewsDirOverride)
   ) {
     logger.warn(
-      `[${warnPrefix}] Redirecting legacy reviews dir ${reviewsDirOverride} -> ${reviewsDir}`,
+      `[${warnPrefix}] Redirecting reviews dir ${reviewsDirOverride} -> ${reviewsDir}`,
     );
   }
-
-  await repairLegacyReviewState({ repoRoot, reviewsDir }).catch((error) => {
-    logger.warn(`[${warnPrefix}] legacy repair skipped: ${error.message}`);
-  });
 
   return { repoRoot, reviewsDir };
 }

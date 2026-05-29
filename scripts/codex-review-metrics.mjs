@@ -112,16 +112,6 @@ export async function collectLaneThroughput(reviewsDir, lane) {
     if (!report || typeof report !== "object" || Array.isArray(report)) {
       continue;
     }
-    const findingModels = Array.isArray(report.finding_models)
-      ? report.finding_models
-      : [];
-    if (
-      findingModels.some(
-        (value) => String(value ?? "").trim() === "queue-recovery",
-      )
-    ) {
-      continue;
-    }
     const completedAtMs = Date.parse(
       String(
         report?.review_engines?.[lane]?.completed_at ??

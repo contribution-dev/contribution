@@ -117,25 +117,8 @@ function launchAgentBaseLabel(repoRoot, lane) {
   return `com.contribution.codex-review-worker.${lane}.${repoHash(repoRoot)}`;
 }
 
-function legacyPerLaneLaunchAgentLabel(repoRoot, lane) {
-  return launchAgentBaseLabel(repoRoot, lane);
-}
-
-function legacyCleanupLanes() {
-  return ["local"];
-}
-
 function launchAgentLabel(repoRoot, lane, workerSlot) {
   return `${launchAgentBaseLabel(repoRoot, lane)}.w${workerSlot}`;
-}
-
-function legacyLaunchAgentLabel(repoRoot) {
-  const suffix = crypto
-    .createHash("sha1")
-    .update(String(repoRoot), "utf8")
-    .digest("hex")
-    .slice(0, 10);
-  return `com.contribution.codex-review-worker.${suffix}`;
 }
 
 function launchAgentPath(label) {
@@ -516,7 +499,6 @@ async function statusLaneAgents({
   desiredWorkerSlots = [],
 }) {
   const discovered = new Set(await discoverLaunchAgentLabels(repoRoot, lane));
-  discovered.add(legacyPerLaneLaunchAgentLabel(repoRoot, lane));
   for (const workerSlot of desiredWorkerSlots) {
     discovered.add(launchAgentLabel(repoRoot, lane, workerSlot));
   }
@@ -543,14 +525,6 @@ async function removeLaneAgents({
   desiredWorkerSlots = [],
   reason,
 }) {
-  const legacyPerLaneLabel = legacyPerLaneLaunchAgentLabel(repoRoot, lane);
-  const legacyPerLanePlistPath = await removeLaunchAgent(
-    domain,
-    legacyPerLaneLabel,
-  );
-  console.log(
-    `[codex-review-launchctl] ${reason} legacy-per-lane lane=${lane} label=${legacyPerLaneLabel} plist=${legacyPerLanePlistPath}`,
-  );
   const labels = new Set(await discoverLaunchAgentLabels(repoRoot, lane));
   for (const workerSlot of desiredWorkerSlots) {
     labels.add(launchAgentLabel(repoRoot, lane, workerSlot));
@@ -558,9 +532,6 @@ async function removeLaneAgents({
   for (const label of [...labels].sort((left, right) =>
     left.localeCompare(right, undefined, { numeric: true }),
   )) {
-    if (label === legacyPerLaneLabel) {
-      continue;
-    }
     const plistPath = await removeLaunchAgent(domain, label);
     console.log(
       `[codex-review-launchctl] ${reason} lane=${lane} label=${label} plist=${plistPath}`,
@@ -577,8 +548,6 @@ async function main() {
   );
   const domain = launchctlDomain();
   const desiredLanes = args.lane === "all" ? ["codex"] : [args.lane];
-  const retiredLanes = legacyCleanupLanes();
-  const legacyLabel = legacyLaunchAgentLabel(repoRoot);
   const watchdogLabel = watchdogLaunchAgentLabel(repoRoot);
   const remediationLabel = backlogRemediationLaunchAgentLabel(repoRoot);
   const manageWatchdog =
@@ -631,23 +600,12 @@ async function main() {
         console.log(watchdog.details.trim());
       }
     }
-    const legacy = await launchAgentStatus(domain, legacyLabel);
-    if (legacy.installed || legacy.running) {
-      console.log(
-        `[codex-review-launchctl] lane=legacy-single label=${legacy.label} installed=${legacy.installed ? "1" : "0"} running=${legacy.running ? "1" : "0"} plist=${legacy.plistPath}`,
-      );
-      if (legacy.details.trim()) {
-        console.log(legacy.details.trim());
-      }
-    }
-    for (const lane of [...new Set([...desiredLanes, ...retiredLanes])]) {
+    for (const lane of desiredLanes) {
       await statusLaneAgents({
         domain,
         repoRoot,
         lane,
-        desiredWorkerSlots: desiredLanes.includes(lane)
-          ? desiredWorkerSlots(args, lane)
-          : [],
+        desiredWorkerSlots: desiredWorkerSlots(args, lane),
       });
     }
     return;
@@ -664,10 +622,6 @@ async function main() {
   await mkdir(path.dirname(plistPaths[0]), { recursive: true, mode: 0o700 });
   if (args.command === "install") {
     let watchdogInstallError = "";
-    const legacyPlistPath = await removeLaunchAgent(domain, legacyLabel);
-    console.log(
-      `[codex-review-launchctl] removed legacy-single label=${legacyLabel} plist=${legacyPlistPath}`,
-    );
     const remediationPlistPath = launchAgentPath(remediationLabel);
     await writeFile(
       remediationPlistPath,
@@ -687,16 +641,15 @@ async function main() {
     console.log(
       `[codex-review-launchctl] installed lane=remediation label=${remediationLabel} plist=${remediationPlistPath}`,
     );
-    for (const lane of [...new Set([...desiredLanes, ...retiredLanes])]) {
+    for (const lane of desiredLanes) {
       const desired = new Set(
-        (desiredLanes.includes(lane) ? desiredWorkerSlots(args, lane) : []).map(
-          (workerSlot) => launchAgentLabel(repoRoot, lane, workerSlot),
+        desiredWorkerSlots(args, lane).map((workerSlot) =>
+          launchAgentLabel(repoRoot, lane, workerSlot),
         ),
       );
       const discovered = new Set(
         await discoverLaunchAgentLabels(repoRoot, lane),
       );
-      discovered.add(legacyPerLaneLaunchAgentLabel(repoRoot, lane));
       for (const label of discovered) {
         if (desired.has(label)) {
           continue;
@@ -705,9 +658,6 @@ async function main() {
         console.log(
           `[codex-review-launchctl] removed extra lane=${lane} label=${label} plist=${plistPath}`,
         );
-      }
-      if (!desiredLanes.includes(lane)) {
-        continue;
       }
       for (const workerSlot of desiredWorkerSlots(args, lane)) {
         const label = launchAgentLabel(repoRoot, lane, workerSlot);
@@ -793,18 +743,12 @@ async function main() {
         `[codex-review-launchctl] uninstalled lane=watchdog label=${watchdogLabel} plist=${watchdogPlistPath}`,
       );
     }
-    const legacyPlistPath = await removeLaunchAgent(domain, legacyLabel);
-    console.log(
-      `[codex-review-launchctl] uninstalled legacy-single label=${legacyLabel} plist=${legacyPlistPath}`,
-    );
-    for (const lane of [...new Set([...desiredLanes, ...retiredLanes])]) {
+    for (const lane of desiredLanes) {
       await removeLaneAgents({
         domain,
         repoRoot,
         lane,
-        desiredWorkerSlots: desiredLanes.includes(lane)
-          ? desiredWorkerSlots(args, lane)
-          : [],
+        desiredWorkerSlots: desiredWorkerSlots(args, lane),
         reason: "uninstalled",
       });
     }

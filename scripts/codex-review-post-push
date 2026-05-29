@@ -30,28 +30,22 @@ fi
 
 cd "$REPO_ROOT"
 . "$REPO_ROOT/scripts/codex-review-dir.sh"
-if ! REVIEWS_DIR="$(resolve_codex_reviews_dir "$REPO_ROOT" "${CODE_REVIEW_DIR:-${CODEX_REVIEW_DIR:-$REPO_ROOT/.code-reviews}}")"; then
-  REVIEWS_DIR="${CODE_REVIEW_DIR:-${CODEX_REVIEW_DIR:-$REPO_ROOT/.code-reviews}}"
+if ! REVIEWS_DIR="$(resolve_codex_reviews_dir "$REPO_ROOT" "${CODE_REVIEW_DIR:-$REPO_ROOT/.code-reviews}")"; then
+  REVIEWS_DIR="${CODE_REVIEW_DIR:-$REPO_ROOT/.code-reviews}"
 fi
-
-node "$REPO_ROOT/scripts/codex-review-repair-state.mjs" \
-  --repo-root "$REPO_ROOT" \
-  --reviews-dir "$REVIEWS_DIR" >/dev/null 2>&1 || true
 
 has_completed_review_artifact() {
   local sha="$1"
   local report_json="$REVIEWS_DIR/$sha.json"
   local queue_pending_json="$REVIEWS_DIR/queue/codex/pending/$sha.json"
   local queue_active_json="$REVIEWS_DIR/queue/codex/active/$sha.json"
-  local legacy_queue_pending_json="$REVIEWS_DIR/queue/pending/$sha.json"
-  local legacy_queue_active_json="$REVIEWS_DIR/queue/active/$sha.json"
 
   if [ "${CODEX_REVIEW_POST_PUSH_SKIP_IF_REVIEWED:-1}" = "0" ]; then
     return 1
   fi
 
   if [ ! -s "$report_json" ]; then
-    if [ -s "$queue_pending_json" ] || [ -s "$queue_active_json" ] || [ -s "$legacy_queue_pending_json" ] || [ -s "$legacy_queue_active_json" ]; then
+    if [ -s "$queue_pending_json" ] || [ -s "$queue_active_json" ]; then
       return 1
     fi
     if command -v node >/dev/null 2>&1; then
@@ -88,13 +82,9 @@ try {
   const status = String(parsed.review_status || "").trim().toLowerCase();
   const codexStatusRaw = String((((parsed.review_engines || {}).codex || {}).status) || "").trim().toLowerCase();
   const codexStatus = codexStatusRaw || status;
-  const findingModels = Array.isArray(parsed.finding_models)
-    ? parsed.finding_models.map((value) => String(value || "").trim())
-    : [];
   const findings = Array.isArray(parsed.findings) ? parsed.findings : [];
   const reviewedAt = String(parsed.last_reviewed || "").trim();
   if (
-    !findingModels.includes("queue-recovery") &&
     status === "ok" &&
     codexStatus === "ok" &&
     findings.length === 0 &&
@@ -123,10 +113,9 @@ except Exception:
 status = str(parsed.get("review_status", ""))
 codex_status_raw = str(((parsed.get("review_engines") or {}).get("codex") or {}).get("status", "")).strip().lower()
 codex_status = codex_status_raw or status
-finding_models = [str(value or "").strip() for value in (parsed.get("finding_models") or [])]
 findings = parsed.get("findings") or []
 reviewed_at = str(parsed.get("last_reviewed", "")).strip()
-if "queue-recovery" not in finding_models and status == "ok" and codex_status == "ok" and len(findings) == 0 and reviewed_at:
+if status == "ok" and codex_status == "ok" and len(findings) == 0 and reviewed_at:
     raise SystemExit(0)
 raise SystemExit(1)
 PY

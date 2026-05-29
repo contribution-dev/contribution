@@ -54,9 +54,7 @@ function parseArgs(argv) {
     reviewsDir:
       process.env.CODE_REVIEW_DIR && process.env.CODE_REVIEW_DIR.trim()
         ? process.env.CODE_REVIEW_DIR.trim()
-        : process.env.CODEX_REVIEW_DIR && process.env.CODEX_REVIEW_DIR.trim()
-          ? process.env.CODEX_REVIEW_DIR.trim()
-          : "",
+        : "",
     shaFilters: [],
     contextFile: "",
     stdinFile: "",

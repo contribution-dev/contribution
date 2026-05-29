@@ -9,3 +9,12 @@ test("hooks enqueue commit review and gate pushes", () => {
   assert.match(prePush, /codex-review-push-gate/);
   assert.match(prePush, /run-changed-checks\.mjs/);
 });
+
+test("post-push hook uses canonical Codex queue only", () => {
+  const postPush = readFileSync("scripts/codex-review-post-push", "utf8");
+  assert.match(postPush, /queue\/codex\/pending/);
+  assert.match(postPush, /queue\/codex\/active/);
+  assert.doesNotMatch(postPush, /codex-review-repair-state/);
+  assert.doesNotMatch(postPush, /queue\/pending/);
+  assert.doesNotMatch(postPush, /CODEX_REVIEW_DIR/);
+});

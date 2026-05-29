@@ -25,8 +25,6 @@ import {
   isReviewQueueJobStale,
   isReviewJobRetryDeferred,
   isValidReviewSha,
-  LEGACY_REVIEW_QUEUE_STATUSES,
-  migrateLegacyReviewQueueLayout,
   normalizeRetryAfterAt,
   normalizeReviewQueueBacklogState,
   normalizeReviewQueueJob,
@@ -68,7 +66,7 @@ function jobFilePath(reviewsDir, lane, status, sha) {
 }
 
 function allJobPaths(reviewsDir, lane, sha) {
-  return LEGACY_REVIEW_QUEUE_STATUSES.map((status) => ({
+  return REVIEW_QUEUE_STATUSES.map((status) => ({
     status,
     filePath: jobFilePath(reviewsDir, lane, status, sha),
   }));
@@ -152,13 +150,6 @@ function updatePendingMetadata(job, { trigger, source, reason, force }) {
   return next;
 }
 
-async function removeLegacyLockDir(reviewsDir, sha) {
-  await rm(path.join(reviewsDir, `${sha}.review.lock`), {
-    recursive: true,
-    force: true,
-  }).catch(() => {});
-}
-
 function workerIdentity(overrides = {}) {
   return {
     id:
@@ -198,7 +189,6 @@ async function locateJob(reviewsDir, sha, lane = "codex") {
 
 export async function ensureReviewQueue(reviewsDir, lane = "codex") {
   const normalizedLane = normalizeReviewQueueLane(lane);
-  await migrateLegacyReviewQueueLayout(reviewsDir, normalizedLane);
   const root = queueRoot(reviewsDir, normalizedLane);
   await mkdir(root, { recursive: true, mode: 0o700 });
   for (const status of REVIEW_QUEUE_STATUSES) {
@@ -318,13 +308,12 @@ export async function enqueueReviewJob({
   }
 
   await atomicWriteJson(nextPath, nextJob);
-  await removeLegacyLockDir(reviewsDir, normalizedSha);
   return { job: nextJob, status: nextJob.status, enqueued, deduped: true };
 }
 
 export async function listReviewJobs(
   reviewsDir,
-  statuses = LEGACY_REVIEW_QUEUE_STATUSES,
+  statuses = REVIEW_QUEUE_STATUSES,
   { lane = "codex" } = {},
 ) {
   const normalizedLane = normalizeReviewQueueLane();
@@ -432,7 +421,6 @@ export async function reclaimStaleActiveJobs(
     );
     await atomicWriteJson(pendingPath, nextJob);
     await rm(entry.filePath, { force: true });
-    await removeLegacyLockDir(reviewsDir, entry.job.sha);
     reclaimed.push(nextJob.sha);
   }
   return reclaimed;
@@ -511,7 +499,6 @@ export async function claimNextReviewJob(
       },
     };
     await atomicWriteJson(activePath, nextJob);
-    await removeLegacyLockDir(reviewsDir, nextJob.sha);
     return {
       lane: normalizedLane,
       status: "active",
@@ -595,7 +582,6 @@ async function collapseQueuedJobFromExistingReport(
     return false;
   }
   await rm(entry.filePath, { force: true });
-  await removeLegacyLockDir(reviewsDir, entry.job.sha);
   return true;
 }
 
@@ -657,7 +643,6 @@ export async function finalizeReviewJob(
         },
   };
   await rm(existing.filePath, { force: true });
-  await removeLegacyLockDir(reviewsDir, sha);
   return nextJob;
 }
 
@@ -714,7 +699,6 @@ export async function requeueReviewJob(
   const pendingPath = jobFilePath(reviewsDir, normalizedLane, "pending", sha);
   await atomicWriteJson(pendingPath, nextJob);
   await rm(existing.filePath, { force: true });
-  await removeLegacyLockDir(reviewsDir, sha);
   return nextJob;
 }
 

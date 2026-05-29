@@ -10,7 +10,6 @@ import {
 import {
   classifyBacklogArtifact,
   isActionableCodexReviewReport,
-  isQueueRecoveryReport,
   reportSatisfiesCanonicalCodexLane,
   resolveRepoRoot,
 } from "./codex-review-state.mjs";
@@ -267,7 +266,6 @@ export async function buildStaleSupersessionArchiver(
   const reviewed = await loadReviewedShas({ repoRoot }).catch(() => null);
   const headReviewed = Boolean(
     (headReport &&
-      !isQueueRecoveryReport(headReport) &&
       reportSatisfiesCanonicalCodexLane(headReport) &&
       String(headReport?.last_reviewed ?? "").trim()) ||
     reviewed?.lanes?.codex?.clean?.has(normalizedHeadSha),
@@ -300,11 +298,7 @@ export async function buildStaleSupersessionArchiver(
     }
 
     const report = artifact?.report ?? artifact?.parsed ?? null;
-    if (
-      !report ||
-      !isActionableCodexReviewReport(report, true) ||
-      isQueueRecoveryReport(report)
-    ) {
+    if (!report || !isActionableCodexReviewReport(report, true)) {
       return false;
     }
 

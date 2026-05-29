@@ -7,6 +7,8 @@ All notable changes to this project will be documented in this file.
 - Lock generated artifact JSON contract shapes, remove the placeholder
   `privacy.upload_enabled` field, and guard review automation lanes as
   Codex-only.
+- Remove obsolete review-state migration paths so review automation uses the
+  canonical `.code-reviews` Codex queue directly.
 - Add direct `internal/analysis.Run` coverage for output format behavior and
   GitHub metadata degradation; `analyze --format markdown` now still writes the
   canonical `analysis.json`.

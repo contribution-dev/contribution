@@ -1,22 +1,14 @@
 import { spawnSync } from "node:child_process";
-import { mkdir, readdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { reviewSeverityRank } from "./review-severity.mjs";
 
 export const REVIEW_QUEUE_SCHEMA_VERSION = 1;
 export const REVIEW_QUEUE_STATUSES = ["pending", "active"];
 export const REVIEW_QUEUE_LANES = ["codex"];
-export const LEGACY_REVIEW_QUEUE_STATUSES = [
-  "pending",
-  "active",
-  "completed",
-  "failed",
-];
 export const DEFAULT_STALE_AFTER_MS = 10 * 60 * 1000;
 export const NON_ACTIONABLE_SUMMARY_PATTERN =
   /no commit-scoped bugs|no commit-scoped correctness issues|no actionable findings|no high-confidence behavioral regressions|no concrete bugs|no commit-scoped bugs or regressions found/i;
 export const CODE_REVIEW_ROOT_DIRNAME = ".code-reviews";
-export const LEGACY_CODE_REVIEW_ROOT_DIRNAME = path.join(".codex", "reviews");
 export const INCOMPLETE_REVIEW_STATUSES = ["partial_success"];
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
@@ -33,17 +25,11 @@ export function defaultReviewsDir(repoRoot) {
   return path.join(repoRoot, CODE_REVIEW_ROOT_DIRNAME);
 }
 
-export function legacyReviewsDir(repoRoot) {
-  return path.join(repoRoot, LEGACY_CODE_REVIEW_ROOT_DIRNAME);
-}
-
 export function resolveReviewRootOverride(preferredDir = "") {
   const explicit = String(preferredDir || "").trim();
   if (explicit) return explicit;
   const envPreferred = String(process.env.CODE_REVIEW_DIR ?? "").trim();
   if (envPreferred) return envPreferred;
-  const legacyPreferred = String(process.env.CODEX_REVIEW_DIR ?? "").trim();
-  if (legacyPreferred) return legacyPreferred;
   return "";
 }
 
@@ -58,22 +44,14 @@ export function normalizeReviewRootOverride(
   }
   const resolved = path.isAbsolute(value) ? value : path.resolve(cwd, value);
   const normalizedResolved = path.resolve(resolved);
-  for (const rootDir of [
-    defaultReviewsDir(repoRoot),
-    legacyReviewsDir(repoRoot),
-  ]) {
-    const normalizedRoot = path.resolve(rootDir);
-    const relative = path.relative(normalizedRoot, normalizedResolved);
-    if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
-      continue;
-    }
-    const segments = relative.split(path.sep).filter(Boolean);
-    if (
-      segments.length > 0 &&
-      segments.every((segment) => segment === "logs")
-    ) {
-      return normalizedRoot;
-    }
+  const normalizedRoot = path.resolve(defaultReviewsDir(repoRoot));
+  const relative = path.relative(normalizedRoot, normalizedResolved);
+  if (!relative || relative.startsWith("..") || path.isAbsolute(relative)) {
+    return normalizedResolved;
+  }
+  const segments = relative.split(path.sep).filter(Boolean);
+  if (segments.length > 0 && segments.every((segment) => segment === "logs")) {
+    return normalizedRoot;
   }
   return normalizedResolved;
 }
@@ -90,54 +68,6 @@ export function resolveRepoRoot(cwd = process.cwd()) {
   }
   const resolved = String(result.stdout ?? "").trim();
   return resolved || fallback;
-}
-
-async function mergeLegacyStatusDir(sourceDir, targetDir) {
-  const sourceInfo = await stat(sourceDir).catch(() => null);
-  if (!sourceInfo?.isDirectory()) {
-    return;
-  }
-  await mkdir(targetDir, { recursive: true, mode: 0o700 }).catch(() => {});
-  const entries = await readdir(sourceDir).catch(() => []);
-  for (const entry of entries) {
-    const sourcePath = path.join(sourceDir, entry);
-    const targetPath = path.join(targetDir, entry);
-    const targetInfo = await stat(targetPath).catch(() => null);
-    if (!targetInfo) {
-      await rename(sourcePath, targetPath).catch(() => {});
-    }
-  }
-  const remaining = await readdir(sourceDir).catch(() => []);
-  if (remaining.length === 0) {
-    await rm(sourceDir, { recursive: true, force: true }).catch(() => {});
-  }
-}
-
-export async function migrateLegacyReviewQueueLayout(reviewsDir, lane) {
-  if (lane !== "codex") {
-    return;
-  }
-  const legacyRoot = path.join(reviewsDir, "queue");
-  for (const status of LEGACY_REVIEW_QUEUE_STATUSES) {
-    const legacyDir = path.join(legacyRoot, status);
-    const legacyInfo = await stat(legacyDir).catch(() => null);
-    if (!legacyInfo?.isDirectory()) {
-      continue;
-    }
-    const targetDir = path.join(reviewsDir, "queue", "codex", status);
-    const targetInfo = await stat(targetDir).catch(() => null);
-    await mkdir(path.dirname(targetDir), {
-      recursive: true,
-      mode: 0o700,
-    }).catch(() => {});
-    if (!targetInfo) {
-      await rename(legacyDir, targetDir).catch(() => {});
-      continue;
-    }
-    if (targetInfo.isDirectory()) {
-      await mergeLegacyStatusDir(legacyDir, targetDir);
-    }
-  }
 }
 
 export function parseBacklogMeta(markdown) {
@@ -601,9 +531,7 @@ export function normalizeReviewQueueJob(parsed, statusHint = "") {
   }
   const sha = String(parsed.sha ?? "").trim();
   if (!isValidReviewSha(sha)) return null;
-  const status = LEGACY_REVIEW_QUEUE_STATUSES.includes(
-    String(parsed.status ?? ""),
-  )
+  const status = REVIEW_QUEUE_STATUSES.includes(String(parsed.status ?? ""))
     ? String(parsed.status)
     : statusHint || "pending";
   const triggersSeen = Array.isArray(parsed.triggers_seen)
@@ -721,15 +649,6 @@ export function normalizeReviewQueueBacklogState(parsed, lane = "codex") {
   };
 }
 
-export function isQueueRecoveryReport(report) {
-  const findingModels = Array.isArray(report?.finding_models)
-    ? report.finding_models
-    : [];
-  return findingModels.some(
-    (value) => String(value ?? "").trim() === "queue-recovery",
-  );
-}
-
 export function isNonFindingCodexReviewStatusActionable(reviewStatus) {
   const normalized = String(reviewStatus ?? "")
     .trim()
@@ -802,22 +721,6 @@ export function hasDurableReviewEvidence(report, lane = "codex") {
     return true;
   }
   return Array.isArray(report?.findings) && report.findings.length > 0;
-}
-
-export function isSyntheticFailurePlaceholder(report, lane = "codex") {
-  if (!report || typeof report !== "object" || Array.isArray(report)) {
-    return false;
-  }
-  if (isQueueRecoveryReport(report)) {
-    return true;
-  }
-  if (hasDurableReviewEvidence(report, lane)) {
-    return false;
-  }
-  const reviewStatus = String(report?.review_status ?? "")
-    .trim()
-    .toLowerCase();
-  return Boolean(reviewStatus && reviewStatus !== "ok");
 }
 
 export function isReviewQueueJobStale({

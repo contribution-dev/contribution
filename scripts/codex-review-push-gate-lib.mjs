@@ -7,9 +7,7 @@ import {
   mkdir,
   open,
   readFile,
-  readdir,
   rename,
-  stat,
   unlink,
   writeFile,
 } from "node:fs/promises";
@@ -32,7 +30,6 @@ import {
 import {
   isActionableCodexReviewReport,
   isIncompleteCodexReviewReport,
-  isQueueRecoveryReport,
 } from "./lib/codex-review-state.mjs";
 
 export { ZERO_SHA, computeOutgoingShas, parseRefUpdates };
@@ -68,17 +65,6 @@ export function isReviewProcessRunningForSha(sha, processListText) {
   return withShaPattern.test(String(processListText ?? ""));
 }
 
-function isPidAlive(pidRaw) {
-  const pid = Number.parseInt(String(pidRaw ?? ""), 10);
-  if (!Number.isInteger(pid) || pid <= 0) return false;
-  try {
-    process.kill(pid, 0);
-    return true;
-  } catch {
-    return false;
-  }
-}
-
 function parseProcessTable(processTableText) {
   const map = new Map();
   const lines = String(processTableText ?? "")
@@ -91,44 +77,6 @@ function parseProcessTable(processTableText) {
     map.set(match[1], match[2]);
   }
   return map;
-}
-
-export function classifyReviewProcessCommandForSha(command, sha) {
-  const value = String(command ?? "");
-  if (!value || !sha) return "inconclusive";
-  if (!/codex-review-commit/i.test(value)) return "mismatch";
-  if (!/--sha\b/i.test(value)) return "inconclusive";
-
-  const escapedSha = sha.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const withShaPattern = new RegExp(
-    `codex-review-commit[^\\n]*--sha\\s+${escapedSha}|--sha\\s+${escapedSha}[^\\n]*codex-review-commit`,
-    "i",
-  );
-  if (withShaPattern.test(value)) return "match";
-  return "inconclusive";
-}
-
-async function hasActiveReviewLockForSha({
-  reviewsDir,
-  sha,
-  processTable = new Map(),
-  readFileFn = readFile,
-}) {
-  if (!sha) return false;
-  const ownerPath = path.join(reviewsDir, `${sha}.review.lock`, "owner");
-  const rawOwner = await readFileFn(ownerPath, "utf8").catch(() => "");
-  if (!rawOwner) return false;
-
-  const pidLine = rawOwner
-    .split(/\r?\n/)
-    .find((line) => String(line ?? "").startsWith("pid="));
-  const pid = String((pidLine ?? "").slice(4).trim());
-  if (!pid) return false;
-  if (!isPidAlive(pid)) return false;
-
-  const command = processTable.get(pid);
-  const classification = classifyReviewProcessCommandForSha(command, sha);
-  return classification !== "mismatch";
 }
 
 function snapshotProcessTable() {
@@ -157,71 +105,6 @@ function snapshotProcessTable() {
   };
 }
 
-const IN_PROGRESS_PATTERNS = [
-  /\.patch\./,
-  /\.prompt\./,
-  /\.tmp-json\./,
-  /\.tmp-json-lm\./,
-  /\.tmp-md\./,
-  /\.tmp-status-/,
-  /\.tmp-reason-/,
-  /\.tmp-attempts-/,
-  /\.tmp\./,
-];
-
-export const DEFAULT_IN_PROGRESS_STALE_MS = 10 * 60 * 1000;
-
-export function hasInProgressArtifactsForSha(sha, fileNames) {
-  const prefix = `${sha}.`;
-  return fileNames.some((name) => {
-    if (!name.startsWith(prefix)) return false;
-    return IN_PROGRESS_PATTERNS.some((pattern) => pattern.test(name));
-  });
-}
-
-function parseNonNegativeInt(value) {
-  const parsed = Number.parseInt(String(value ?? ""), 10);
-  if (!Number.isFinite(parsed) || parsed < 0) return null;
-  return parsed;
-}
-
-export function resolveInProgressStaleMs() {
-  const fromEnv = parseNonNegativeInt(
-    process.env.CODEX_REVIEW_IN_PROGRESS_STALE_SECONDS,
-  );
-  if (fromEnv !== null) {
-    return fromEnv * 1000;
-  }
-  return DEFAULT_IN_PROGRESS_STALE_MS;
-}
-
-export async function hasFreshInProgressArtifactsForSha({
-  reviewsDir,
-  sha,
-  staleAfterMs = DEFAULT_IN_PROGRESS_STALE_MS,
-  nowMs = Date.now(),
-  readdirFn = readdir,
-  statFn = stat,
-}) {
-  const fileNames = await readdirFn(reviewsDir).catch(() => []);
-  const prefix = `${sha}.`;
-  const matching = fileNames.filter((name) => {
-    if (!name.startsWith(prefix)) return false;
-    return IN_PROGRESS_PATTERNS.some((pattern) => pattern.test(name));
-  });
-
-  for (const name of matching) {
-    const fullPath = path.join(reviewsDir, name);
-    const info = await statFn(fullPath).catch(() => null);
-    if (!info || !Number.isFinite(info.mtimeMs)) continue;
-    if (nowMs - info.mtimeMs <= staleAfterMs) {
-      return true;
-    }
-  }
-
-  return false;
-}
-
 export async function defaultIsReviewInProgress({ reviewsDir, sha }) {
   const queueState = await queueStateForSha(reviewsDir, sha);
   const snapshot = snapshotProcessTable();
@@ -233,28 +116,7 @@ export async function defaultIsReviewInProgress({ reviewsDir, sha }) {
   if (isReviewProcessRunningForSha(sha, processListText)) {
     return true;
   }
-
-  const hasFreshArtifacts = await hasFreshInProgressArtifactsForSha({
-    reviewsDir,
-    sha,
-    staleAfterMs: resolveInProgressStaleMs(),
-  });
-  if (!hasFreshArtifacts) return false;
-
-  // If ps output is unavailable, preserve conservative behavior and treat
-  // fresh temp artifacts as in-progress.
-  if (!snapshot.available) {
-    return true;
-  }
-
-  // Fresh temp files can outlive crashed reviewers. Use lock owner checks to
-  // avoid waiting on dead artifacts forever, while treating inconclusive
-  // command inspection as active to avoid deleting/live-review false negatives.
-  return hasActiveReviewLockForSha({
-    reviewsDir,
-    sha,
-    processTable,
-  });
+  return false;
 }
 
 function sleep(ms) {
@@ -387,20 +249,15 @@ function parseReviewedPayload(parsed) {
   };
 
   for (const entry of reviewed) {
-    const legacySha = typeof entry === "string" ? entry : "";
-    const sha = String((entry?.sha ?? legacySha) || "").trim();
-    if (!sha) continue;
-
-    if (legacySha) {
-      lanes.codex.any.add(sha);
+    if (!entry || typeof entry !== "object" || Array.isArray(entry)) {
       continue;
     }
+    const sha = String(entry.sha ?? "").trim();
+    if (!sha) continue;
 
     addReviewedLaneStatus(lanes, sha, "codex", entry?.status);
     addReviewedLaneStatus(lanes, sha, "codex", entry?.lanes?.codex);
-    const reviewedAt = String(
-      entry?.reviewed_at ?? entry?.reviewedAt ?? "",
-    ).trim();
+    const reviewedAt = String(entry?.reviewed_at ?? "").trim();
     if (lanes.codex.clean.has(sha) && Number.isFinite(Date.parse(reviewedAt))) {
       laneMetadata.codex.reviewedAtBySha.set(sha, reviewedAt);
     }
@@ -614,9 +471,7 @@ export function operatorClosedFindingSignaturesForReport({
     const signature = normalizeFindingToken(findingSignature(finding));
     if (!signature) continue;
     const scopedKey = closedFindingStateKey(normalizedSha, signature);
-    const scopedClosedFinding = operatorState?.closed_findings?.[scopedKey];
-    const legacyClosedFinding = operatorState?.closed_findings?.[signature];
-    const closedFinding = scopedClosedFinding ?? legacyClosedFinding;
+    const closedFinding = operatorState?.closed_findings?.[scopedKey];
     const closedSha = String(closedFinding?.sha ?? "")
       .trim()
       .toLowerCase();
@@ -918,33 +773,6 @@ export async function readReviewGateState({
           ? "queue-stale"
           : "queue-pending"
         : "missing-or-invalid-json",
-      reviewStatus: "",
-      failureReason: "",
-      findingsCount: 0,
-      worstSeverity: "none",
-      actionable: false,
-      failed: false,
-      blocking: false,
-      hasCodexReview: false,
-      hasLocalReview: false,
-      missingRequiredReviews: false,
-      localReviewStatus: "missing",
-      hasReportArtifact: false,
-      queueStatus: queueState.status,
-      queueStale: queueState.stale,
-      queuePaused,
-    };
-  }
-
-  if (isQueueRecoveryReport(parsed)) {
-    return {
-      sha,
-      status: queueState.queued
-        ? queueState.stale
-          ? "stale-active"
-          : queueState.status
-        : "missing",
-      reason: "queue-recovery-placeholder",
       reviewStatus: "",
       failureReason: "",
       findingsCount: 0,

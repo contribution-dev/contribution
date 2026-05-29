@@ -15,19 +15,6 @@ inputs:
     description: Whether to cache pnpm store for faster dependency installs
     required: false
     default: "false"
-  cache-playwright:
-    description: Whether to restore Playwright browser cache
-    required: false
-    default: "false"
-  playwright-cache-key:
-    description: Full cache key for Playwright browser cache
-    required: false
-    default: ""
-
-outputs:
-  playwright-cache-hit:
-    description: Whether the Playwright cache restore found an exact key match.
-    value: ${{ steps.playwright-cache.outputs.cache-hit }}
 
 runs:
   using: composite
@@ -63,27 +50,6 @@ runs:
         restore-keys: |
           ${{ runner.os }}-pnpm-store-${{ inputs.node-version }}-
           ${{ runner.os }}-pnpm-store-
-
-    - name: Validate Playwright cache key input
-      if: ${{ inputs.cache-playwright == 'true' }}
-      env:
-        PLAYWRIGHT_CACHE_KEY: ${{ inputs.playwright-cache-key }}
-      shell: bash
-      run: |
-        if [[ -z "${PLAYWRIGHT_CACHE_KEY//[[:space:]]/}" ]]; then
-          echo "setup-node-pnpm: 'playwright-cache-key' must be non-empty when 'cache-playwright' is true." >&2
-          exit 1
-        fi
-
-    - name: Restore Playwright browser cache
-      if: ${{ inputs.cache-playwright == 'true' }}
-      id: playwright-cache
-      uses: actions/cache/restore@v5
-      with:
-        path: ~/.cache/ms-playwright
-        key: ${{ inputs.playwright-cache-key }}
-        restore-keys: |
-          ${{ runner.os }}-playwright-chromium-
 
     - name: Install dependencies (retry up to 5 times)
       if: ${{ inputs.run-install == 'true' }}

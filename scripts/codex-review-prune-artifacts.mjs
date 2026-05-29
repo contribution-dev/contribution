@@ -9,17 +9,13 @@ import {
   resolveReviewsDir,
   updateAckState,
 } from "./codex-review-inbox-lib.mjs";
-import {
-  reportSatisfiesCanonicalCodexLane,
-  reportSatisfiesUiRuntime,
-} from "./lib/codex-review-state.mjs";
+import { reportSatisfiesCanonicalCodexLane } from "./lib/codex-review-state.mjs";
 import {
   loadReviewedShas,
   saveReviewedShas,
 } from "./codex-review-push-gate-lib.mjs";
 
 const SHA_FILE_PATTERN = /^([0-9a-f]{40})\.(json|md)$/i;
-const UI_RUNTIME_FILE_PATTERN = /^([0-9a-f]{40})\.ui-runtime\.(json|md)$/i;
 const DEFAULT_REPORT_RETENTION_DAYS = 1;
 const DEFAULT_LOG_RETENTION_DAYS = 1;
 const DEFAULT_QUEUE_STALE_MS = 10 * 60 * 1000;
@@ -121,11 +117,6 @@ function isSha(value) {
 
 function shaFromArtifactName(name) {
   const match = SHA_FILE_PATTERN.exec(String(name ?? ""));
-  return match ? match[1].toLowerCase() : "";
-}
-
-function uiRuntimeShaFromArtifactName(name) {
-  const match = UI_RUNTIME_FILE_PATTERN.exec(String(name ?? ""));
   return match ? match[1].toLowerCase() : "";
 }
 
@@ -247,47 +238,32 @@ async function collectSuccessfulTargetShas({
 }) {
   const reviewed = await loadReviewedShas({ repoRoot });
   const queued = await collectQueuedShas(reviewsDir);
-  const successful = {
-    codex: new Set(),
-    uiRuntime: new Set(),
-  };
+  const successful = new Set();
   const reviewedLaneStatusOverrides = {
     codex: new Map(),
   };
 
   for (const sha of candidateShas) {
-    const [codexReport, uiRuntimeReport] = await Promise.all([
-      readJsonIfPresent(path.join(reviewsDir, `${sha}.json`)),
-      readJsonIfPresent(path.join(reviewsDir, `${sha}.ui-runtime.json`)),
-    ]);
-
+    const codexReport = await readJsonIfPresent(
+      path.join(reviewsDir, `${sha}.json`),
+    );
     const hasCurrentCodexArtifact = Boolean(codexReport);
-    const hasCurrentUiRuntimeArtifact = Boolean(uiRuntimeReport);
     const hasQueuedCodexReview = queued.has(sha);
     const codexSatisfied = reportSatisfiesCanonicalCodexLane(codexReport);
 
     if (codexSatisfied === true) {
-      successful.codex.add(sha);
+      successful.add(sha);
     } else if (
       !hasCurrentCodexArtifact &&
       !hasQueuedCodexReview &&
       (reviewed.clean.has(sha) || reviewed.lanes?.codex?.clean?.has(sha))
     ) {
-      successful.codex.add(sha);
+      successful.add(sha);
     } else if (
       hasCurrentCodexArtifact &&
       reviewed.lanes?.codex?.clean?.has(sha)
     ) {
       reviewedLaneStatusOverrides.codex.set(sha, "reviewed");
-    }
-
-    if (reportSatisfiesUiRuntime(uiRuntimeReport)) {
-      successful.uiRuntime.add(sha);
-    } else if (
-      !hasCurrentUiRuntimeArtifact &&
-      reviewed.lanes?.["ui-runtime"]?.clean?.has(sha)
-    ) {
-      successful.uiRuntime.add(sha);
     }
   }
 
@@ -340,8 +316,6 @@ async function collectLaneReportPrunePlan({
   nowMs,
   protectedShas,
   targetShas = null,
-  lane = "codex",
-  artifactType = "lane",
 }) {
   const entries = await readdir(reportsDir, { withFileTypes: true }).catch(
     () => [],
@@ -357,10 +331,7 @@ async function collectLaneReportPrunePlan({
     ) {
       continue;
     }
-    const sha =
-      artifactType === "ui-runtime"
-        ? uiRuntimeShaFromArtifactName(entry.name)
-        : shaFromArtifactName(entry.name);
+    const sha = shaFromArtifactName(entry.name);
     if (!sha) continue;
 
     const jsonPath = path.join(reportsDir, entry.name);
@@ -386,26 +357,16 @@ async function collectLaneReportPrunePlan({
       keptActionable += 1;
       continue;
     }
-    const mdPath =
-      artifactType === "ui-runtime"
-        ? path.join(reportsDir, `${sha}.ui-runtime.md`)
-        : path.join(reportsDir, `${sha}.md`);
+    const mdPath = path.join(reportsDir, `${sha}.md`);
     const mdInfo = await stat(mdPath).catch(() => null);
     plan.push({
-      sha: artifactType === "ui-runtime" ? `${sha}.ui-runtime` : sha,
+      sha,
       targetSha: sha,
       jsonPath,
       mdPath,
       mdExists: mdInfo?.isFile() === true,
-      branchName:
-        artifactType === "ui-runtime"
-          ? String(parsed?.review_target?.branch ?? "").trim()
-          : "",
       ...reviewedAtForReport(parsed),
-      successful:
-        artifactType === "ui-runtime"
-          ? reportSatisfiesUiRuntime(parsed)
-          : reportSatisfiesCanonicalCodexLane(parsed),
+      successful: reportSatisfiesCanonicalCodexLane(parsed),
     });
   }
 
@@ -762,24 +723,19 @@ export async function pruneReviewArtifacts({
           candidateShas: targetShas,
         })
       : {
-          successful: { codex: new Set(), uiRuntime: new Set() },
+          successful: new Set(),
           reviewedLaneStatusOverrides: {
             codex: new Map(),
           },
         };
   const effectiveCodexTargetShas =
-    successfulTargetShas.codex.size > 0 ? successfulTargetShas.codex : null;
-  const effectiveUiRuntimeTargetShas =
-    successfulTargetShas.uiRuntime.size > 0
-      ? successfulTargetShas.uiRuntime
-      : null;
+    successfulTargetShas.size > 0 ? successfulTargetShas : null;
 
   const codexRetentionReportPlan = await collectLaneReportPrunePlan({
     reportsDir: resolvedReviewsDir,
     retentionMs: reportRetentionMs,
     nowMs,
     protectedShas,
-    lane: "codex",
   });
   const codexTargetedReportPlan = effectiveCodexTargetShas
     ? await collectLaneReportPrunePlan({
@@ -788,33 +744,11 @@ export async function pruneReviewArtifacts({
         nowMs,
         protectedShas,
         targetShas: effectiveCodexTargetShas,
-        lane: "codex",
       })
     : null;
   const codexReportPlan = mergeReportPlans(
     codexRetentionReportPlan,
     codexTargetedReportPlan,
-  );
-  const uiRuntimeRetentionReportPlan = await collectLaneReportPrunePlan({
-    reportsDir: resolvedReviewsDir,
-    retentionMs: reportRetentionMs,
-    nowMs,
-    protectedShas,
-    artifactType: "ui-runtime",
-  });
-  const uiRuntimeTargetedReportPlan = effectiveUiRuntimeTargetShas
-    ? await collectLaneReportPrunePlan({
-        reportsDir: resolvedReviewsDir,
-        retentionMs: reportRetentionMs,
-        nowMs,
-        protectedShas,
-        targetShas: effectiveUiRuntimeTargetShas,
-        artifactType: "ui-runtime",
-      })
-    : null;
-  const uiRuntimeReportPlan = mergeReportPlans(
-    uiRuntimeRetentionReportPlan,
-    uiRuntimeTargetedReportPlan,
   );
 
   const reviewedCodexCleanShas = new Set([
@@ -827,50 +761,20 @@ export async function pruneReviewArtifacts({
       .filter((entry) => entry.successful && entry.reviewedAt)
       .map((entry) => [entry.sha, entry.reviewedAt]),
   );
-  const reviewedUiRuntimeCleanShas = new Set(
-    uiRuntimeReportPlan.plan
-      .filter((entry) => entry.successful)
-      .map((entry) => entry.targetSha),
-  );
-  const reviewedUiRuntimeBranchCheckpoints = new Map();
-  for (const entry of uiRuntimeReportPlan.plan) {
-    if (!entry.successful || !entry.branchName) continue;
-    const existing = reviewedUiRuntimeBranchCheckpoints.get(entry.branchName);
-    if (
-      existing &&
-      (existing.reviewedAtMs > entry.reviewedAtMs ||
-        (existing.reviewedAtMs === entry.reviewedAtMs &&
-          String(existing.sha ?? "").localeCompare(entry.targetSha) >= 0))
-    ) {
-      continue;
-    }
-    reviewedUiRuntimeBranchCheckpoints.set(entry.branchName, {
-      status: "clean",
-      sha: entry.targetSha,
-      reviewedAt: entry.reviewedAt,
-      reviewedAtMs: entry.reviewedAtMs,
-    });
-  }
   if (
     !dryRun &&
     (reviewedCodexCleanShas.size > 0 ||
-      reviewedUiRuntimeCleanShas.size > 0 ||
-      reviewedLaneStatusOverrides.codex.size > 0 ||
-      reviewedUiRuntimeBranchCheckpoints.size > 0)
+      reviewedLaneStatusOverrides.codex.size > 0)
   ) {
     await saveReviewedShasFn({
       repoRoot,
       reviewedCleanShas: reviewedCodexCleanShas,
       reviewedLaneCleanShas: {
         codex: reviewedCodexCleanShas,
-        "ui-runtime": reviewedUiRuntimeCleanShas,
       },
       reviewedLaneStatusOverrides,
       reviewedLaneReviewedAt: {
         codex: reviewedCodexReviewedAt,
-      },
-      reviewedBranchLaneCheckpoints: {
-        "ui-runtime": reviewedUiRuntimeBranchCheckpoints,
       },
     });
   }
@@ -878,11 +782,6 @@ export async function pruneReviewArtifacts({
     ackPath: path.join(resolvedReviewsDir, ".ack.json"),
     dryRun,
     plan: codexReportPlan.plan,
-  });
-  const uiRuntimeResult = await applyLaneReportPrunePlan({
-    ackPath: path.join(resolvedReviewsDir, ".ack.json"),
-    dryRun,
-    plan: uiRuntimeReportPlan.plan,
   });
   const targetedQueueDeleted = await pruneTargetQueueJobs({
     reviewsDir: resolvedReviewsDir,
@@ -907,17 +806,10 @@ export async function pruneReviewArtifacts({
 
   return {
     reviewsDir: resolvedReviewsDir,
-    deletedReports:
-      codexResult.deletedJson +
-      codexResult.deletedMd +
-      uiRuntimeResult.deletedJson +
-      uiRuntimeResult.deletedMd,
-    deletedReportShas:
-      codexResult.deletedShas.size + uiRuntimeResult.deletedShas.size,
-    deletedAckEntries:
-      codexResult.ackEntriesRemoved + uiRuntimeResult.ackEntriesRemoved,
-    keptActionableReports:
-      codexReportPlan.keptActionable + uiRuntimeReportPlan.keptActionable,
+    deletedReports: codexResult.deletedJson + codexResult.deletedMd,
+    deletedReportShas: codexResult.deletedShas.size,
+    deletedAckEntries: codexResult.ackEntriesRemoved,
+    keptActionableReports: codexReportPlan.keptActionable,
     deletedCompletedQueueJobs: 0,
     deletedTargetQueueJobs: targetedQueueDeleted,
     deletedLogFiles: logResult.deletedLogFiles,
@@ -926,8 +818,7 @@ export async function pruneReviewArtifacts({
     protectedTipShas: protectedTipShas.size,
     protectedQueuedShas: liveQueueShas.size,
     targetedShas: targetShas.size,
-    targetedSuccessfulCodexShas: successfulTargetShas.codex.size,
-    targetedSuccessfulUiRuntimeShas: successfulTargetShas.uiRuntime.size,
+    targetedSuccessfulCodexShas: successfulTargetShas.size,
     dryRun,
     reportRetentionDays,
     logRetentionDays,

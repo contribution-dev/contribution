@@ -1,4 +1,4 @@
-package cli
+package friend
 
 import (
 	"testing"
@@ -26,7 +26,7 @@ func TestApplyFeedbackAddsSignalsAndFindings(t *testing.T) {
 		PublicSafe: true,
 	}}
 
-	got := applyFeedback(analysis, feedback, time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC))
+	got := ApplyFeedback(analysis, feedback, time.Date(2026, 1, 3, 0, 0, 0, 0, time.UTC))
 
 	if len(got.Signals) != 2 {
 		t.Fatalf("signals = %d, want 2", len(got.Signals))
@@ -43,7 +43,7 @@ func TestApplyFeedbackAddsSignalsAndFindings(t *testing.T) {
 }
 
 func TestValidateFeedbackRejectsUnsafeExport(t *testing.T) {
-	err := validateFeedback(signals.FriendFeedbackExport{
+	err := ValidateFeedback(signals.FriendFeedbackExport{
 		Version:      1,
 		PacketID:     "pkt-example",
 		SubmittedAt:  time.Now(),
@@ -54,5 +54,35 @@ func TestValidateFeedbackRejectsUnsafeExport(t *testing.T) {
 	})
 	if err == nil {
 		t.Fatal("validateFeedback() error = nil, want public_safe rejection")
+	}
+}
+
+func TestValidateFeedbackRejectsUnknownDuplicateAndBlankAnswers(t *testing.T) {
+	base := signals.FriendFeedbackExport{
+		Version:      1,
+		PacketID:     "pkt-example",
+		SubmittedAt:  time.Now(),
+		OverallTrust: "medium",
+		Confidence:   signals.ConfidenceMedium,
+		PublicSafe:   true,
+	}
+
+	tests := []struct {
+		name    string
+		answers []signals.FriendFeedbackAnswer
+	}{
+		{name: "unknown", answers: []signals.FriendFeedbackAnswer{{QuestionID: "unknown", Answer: "This answer is specific enough."}}},
+		{name: "duplicate", answers: []signals.FriendFeedbackAnswer{{QuestionID: "trust", Answer: "Looks fine."}, {QuestionID: "trust", Answer: "Still fine."}}},
+		{name: "blank", answers: []signals.FriendFeedbackAnswer{{QuestionID: "trust", Answer: "   "}}},
+	}
+
+	for _, tt := range tests {
+		t.Run(tt.name, func(t *testing.T) {
+			feedback := base
+			feedback.Answers = tt.answers
+			if err := ValidateFeedback(feedback); err == nil {
+				t.Fatal("ValidateFeedback() error = nil, want validation error")
+			}
+		})
 	}
 }

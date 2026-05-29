@@ -103,11 +103,11 @@ func clone(ctx context.Context, url string) (Repo, error) {
 	args := []string{"clone", "--quiet", "--depth=250", "--no-tags", url, target}
 	if _, err := gitOutput(ctx, "", args...); err != nil {
 		_ = os.RemoveAll(parent)
-		return Repo{}, fmt.Errorf("clone %s: %w", RedactRemoteURL(url), err)
+		return Repo{}, fmt.Errorf("clone %s: %w", privacy.RedactRemoteURL(url), err)
 	}
 	repo := Repo{
 		Path:          target,
-		RemoteURL:     RedactRemoteURL(url),
+		RemoteURL:     privacy.RedactRemoteURL(url),
 		IsRemoteClone: true,
 		cleanup: func() error {
 			return os.RemoveAll(parent)
@@ -120,11 +120,6 @@ func clone(ctx context.Context, url string) (Repo, error) {
 	return repo, nil
 }
 
-// RedactRemoteURL removes credentials from remote URLs before logging errors.
-func RedactRemoteURL(remote string) string {
-	return privacy.RedactRemoteURL(remote)
-}
-
 func hydrateMetadata(ctx context.Context, repo *Repo) error {
 	head, err := gitOutput(ctx, repo.Path, "rev-parse", "HEAD")
 	if err == nil {
@@ -133,7 +128,7 @@ func hydrateMetadata(ctx context.Context, repo *Repo) error {
 	if repo.RemoteURL == "" {
 		remote, err := gitOutput(ctx, repo.Path, "remote", "get-url", "origin")
 		if err == nil {
-			repo.RemoteURL = RedactRemoteURL(remote)
+			repo.RemoteURL = privacy.RedactRemoteURL(remote)
 		}
 	}
 	branch, err := DefaultBranch(ctx, repo.Path)
@@ -390,10 +385,18 @@ func Diff(ctx context.Context, repoPath, base, head string) (DiffSummary, error)
 	if head == "" {
 		head = "HEAD"
 	}
-	spec := base + "..." + head
+	resolvedBase, err := ResolveCommit(ctx, repoPath, base)
+	if err != nil {
+		return DiffSummary{}, err
+	}
+	resolvedHead, err := ResolveCommit(ctx, repoPath, head)
+	if err != nil {
+		return DiffSummary{}, err
+	}
+	spec := resolvedBase + "..." + resolvedHead
 	out, err := gitOutput(ctx, repoPath, "diff", "--numstat", spec)
 	if err != nil {
-		spec = base + ".." + head
+		spec = resolvedBase + ".." + resolvedHead
 		out, err = gitOutput(ctx, repoPath, "diff", "--numstat", spec)
 		if err != nil {
 			return DiffSummary{}, fmt.Errorf("git diff %s: %w", spec, err)
@@ -412,6 +415,19 @@ func Diff(ctx context.Context, repoPath, base, head string) (DiffSummary, error)
 		addFileSummary(&summary, file.Path)
 	}
 	return DiffSummary{Files: files, FileSummary: summary}, nil
+}
+
+// ResolveCommit resolves a user-provided ref to a commit SHA for diff commands.
+func ResolveCommit(ctx context.Context, repoPath string, ref string) (string, error) {
+	ref = strings.TrimSpace(ref)
+	if ref == "" || strings.HasPrefix(ref, "-") || strings.ContainsRune(ref, '\x00') {
+		return "", fmt.Errorf("invalid git ref %q", ref)
+	}
+	out, err := gitOutput(ctx, repoPath, "rev-parse", "--verify", "--quiet", "--end-of-options", ref+"^{commit}")
+	if err != nil {
+		return "", fmt.Errorf("invalid git ref %q: %w", ref, err)
+	}
+	return strings.TrimSpace(out), nil
 }
 
 func parseHistory(out string, maxCommits int) History {
@@ -480,9 +496,9 @@ func historySignals(repoID string, history History, createdAt time.Time) []signa
 		signals.New(repoID, "git", "files_changed_count", "repo", repoID, signals.SeverityInfo, signals.DirectionNeutral, signals.ConfidenceHigh, float64(len(history.FileTouchCount)), "count", fmt.Sprintf("%d unique files changed in the analysis window.", len(history.FileTouchCount)), true, createdAt),
 	}
 	for _, commit := range history.Commits {
-		short := shortSHA(commit.SHA)
+		short := ShortSHA(commit.SHA)
 		out = append(out, signals.New(repoID, "git", "commit_file_count", "commit", commit.SHA, signals.SeverityInfo, signals.DirectionNeutral, signals.ConfidenceHigh, float64(len(commit.Files)), "count", fmt.Sprintf("Commit %s changed %d files.", short, len(commit.Files)), true, createdAt))
-		lineCount := changedLineCount(commit.Files)
+		lineCount := TotalChangedLines(commit.Files)
 		if lineCount > 0 {
 			out = append(out, signals.New(repoID, "git", "commit_line_count", "commit", commit.SHA, signals.SeverityInfo, signals.DirectionNeutral, signals.ConfidenceHigh, float64(lineCount), "lines", fmt.Sprintf("Commit %s changed %d lines.", short, lineCount), true, createdAt))
 		}
@@ -608,7 +624,8 @@ func parseNumstatCount(value string) int {
 	return count
 }
 
-func changedLineCount(files []ChangedFile) int {
+// TotalChangedLines returns additions plus deletions for a changed-file list.
+func TotalChangedLines(files []ChangedFile) int {
 	var total int
 	for _, file := range files {
 		total += file.Additions + file.Deletions
@@ -708,7 +725,8 @@ func shortHash(value string) string {
 	return hex.EncodeToString(sum[:])[:12]
 }
 
-func shortSHA(value string) string {
+// ShortSHA returns the conventional short display prefix for a commit SHA.
+func ShortSHA(value string) string {
 	if len(value) <= 8 {
 		return value
 	}

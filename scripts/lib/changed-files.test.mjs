@@ -6,10 +6,15 @@ import { tmpdir } from "node:os";
 import path from "node:path";
 import { classifyChangedFiles, getChangedFiles } from "./changed-files.mjs";
 
-test("classifies Go CLI changes as app-relevant for changed checks", () => {
+test("classifies Go CLI changes for changed checks", () => {
   const result = classifyChangedFiles(["cmd/contribution/main.go"]);
   assert.equal(result.goRelevant, true);
-  assert.equal(result.appRelevant, true);
+  assert.deepEqual(Object.keys(result).sort(), [
+    "docsOnly",
+    "goRelevant",
+    "rootConfig",
+    "tooling",
+  ]);
 });
 
 test("classifies docs-only changes", () => {

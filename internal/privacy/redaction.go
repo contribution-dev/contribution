@@ -10,6 +10,7 @@ import (
 
 var (
 	urlPattern           = regexp.MustCompile(`[a-z][a-z0-9+.-]*://[^\s'"]+`)
+	emailPattern         = regexp.MustCompile(`\b[A-Za-z0-9._%+\-]+@[A-Za-z0-9.\-]+\.[A-Za-z]{2,}\b`)
 	authorizationPattern = regexp.MustCompile(`(?i)\bauthorization\s*[:=]\s*(?:[A-Za-z]+\s+)?[^\s'"]+`)
 	assignmentPattern    = regexp.MustCompile(`(?i)\b(token|secret|password|api_?key|apikey|access_key)\s*[:=]\s*[^\s'"]+`)
 	bearerPattern        = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+`)
@@ -81,6 +82,7 @@ func RedactRemoteURL(remote string) string {
 // RedactSecretLikeText removes obvious token material from command output.
 func RedactSecretLikeText(value string) string {
 	value = urlPattern.ReplaceAllStringFunc(value, RedactRemoteURL)
+	value = emailPattern.ReplaceAllString(value, "REDACTED_EMAIL")
 	value = authorizationPattern.ReplaceAllStringFunc(value, redactAssignment)
 	value = assignmentPattern.ReplaceAllStringFunc(value, redactAssignment)
 	value = bearerPattern.ReplaceAllString(value, "Bearer REDACTED")

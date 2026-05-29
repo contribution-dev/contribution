@@ -5,26 +5,6 @@ if [ "${CODEX_REVIEW_ENABLED:-1}" = "0" ] || [ "${CODEX_REVIEW_POST_PUSH_ENABLED
   exit 0
 fi
 
-UI_RUNTIME_REVIEW_ENABLED="${CODEX_UI_RUNTIME_REVIEW_ENABLED:-0}"
-case "$UI_RUNTIME_REVIEW_ENABLED" in
-  0|false|FALSE|no|NO|off|OFF)
-    UI_RUNTIME_REVIEW_ENABLED="0"
-    ;;
-  *)
-    UI_RUNTIME_REVIEW_ENABLED="1"
-    ;;
-esac
-
-UI_RUNTIME_REVIEW_POST_PUSH_ENABLED="${CODEX_UI_RUNTIME_REVIEW_POST_PUSH_ENABLED:-1}"
-case "$UI_RUNTIME_REVIEW_POST_PUSH_ENABLED" in
-  0|false|FALSE|no|NO|off|OFF)
-    UI_RUNTIME_REVIEW_POST_PUSH_ENABLED="0"
-    ;;
-  *)
-    UI_RUNTIME_REVIEW_POST_PUSH_ENABLED="1"
-    ;;
-esac
-
 # Bootstrap PATH for GUI git clients with minimal environments.
 if [ -d "/opt/homebrew/bin" ]; then
   PATH="/opt/homebrew/bin:$PATH"
@@ -229,39 +209,6 @@ while read -r local_ref local_sha remote_ref remote_sha; do
 $rev_output
 EOF
 done < "$INPUT_FILE"
-
-if [ "$UI_RUNTIME_REVIEW_ENABLED" = "1" ] && [ "$UI_RUNTIME_REVIEW_POST_PUSH_ENABLED" = "1" ]; then
-  current_branch="$(git symbolic-ref --quiet --short HEAD 2>/dev/null || true)"
-  if [ -z "$current_branch" ]; then
-    echo "Skipping post-push UI runtime review: HEAD is detached; unable to match pushed branch to current checkout" >&2
-  else
-    while read -r local_ref local_sha remote_ref remote_sha; do
-      [ -z "${local_ref:-}" ] && continue
-      case "$local_ref" in
-        refs/heads/*)
-          ;;
-        *)
-          continue
-          ;;
-      esac
-
-      if [ "$local_sha" = "$zero_sha" ]; then
-        continue
-      fi
-
-      branch_name="${local_ref#refs/heads/}"
-      if [ "$branch_name" != "$current_branch" ]; then
-        continue
-      fi
-
-      "$REPO_ROOT/scripts/ui-runtime-review-report" \
-        --sha "$local_sha" \
-        --trigger post-push \
-        --branch "$branch_name" \
-        --reviews-dir "$REVIEWS_DIR" || true
-    done < "$INPUT_FILE"
-  fi
-fi
 
 if [ "${CODEX_REVIEW_PRUNE_POST_PUSH_ENABLED:-1}" = "1" ]; then
   node "$REPO_ROOT/scripts/codex-review-prune-artifacts.mjs" \

@@ -50,7 +50,8 @@ lint:
 vuln:
 	govulncheck $(PKG)
 
-ci: fmt-check vet test test-race build
+ci:
+	pnpm ci:local
 
 clean:
 	rm -rf bin dist coverage.out

@@ -51,9 +51,6 @@ type LineRange struct {
 
 // Evidence stores provenance for a signal without embedding source code.
 type Evidence struct {
-	URL         string `json:"url,omitempty"`
-	CommitSHA   string `json:"commit_sha,omitempty"`
-	PRNumber    int    `json:"pr_number,omitempty"`
 	ToolVersion string `json:"tool_version,omitempty"`
 }
 
@@ -66,7 +63,6 @@ type Signal struct {
 	SubjectType string     `json:"subject_type"`
 	SubjectID   string     `json:"subject_id,omitempty"`
 	FilePath    string     `json:"file_path,omitempty"`
-	LineRange   *LineRange `json:"line_range,omitempty"`
 	Severity    Severity   `json:"severity"`
 	Direction   Direction  `json:"direction"`
 	Confidence  Confidence `json:"confidence"`
@@ -111,12 +107,10 @@ type RepoMetadata struct {
 type AnalysisConfigSnapshot struct {
 	SinceDays                int      `json:"since_days"`
 	MaxPRs                   int      `json:"max_prs"`
-	IncludeUnmergedBranches  bool     `json:"include_unmerged_branches"`
 	PublicSafe               bool     `json:"public_safe"`
 	NoExternalTools          bool     `json:"no_external_tools"`
 	SelfReportedAITools      []string `json:"self_reported_ai_tools,omitempty"`
 	SelfReportedAIModes      []string `json:"self_reported_ai_modes,omitempty"`
-	AllowManualAIPRTags      bool     `json:"allow_manual_ai_pr_tags"`
 	OutputDirectory          string   `json:"output_directory"`
 	GitHubMetadataConfigured bool     `json:"github_metadata_configured"`
 }

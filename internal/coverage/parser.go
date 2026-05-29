@@ -35,25 +35,6 @@ type File struct {
 	Lines map[int]bool
 }
 
-// ChangedFileCoverage summarizes coverage for a single changed file.
-type ChangedFileCoverage struct {
-	Path         string  `json:"path"`
-	CoveredLines int     `json:"covered_lines"`
-	TotalLines   int     `json:"total_lines"`
-	Percent      float64 `json:"percent"`
-}
-
-// ChangedLineCoverage summarizes coverage for changed executable lines.
-type ChangedLineCoverage struct {
-	Status       string                `json:"status"`
-	CoveredLines int                   `json:"covered_lines,omitempty"`
-	TotalLines   int                   `json:"total_lines,omitempty"`
-	Percent      float64               `json:"percent,omitempty"`
-	Files        []ChangedFileCoverage `json:"files,omitempty"`
-	Sources      []string              `json:"sources,omitempty"`
-	Reason       string                `json:"reason,omitempty"`
-}
-
 // ParseFiles imports coverage files. Unsupported or outside-repo entries are
 // ignored; unreadable explicit coverage files return an error.
 func ParseFiles(paths []string, format Format, repoRoot string) (Report, error) {
@@ -84,11 +65,11 @@ func ParseFiles(paths []string, format Format, repoRoot string) (Report, error) 
 }
 
 // ComputeChangedLineCoverage intersects imported coverage with changed new-side lines.
-func ComputeChangedLineCoverage(report Report, changed []ChangedFileInput) ChangedLineCoverage {
+func ComputeChangedLineCoverage(report Report, changed []ChangedFileInput) signals.PreflightCoverage {
 	if len(report.Files) == 0 {
-		return ChangedLineCoverage{Status: "unknown", Reason: "No coverage report was imported."}
+		return signals.PreflightCoverage{Status: "unknown", Reason: "No coverage report was imported."}
 	}
-	out := ChangedLineCoverage{Status: "unknown", Sources: append([]string{}, report.Sources...)}
+	out := signals.PreflightCoverage{Status: "unknown", Sources: append([]string{}, report.Sources...)}
 	for _, file := range changed {
 		coverageFile, ok := findCoverageFile(report.Files, file.Path)
 		if !ok {
@@ -109,7 +90,7 @@ func ComputeChangedLineCoverage(report Report, changed []ChangedFileInput) Chang
 		if total == 0 {
 			continue
 		}
-		out.Files = append(out.Files, ChangedFileCoverage{
+		out.Files = append(out.Files, signals.PreflightFileCoverage{
 			Path:         file.Path,
 			CoveredLines: covered,
 			TotalLines:   total,

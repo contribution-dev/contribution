@@ -23,7 +23,7 @@ func newRedactCommand(out io.Writer) *cobra.Command {
 			if output == "" {
 				return fmt.Errorf("--output is required")
 			}
-			if err := validateFormat(format, true); err != nil {
+			if err := report.ValidateFormat(format, true); err != nil {
 				return err
 			}
 			analysis, err := report.ReadAnalysis(input)

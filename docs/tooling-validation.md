@@ -17,6 +17,11 @@ This repo uses Go for product code and Node/pnpm for repository automation.
 - `post-commit` enqueues every local commit for Codex review.
 - `pre-push` waits for required review evidence and blocks unresolved major or
   blocker findings.
+- Codex review is the only active review lane. Do not add dormant lane plumbing
+  without a runnable producer, gate, and tests.
+- Review severity parsing and rank comparisons are centralized in
+  `scripts/lib/review-severity.mjs`; control-plane and risk-policy scripts
+  should import that helper instead of carrying local rank tables.
 - On macOS, `pnpm tools:preflight` is the normal bootstrap and recovery
   entrypoint for durable review workers.
 - `pnpm review:status` is the default operator status view.

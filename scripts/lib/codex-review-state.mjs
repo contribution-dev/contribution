@@ -1,6 +1,7 @@
 import { spawnSync } from "node:child_process";
 import { mkdir, readdir, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
+import { reviewSeverityRank } from "./review-severity.mjs";
 
 export const REVIEW_QUEUE_SCHEMA_VERSION = 1;
 export const REVIEW_QUEUE_STATUSES = ["pending", "active"];
@@ -312,13 +313,7 @@ function parseStructuredBacklogMarkdown(markdown) {
 }
 
 function severityRank(severity) {
-  const normalized = String(severity ?? "")
-    .trim()
-    .toLowerCase();
-  if (normalized === "blocker") return 3;
-  if (normalized === "major") return 2;
-  if (normalized === "minor") return 1;
-  return 0;
+  return reviewSeverityRank(severity);
 }
 
 function severityLabel(severity) {
@@ -791,9 +786,6 @@ export function reportSatisfiesLane(report, lane = "codex") {
   const reviewStatus = String(report?.review_status ?? "")
     .trim()
     .toLowerCase();
-  if (lane === "ui-runtime") {
-    return reviewStatus === "ok";
-  }
   const codexStatus = String(report?.review_engines?.codex?.status ?? "")
     .trim()
     .toLowerCase();
@@ -805,37 +797,9 @@ export function reportSatisfiesLane(report, lane = "codex") {
   return ["ok", "partial_success"].includes(reviewStatus);
 }
 
-export function reportSatisfiesUiRuntime(report) {
-  if (!report || typeof report !== "object" || Array.isArray(report)) {
-    return false;
-  }
-  const findings = Array.isArray(report?.findings) ? report.findings : [];
-  const reviewStatus = String(report?.review_status ?? "")
-    .trim()
-    .toLowerCase();
-  return reviewStatus === "ok" && findings.length === 0;
-}
-
-export function hasDurableUiRuntimeReviewEvidence(report) {
-  if (!report || typeof report !== "object" || Array.isArray(report)) {
-    return false;
-  }
-  if (reportSatisfiesUiRuntime(report)) {
-    return true;
-  }
-  const reviewStatus = String(report?.review_status ?? "")
-    .trim()
-    .toLowerCase();
-  const lastReviewed = String(report?.last_reviewed ?? "").trim();
-  return reviewStatus === "infra_error" && Boolean(lastReviewed);
-}
-
 export function hasDurableReviewEvidence(report, lane = "codex") {
   if (reportSatisfiesLane(report, lane)) {
     return true;
-  }
-  if (lane === "ui-runtime") {
-    return hasDurableUiRuntimeReviewEvidence(report);
   }
   return Array.isArray(report?.findings) && report.findings.length > 0;
 }
@@ -853,15 +817,6 @@ export function isSyntheticFailurePlaceholder(report, lane = "codex") {
   const reviewStatus = String(report?.review_status ?? "")
     .trim()
     .toLowerCase();
-  const lastReviewed = String(report?.last_reviewed ?? "").trim();
-  if (
-    lane === "ui-runtime" &&
-    reviewStatus &&
-    reviewStatus !== "ok" &&
-    lastReviewed
-  ) {
-    return false;
-  }
   return Boolean(reviewStatus && reviewStatus !== "ok");
 }
 

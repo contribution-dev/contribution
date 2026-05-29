@@ -26,6 +26,10 @@ import {
   parseRefUpdates,
 } from "./lib/pre-push-branch-state.mjs";
 import {
+  parseMinReviewSeverity,
+  reviewSeverityRank,
+} from "./lib/review-severity.mjs";
+import {
   isActionableCodexReviewReport,
   isIncompleteCodexReviewReport,
   isQueueRecoveryReport,
@@ -33,44 +37,17 @@ import {
 
 export { ZERO_SHA, computeOutgoingShas, parseRefUpdates };
 
-const SEVERITY_RANK = {
-  none: 0,
-  minor: 1,
-  major: 2,
-  blocker: 3,
-};
-
 export const REVIEW_DISMISSALS_SCHEMA_VERSION = 1;
 export const REVIEW_OPERATOR_STATE_SCHEMA_VERSION = 1;
 export const REVIEWED_SHAS_SCHEMA_VERSION = 5;
-const REVIEWED_LANES = ["codex", "ui-runtime"];
-
-function normalizeSeverity(value) {
-  const raw = String(value ?? "")
-    .trim()
-    .toLowerCase();
-  if (raw === "minor" || raw === "major" || raw === "blocker") return raw;
-  return "none";
-}
+const REVIEWED_LANES = ["codex"];
 
 export function severityRank(value) {
-  const normalized = normalizeSeverity(value);
-  return SEVERITY_RANK[normalized] ?? 0;
+  return reviewSeverityRank(value);
 }
 
 export function parseMinSeverity(value) {
-  const raw = String(value ?? "major")
-    .trim()
-    .toLowerCase();
-  if (
-    raw === "none" ||
-    raw === "minor" ||
-    raw === "major" ||
-    raw === "blocker"
-  ) {
-    return raw;
-  }
-  return "major";
+  return parseMinReviewSeverity(value, "major");
 }
 
 export function defaultGitExec(args, repoRoot) {
@@ -350,12 +327,6 @@ function createReviewedLaneMetadataState() {
   };
 }
 
-function createReviewedBranchLanes() {
-  return {
-    "ui-runtime": new Map(),
-  };
-}
-
 function addReviewedLaneStatus(lanes, sha, lane, status) {
   const normalizedLane = String(lane ?? "")
     .trim()
@@ -406,69 +377,14 @@ function overrideEntriesForLane(overrides, lane) {
   return [];
 }
 
-function normalizeReviewedBranchCheckpoint(branch, checkpoint) {
-  const normalizedBranch = String(branch ?? "").trim();
-  if (!normalizedBranch) return null;
-
-  const status = normalizeFindingToken(
-    checkpoint?.status ?? checkpoint?.lane_status ?? checkpoint,
-  );
-  if (status !== "reviewed" && status !== "clean") {
-    return null;
-  }
-
-  const sha = String(checkpoint?.sha ?? "")
-    .trim()
-    .toLowerCase();
-  const reviewedAt = String(
-    checkpoint?.reviewedAt ??
-      checkpoint?.reviewed_at ??
-      checkpoint?.lastReviewed ??
-      checkpoint?.last_reviewed ??
-      "",
-  ).trim();
-
-  return {
-    branch: normalizedBranch,
-    status,
-    sha,
-    reviewedAt,
-    reviewedAtMs: Number.isFinite(Date.parse(reviewedAt))
-      ? Date.parse(reviewedAt)
-      : 0,
-  };
-}
-
-function mergeReviewedBranchCheckpoint(branchLanes, lane, checkpoint) {
-  const normalizedLane = String(lane ?? "")
-    .trim()
-    .toLowerCase();
-  if (normalizedLane !== "ui-runtime" || !checkpoint) {
-    return;
-  }
-  const existing = branchLanes[normalizedLane].get(checkpoint.branch);
-  if (
-    existing &&
-    (existing.reviewedAtMs > checkpoint.reviewedAtMs ||
-      (existing.reviewedAtMs === checkpoint.reviewedAtMs &&
-        existing.sha.localeCompare(checkpoint.sha) >= 0))
-  ) {
-    return;
-  }
-  branchLanes[normalizedLane].set(checkpoint.branch, checkpoint);
-}
-
 function parseReviewedPayload(parsed) {
   const reviewed = Array.isArray(parsed?.reviewed) ? parsed.reviewed : [];
   const lanes = {
     codex: createReviewedLaneState(),
-    "ui-runtime": createReviewedLaneState(),
   };
   const laneMetadata = {
     codex: createReviewedLaneMetadataState(),
-    "ui-runtime": createReviewedLaneMetadataState(),
   };
-  const branchLanes = createReviewedBranchLanes();
 
   for (const entry of reviewed) {
     const legacySha = typeof entry === "string" ? entry : "";
@@ -482,12 +398,6 @@ function parseReviewedPayload(parsed) {
 
     addReviewedLaneStatus(lanes, sha, "codex", entry?.status);
     addReviewedLaneStatus(lanes, sha, "codex", entry?.lanes?.codex);
-    addReviewedLaneStatus(
-      lanes,
-      sha,
-      "ui-runtime",
-      entry?.lanes?.["ui-runtime"],
-    );
     const reviewedAt = String(
       entry?.reviewed_at ?? entry?.reviewedAt ?? "",
     ).trim();
@@ -496,23 +406,11 @@ function parseReviewedPayload(parsed) {
     }
   }
 
-  const branchReviews = Array.isArray(parsed?.branch_reviews)
-    ? parsed.branch_reviews
-    : [];
-  for (const entry of branchReviews) {
-    const checkpoint = normalizeReviewedBranchCheckpoint(
-      entry?.branch,
-      entry?.lanes?.["ui-runtime"],
-    );
-    mergeReviewedBranchCheckpoint(branchLanes, "ui-runtime", checkpoint);
-  }
-
   return {
     any: new Set(lanes.codex.any),
     clean: new Set(lanes.codex.clean),
     lanes,
     laneMetadata,
-    branchLanes,
   };
 }
 
@@ -798,8 +696,6 @@ export async function loadDismissedFindingSignatures({
       keys.add(sha);
     } else if (lane === "codex") {
       keys.add(`codex:${sha}`);
-    } else if (lane === "ui-runtime") {
-      keys.add(`${sha}.ui-runtime`);
     } else {
       keys.add(`${lane}:${sha}`);
     }
@@ -818,13 +714,10 @@ export async function loadReviewedShas({ repoRoot, readFileFn = readFile }) {
     clean: new Set(),
     lanes: {
       codex: createReviewedLaneState(),
-      "ui-runtime": createReviewedLaneState(),
     },
     laneMetadata: {
       codex: createReviewedLaneMetadataState(),
-      "ui-runtime": createReviewedLaneMetadataState(),
     },
-    branchLanes: createReviewedBranchLanes(),
   };
   const reviewedPath = resolveReviewedShasPath(repoRoot);
   try {
@@ -839,20 +732,9 @@ export async function loadReviewedShas({ repoRoot, readFileFn = readFile }) {
     for (const sha of parsedReviewed.lanes.codex.clean) {
       globalReviewed.lanes.codex.clean.add(sha);
     }
-    for (const sha of parsedReviewed.lanes["ui-runtime"].any) {
-      globalReviewed.lanes["ui-runtime"].any.add(sha);
-    }
-    for (const sha of parsedReviewed.lanes["ui-runtime"].clean) {
-      globalReviewed.lanes["ui-runtime"].clean.add(sha);
-    }
     for (const [sha, reviewedAt] of parsedReviewed.laneMetadata.codex
       .reviewedAtBySha) {
       globalReviewed.laneMetadata.codex.reviewedAtBySha.set(sha, reviewedAt);
-    }
-    for (const [branch, checkpoint] of parsedReviewed.branchLanes[
-      "ui-runtime"
-    ]) {
-      globalReviewed.branchLanes["ui-runtime"].set(branch, checkpoint);
     }
   } catch {}
 
@@ -867,7 +749,6 @@ export async function saveReviewedShas({
   reviewedLaneCleanShas = {},
   reviewedLaneStatusOverrides = {},
   reviewedLaneReviewedAt = {},
-  reviewedBranchLaneCheckpoints = {},
   mkdirFn = mkdir,
   readFileFn = readFile,
   openFn = open,
@@ -894,13 +775,10 @@ export async function saveReviewedShas({
   try {
     const lanes = {
       codex: createReviewedLaneState(),
-      "ui-runtime": createReviewedLaneState(),
     };
     const laneMetadata = {
       codex: createReviewedLaneMetadataState(),
-      "ui-runtime": createReviewedLaneMetadataState(),
     };
-    const branchLanes = createReviewedBranchLanes();
 
     for (const lane of REVIEWED_LANES) {
       for (const sha of reviewedLaneAnyShas?.[lane] ?? []) {
@@ -927,9 +805,6 @@ export async function saveReviewedShas({
         for (const sha of existing.lanes[lane].clean) {
           addReviewedLaneStatus(lanes, sha, lane, "clean");
         }
-      }
-      for (const checkpoint of existing.branchLanes["ui-runtime"].values()) {
-        mergeReviewedBranchCheckpoint(branchLanes, "ui-runtime", checkpoint);
       }
       for (const [sha, reviewedAt] of existing.laneMetadata.codex
         .reviewedAtBySha) {
@@ -964,16 +839,7 @@ export async function saveReviewedShas({
       );
     }
 
-    for (const [branch, checkpoint] of overrideEntriesForLane(
-      reviewedBranchLaneCheckpoints,
-      "ui-runtime",
-    )) {
-      const normalized = normalizeReviewedBranchCheckpoint(branch, checkpoint);
-      if (!normalized) continue;
-      mergeReviewedBranchCheckpoint(branchLanes, "ui-runtime", normalized);
-    }
-
-    const allShas = new Set([...lanes.codex.any, ...lanes["ui-runtime"].any]);
+    const allShas = new Set(lanes.codex.any);
     const reviewed = Array.from(allShas)
       .sort()
       .map((sha) => {
@@ -982,14 +848,8 @@ export async function saveReviewedShas({
           : lanes.codex.any.has(sha)
             ? "reviewed"
             : "";
-        const uiRuntimeStatus = lanes["ui-runtime"].clean.has(sha)
-          ? "clean"
-          : lanes["ui-runtime"].any.has(sha)
-            ? "reviewed"
-            : "";
         const laneStatuses = {
           ...(codexStatus ? { codex: codexStatus } : {}),
-          ...(uiRuntimeStatus ? { "ui-runtime": uiRuntimeStatus } : {}),
         };
         const next = {
           sha,
@@ -1004,25 +864,10 @@ export async function saveReviewedShas({
         }
         return next;
       });
-    const branchReviews = Array.from(branchLanes["ui-runtime"].values())
-      .sort((left, right) => left.branch.localeCompare(right.branch))
-      .map((checkpoint) => ({
-        branch: checkpoint.branch,
-        lanes: {
-          "ui-runtime": {
-            status: checkpoint.status,
-            ...(checkpoint.sha ? { sha: checkpoint.sha } : {}),
-            ...(checkpoint.reviewedAt
-              ? { reviewed_at: checkpoint.reviewedAt }
-              : {}),
-          },
-        },
-      }));
     const payload = {
       schema_version: REVIEWED_SHAS_SCHEMA_VERSION,
       scope: "global",
       reviewed,
-      ...(branchReviews.length > 0 ? { branch_reviews: branchReviews } : {}),
       updated_at: new Date().toISOString(),
     };
     const tempPath = `${reviewedPath}.tmp.${process.pid}.${Date.now()}`;
@@ -1194,148 +1039,6 @@ export async function readReviewGateState({
   };
 }
 
-async function readUiRuntimeGateStates({
-  reviewsDir,
-  branchName,
-  headBranchName = branchName,
-  minSeverity,
-  infraBlocking = false,
-  dismissedBySha = new Map(),
-  cleanBranchCheckpoint = null,
-}) {
-  const threshold = parseMinSeverity(minSeverity);
-  const files = await readdir(reviewsDir).catch(() => []);
-  const states = [];
-
-  for (const fileName of files) {
-    if (!fileName.endsWith(".ui-runtime.json")) continue;
-    const jsonPath = path.join(reviewsDir, fileName);
-    let parsed;
-    try {
-      const raw = await readFile(jsonPath, "utf8");
-      parsed = JSON.parse(raw);
-    } catch {
-      continue;
-    }
-
-    const reportTarget = parsed?.review_target;
-    const reportType = String(reportTarget?.type ?? "")
-      .trim()
-      .toLowerCase();
-    if (reportType && reportType !== "ui-runtime") continue;
-
-    const reportBranch = String(reportTarget?.branch ?? "").trim();
-    if (reportBranch && reportBranch !== branchName) continue;
-    if (!reportBranch && branchName !== headBranchName) continue;
-
-    const targetSha = String(reportTarget?.sha ?? "")
-      .trim()
-      .toLowerCase();
-    const fallbackSha = fileName
-      .replace(/\.ui-runtime\.json$/, "")
-      .toLowerCase();
-    const sha = targetSha || fallbackSha;
-    const reviewedAtRaw = String(parsed?.last_reviewed ?? "").trim();
-    const reviewedAtMs = Date.parse(reviewedAtRaw);
-
-    const dismissalsForLane =
-      dismissedBySha.get(`${sha}.ui-runtime`) ?? new Set();
-    const legacyDismissals = dismissedBySha.get(sha) ?? new Set();
-    const dismissedSignatures = new Set([
-      ...legacyDismissals,
-      ...dismissalsForLane,
-    ]);
-
-    const findings = Array.isArray(parsed?.findings) ? parsed.findings : [];
-    const unresolvedFindings = findings.filter(
-      (finding) =>
-        !dismissedSignatures.has(
-          normalizeFindingToken(findingSignature(finding)),
-        ),
-    );
-    const { count, worstSeverity } = summarizeFindings(unresolvedFindings);
-    const reviewStatus = String(parsed?.review_status ?? "")
-      .trim()
-      .toLowerCase();
-    const failureReason = String(parsed?.failure_reason ?? "")
-      .trim()
-      .toLowerCase();
-    const failed = reviewStatus !== "" && reviewStatus !== "ok";
-    const actionable = failed || count > 0;
-    const blockingBySeverity =
-      count > 0 && severityRank(worstSeverity) >= severityRank(threshold);
-    const blockingByFailure =
-      failed && (reviewStatus !== "infra_error" || infraBlocking);
-
-    states.push({
-      sha,
-      reportFile: fileName,
-      reviewedAtMs: Number.isFinite(reviewedAtMs) ? reviewedAtMs : 0,
-      reviewStatus,
-      failureReason,
-      findingsCount: count,
-      worstSeverity,
-      actionable,
-      failed,
-      blocking: blockingBySeverity || blockingByFailure,
-      reason: failed
-        ? failureReason
-          ? `ui-runtime-review-status-${failureReason}`
-          : "ui-runtime-review-status-failed"
-        : `ui-runtime-severity-threshold-${threshold}`,
-    });
-  }
-
-  const checkpointSha = String(cleanBranchCheckpoint?.sha ?? "")
-    .trim()
-    .toLowerCase();
-  const checkpointReviewedAtMs = Number.isFinite(
-    cleanBranchCheckpoint?.reviewedAtMs,
-  )
-    ? cleanBranchCheckpoint.reviewedAtMs
-    : Number.isFinite(
-          Date.parse(String(cleanBranchCheckpoint?.reviewedAt ?? "")),
-        )
-      ? Date.parse(String(cleanBranchCheckpoint?.reviewedAt ?? ""))
-      : 0;
-  const effectiveStates = states.filter((state) => {
-    if (!checkpointSha || state.sha !== checkpointSha) {
-      return true;
-    }
-    if (checkpointReviewedAtMs <= 0 || state.reviewedAtMs <= 0) {
-      return true;
-    }
-    return state.reviewedAtMs > checkpointReviewedAtMs;
-  });
-
-  if (effectiveStates.length === 0) {
-    return [];
-  }
-
-  const sortedByFreshness = effectiveStates.sort((left, right) => {
-    if (right.reviewedAtMs !== left.reviewedAtMs) {
-      return right.reviewedAtMs - left.reviewedAtMs;
-    }
-    return right.reportFile.localeCompare(left.reportFile);
-  });
-
-  const newest = sortedByFreshness[0];
-  if (
-    newest &&
-    newest.failed &&
-    (newest.reviewStatus !== "infra_error" || infraBlocking)
-  ) {
-    return [newest];
-  }
-
-  const latestSuccessful = sortedByFreshness.find((state) => !state.failed);
-  if (latestSuccessful) {
-    return [latestSuccessful];
-  }
-
-  return [];
-}
-
 function defaultShouldContinue() {
   return true;
 }
@@ -1391,8 +1094,6 @@ export async function executePushGate({
   gitExec,
   waitForReview = waitForReviewToSettle,
   readReviewState = readReviewGateState,
-  uiRuntimeGateEnabled = false,
-  uiRuntimeInfraBlocking = false,
   shouldContinue = defaultShouldContinue,
 }) {
   const updates =
@@ -1462,7 +1163,6 @@ export async function executePushGate({
     }
   }
   const reviewedShas = { any: new Set(), clean: new Set() };
-  const reviewedUiRuntimeBranchCheckpoints = new Map();
   for (const branchName of reviewedBranchScopes) {
     const scopedReviewed = await loadReviewedShas({
       repoRoot,
@@ -1470,11 +1170,6 @@ export async function executePushGate({
     });
     for (const sha of scopedReviewed.any) reviewedShas.any.add(sha);
     for (const sha of scopedReviewed.clean) reviewedShas.clean.add(sha);
-    const uiRuntimeCheckpoint =
-      scopedReviewed.branchLanes?.["ui-runtime"]?.get(branchName);
-    if (uiRuntimeCheckpoint) {
-      reviewedUiRuntimeBranchCheckpoints.set(branchName, uiRuntimeCheckpoint);
-    }
   }
   const reviewedAnyShas = new Set(reviewedShas.any);
   const reviewedCleanShas = new Set(reviewedShas.clean);
@@ -1632,39 +1327,6 @@ export async function executePushGate({
             : `severity-threshold-${parseMinSeverity(minSeverity)}`,
       });
       continue;
-    }
-  }
-
-  if (uiRuntimeGateEnabled) {
-    const gateBranches =
-      pushedBranchNames.size > 0
-        ? Array.from(pushedBranchNames)
-        : [headBranchName];
-    for (const branchName of gateBranches) {
-      const branchState = await getBranchState(branchName);
-      const uiRuntimeStates = await readUiRuntimeGateStates({
-        reviewsDir,
-        branchName,
-        headBranchName,
-        minSeverity,
-        infraBlocking: uiRuntimeInfraBlocking,
-        dismissedBySha: new Map(branchState.dismissedBySha),
-        cleanBranchCheckpoint:
-          reviewedUiRuntimeBranchCheckpoints.get(branchName) ?? null,
-      });
-
-      for (const state of uiRuntimeStates) {
-        if (state.actionable) actionable += 1;
-        if (state.failed) failed += 1;
-        if (!state.blocking) continue;
-        blocked.push({
-          sha: `${state.sha}.ui-runtime`,
-          status: state.reviewStatus || "unknown",
-          severity: state.worstSeverity,
-          findings: state.findingsCount,
-          reason: state.reason,
-        });
-      }
     }
   }
 

@@ -1,4 +1,4 @@
-package cli
+package friend
 
 import (
 	"strings"
@@ -23,7 +23,7 @@ func TestBuildPacketV2IsPublicSafeByDefault(t *testing.T) {
 		NextAction: "private action",
 	}
 
-	got := buildPacket(signals.RepoMetadata{
+	got := BuildPacket(signals.RepoMetadata{
 		ID:          "owner/private",
 		Name:        "private",
 		Root:        privateRoot,

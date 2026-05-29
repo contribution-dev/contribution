@@ -118,7 +118,7 @@ func cardFromPR(pr github.PullRequest) signals.PRQualityCard {
 
 func cardFromCommit(commit gitrepo.Commit) signals.PRQualityCard {
 	fileCount := len(commit.Files)
-	lineCount := changedLineCount(commit.Files)
+	lineCount := gitrepo.TotalChangedLines(commit.Files)
 	label := "mixed"
 	confidence := signals.ConfidenceMedium
 	mainRisk := "Source changes had limited test evidence."
@@ -136,14 +136,14 @@ func cardFromCommit(commit gitrepo.Commit) signals.PRQualityCard {
 		nextAction = "Repeat this small, reviewable change shape."
 		strengths = append(strengths, signals.Finding{
 			Label:      "Focused change",
-			Evidence:   fmt.Sprintf("Commit %s changed %s.", shortSHA(commit.SHA), scopeDescription(fileCount, lineCount)),
+			Evidence:   fmt.Sprintf("Commit %s changed %s.", gitrepo.ShortSHA(commit.SHA), scopeDescription(fileCount, lineCount)),
 			Confidence: signals.ConfidenceHigh,
 		})
 	}
 	if commit.SourceTouched && !commit.TestsTouched {
 		risks = append(risks, signals.Finding{
 			Label:        "No adjacent tests",
-			Evidence:     fmt.Sprintf("Commit %s changed source files without test files.", shortSHA(commit.SHA)),
+			Evidence:     fmt.Sprintf("Commit %s changed source files without test files.", gitrepo.ShortSHA(commit.SHA)),
 			Confidence:   signals.ConfidenceMedium,
 			WhyItMatters: "Reviewers and future changes have less protection when behavior changes lack test evidence.",
 			NextAction:   "Add at least one nearby test for behavior changes.",
@@ -153,7 +153,7 @@ func cardFromCommit(commit gitrepo.Commit) signals.PRQualityCard {
 		label = "risky"
 		risks = append(risks, signals.Finding{
 			Label:        "Large scope",
-			Evidence:     fmt.Sprintf("Commit %s changed %s.", shortSHA(commit.SHA), scopeDescription(fileCount, lineCount)),
+			Evidence:     fmt.Sprintf("Commit %s changed %s.", gitrepo.ShortSHA(commit.SHA), scopeDescription(fileCount, lineCount)),
 			Confidence:   signals.ConfidenceHigh,
 			WhyItMatters: "Broad changes are harder to review and easier to churn.",
 			NextAction:   "Split broad work into smaller commits or PRs.",
@@ -169,7 +169,7 @@ func cardFromCommit(commit gitrepo.Commit) signals.PRQualityCard {
 	if commit.TestsTouched {
 		strengths = append(strengths, signals.Finding{
 			Label:      "Test evidence",
-			Evidence:   fmt.Sprintf("Commit %s touched test files.", shortSHA(commit.SHA)),
+			Evidence:   fmt.Sprintf("Commit %s touched test files.", gitrepo.ShortSHA(commit.SHA)),
 			Confidence: signals.ConfidenceHigh,
 		})
 		if label != "risky" {
@@ -195,7 +195,7 @@ func cardFromCommit(commit gitrepo.Commit) signals.PRQualityCard {
 		Risks:        risks,
 		Evidence: []signals.SignalRef{{
 			ID:      commit.SHA,
-			Message: fmt.Sprintf("Local git commit %s.", shortSHA(commit.SHA)),
+			Message: fmt.Sprintf("Local git commit %s.", gitrepo.ShortSHA(commit.SHA)),
 		}},
 		NextAction: nextAction,
 	}
@@ -204,7 +204,7 @@ func cardFromCommit(commit gitrepo.Commit) signals.PRQualityCard {
 func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMap {
 	var focused, testTouched, sourceNoTest, large, riskyNoTest, docsTouched, fixLike int
 	for _, commit := range input.History.Commits {
-		lineCount := changedLineCount(commit.Files)
+		lineCount := gitrepo.TotalChangedLines(commit.Files)
 		if len(commit.Files) <= 5 && len(commit.Files) > 0 {
 			focused++
 		}
@@ -430,7 +430,7 @@ func publicFindings(findings []signals.Finding, limit int) []signals.Finding {
 func commitTitle(commit gitrepo.Commit) string {
 	title := strings.TrimSpace(commit.Subject)
 	if title == "" {
-		return "Commit " + shortSHA(commit.SHA)
+		return "Commit " + gitrepo.ShortSHA(commit.SHA)
 	}
 	return title
 }
@@ -471,24 +471,9 @@ func scopeDescription(files, lines int) string {
 	return fmt.Sprintf("%d %s", files, fileLabel)
 }
 
-func changedLineCount(files []gitrepo.ChangedFile) int {
-	var total int
-	for _, file := range files {
-		total += file.Additions + file.Deletions
-	}
-	return total
-}
-
 func defaultBranch(branch string) string {
 	if branch == "" {
 		return "main"
 	}
 	return branch
-}
-
-func shortSHA(value string) string {
-	if len(value) <= 8 {
-		return value
-	}
-	return value[:8]
 }

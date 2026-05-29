@@ -20,7 +20,25 @@ type pathReplacement struct {
 	public  string
 }
 
-var commitSHAPattern = regexp.MustCompile(`\b[0-9a-fA-F]{7,40}\b`)
+var (
+	commitSHAPattern     = regexp.MustCompile(`\b[0-9a-fA-F]{7,40}\b`)
+	pathCandidatePattern = regexp.MustCompile(`(?:[A-Za-z]:)?(?:[./~]?[\w.-]+[/\\])+[\w.@+-]+`)
+)
+
+const publicRepoID = "private-repository"
+
+// ValidateFormat checks supported report output formats.
+func ValidateFormat(format string, allowAll bool) error {
+	switch format {
+	case "json", "markdown":
+		return nil
+	case "all", "":
+		if allowAll {
+			return nil
+		}
+	}
+	return fmt.Errorf("unsupported format %q", format)
+}
 
 // WriteAnalysisBundle writes analysis artifacts.
 func WriteAnalysisBundle(outputDir string, analysis signals.AnalysisReport, format string) error {
@@ -30,14 +48,15 @@ func WriteAnalysisBundle(outputDir string, analysis signals.AnalysisReport, form
 	if format == "" {
 		format = "all"
 	}
+	if err := ValidateFormat(format, true); err != nil {
+		return err
+	}
 	switch format {
 	case "all", "json":
 		if err := writeJSON(filepath.Join(outputDir, "analysis.json"), analysis); err != nil {
 			return err
 		}
 	case "markdown":
-	default:
-		return fmt.Errorf("unsupported format %q", format)
 	}
 	if format == "all" || format == "markdown" {
 		if err := os.WriteFile(filepath.Join(outputDir, "report.md"), []byte(Markdown(analysis)), 0o600); err != nil {
@@ -64,6 +83,9 @@ func WriteReportOnly(outputDir string, analysis signals.AnalysisReport, format s
 	if format == "" {
 		format = "all"
 	}
+	if err := ValidateFormat(format, true); err != nil {
+		return err
+	}
 	switch format {
 	case "all":
 		if err := writeJSON(filepath.Join(outputDir, "analysis.json"), analysis); err != nil {
@@ -80,8 +102,6 @@ func WriteReportOnly(outputDir string, analysis signals.AnalysisReport, format s
 		if err := os.WriteFile(filepath.Join(outputDir, "report.md"), []byte(Markdown(analysis)), 0o600); err != nil {
 			return fmt.Errorf("write report.md: %w", err)
 		}
-	default:
-		return fmt.Errorf("unsupported format %q", format)
 	}
 	if err := writeJSON(filepath.Join(outputDir, "profile.export.json"), ProfileExport(analysis)); err != nil {
 		return err
@@ -102,16 +122,9 @@ func WriteProfileArtifacts(outputDir string, analysis signals.AnalysisReport) er
 
 // PublicSafeAnalysis returns an analysis report suitable for public-safe output.
 func PublicSafeAnalysis(analysis signals.AnalysisReport) signals.AnalysisReport {
-	privateRepoID := analysis.Repo.ID
-	publicRepoID := "private-repository"
-	pathReplacements := publicSafePathReplacements(analysis.Signals)
-	analysis.Repo.ID = publicRepoID
-	analysis.Repo.Name = "private repository"
-	analysis.Repo.Root = ""
-	analysis.Repo.RemoteURL = ""
-	analysis.Repo.HeadSHA = ""
-	analysis.Repo.GitHubOwner = ""
-	analysis.Repo.GitHubRepo = ""
+	sourceRepoID := analysis.Repo.ID
+	pathReplacements := publicSafePathReplacements(analysis)
+	analysis.Repo = PublicSafeRepo(analysis.Repo)
 	analysis.Config.PublicSafe = true
 	analysis.Config.OutputDirectory = ""
 	analysis.Config.GitHubMetadataConfigured = false
@@ -131,7 +144,7 @@ func PublicSafeAnalysis(analysis signals.AnalysisReport) signals.AnalysisReport 
 	analysis.Profile.DisplayName = redactCommitLikeText(redactText(analysis.Profile.DisplayName, pathReplacements))
 	analysis.Limitations = redactStrings(analysis.Limitations, pathReplacements)
 	for i := range analysis.Signals {
-		analysis.Signals[i] = publicSafeSignal(analysis.Signals[i], privateRepoID, publicRepoID, pathReplacements)
+		analysis.Signals[i] = publicSafeSignal(analysis.Signals[i], sourceRepoID, pathReplacements)
 	}
 	for i := range analysis.Tooling.Tools {
 		analysis.Tooling.Tools[i].Version = redactText(analysis.Tooling.Tools[i].Version, pathReplacements)
@@ -139,6 +152,18 @@ func PublicSafeAnalysis(analysis signals.AnalysisReport) signals.AnalysisReport 
 	}
 	analysis.Tooling.Limitations = redactStrings(analysis.Tooling.Limitations, pathReplacements)
 	return analysis
+}
+
+// PublicSafeRepo removes private repository identity from metadata.
+func PublicSafeRepo(repo signals.RepoMetadata) signals.RepoMetadata {
+	repo.ID = publicRepoID
+	repo.Name = "private repository"
+	repo.Root = ""
+	repo.RemoteURL = ""
+	repo.HeadSHA = ""
+	repo.GitHubOwner = ""
+	repo.GitHubRepo = ""
+	return repo
 }
 
 // ReadAnalysis reads analysis.json.
@@ -232,7 +257,7 @@ func Markdown(analysis signals.AnalysisReport) string {
 
 // ProfileExport builds the public-safe profile export.
 func ProfileExport(analysis signals.AnalysisReport) signals.ProfileExport {
-	pathReplacements := publicSafePathReplacements(analysis.Signals)
+	pathReplacements := publicSafePathReplacements(analysis)
 	var export signals.ProfileExport
 	export.Version = 1
 	export.GeneratedAt = analysis.GeneratedAt
@@ -255,7 +280,7 @@ func ProfileExport(analysis signals.AnalysisReport) signals.ProfileExport {
 
 // ShareCard builds the compact positive sharing export.
 func ShareCard(analysis signals.AnalysisReport) signals.ShareCard {
-	pathReplacements := publicSafePathReplacements(analysis.Signals)
+	pathReplacements := publicSafePathReplacements(analysis)
 	highlights := []string{
 		fmt.Sprintf("%d artifacts analyzed", analysis.Profile.AnalyzedPRs),
 	}
@@ -552,12 +577,12 @@ func publicSafeWeaknessMap(value signals.WeaknessMap, replacements ...[]pathRepl
 	return value
 }
 
-func publicSafeSignal(sig signals.Signal, privateRepoID string, publicRepoID string, replacements ...[]pathReplacement) signals.Signal {
+func publicSafeSignal(sig signals.Signal, sourceRepoID string, replacements ...[]pathReplacement) signals.Signal {
 	privateSubjectID := sig.SubjectID
-	if sig.RepoID == privateRepoID {
+	if sig.RepoID == sourceRepoID {
 		sig.RepoID = publicRepoID
 	}
-	if sig.SubjectID == privateRepoID {
+	if sig.SubjectID == sourceRepoID {
 		sig.SubjectID = publicRepoID
 	}
 	if sig.SubjectType == "commit" {
@@ -569,9 +594,7 @@ func publicSafeSignal(sig signals.Signal, privateRepoID string, publicRepoID str
 	if sig.FilePath != "" {
 		sig.FilePath = privacy.RedactPath(sig.FilePath, false)
 	}
-	sig.Message = redactCommitLikeText(redactText(sig.Message, replacements...), privateSubjectID, sig.Evidence.CommitSHA)
-	sig.Evidence.URL = ""
-	sig.Evidence.CommitSHA = ""
+	sig.Message = redactCommitLikeText(redactText(sig.Message, replacements...), privateSubjectID)
 	sig.Evidence.ToolVersion = redactText(sig.Evidence.ToolVersion, replacements...)
 	return sig
 }
@@ -619,19 +642,81 @@ func redactCommitLikeText(value string, shas ...string) string {
 	return commitSHAPattern.ReplaceAllString(value, "commit")
 }
 
-func publicSafePathReplacements(sigs []signals.Signal) []pathReplacement {
+func publicSafePathReplacements(analysis signals.AnalysisReport) []pathReplacement {
 	var replacements []pathReplacement
 	seen := map[string]bool{}
-	for _, sig := range sigs {
-		addPathReplacement(&replacements, seen, sig.FilePath)
-		if sig.SubjectType == "file" {
-			addPathReplacement(&replacements, seen, sig.SubjectID)
+	add := func(values ...string) {
+		for _, value := range values {
+			addPathReplacementsFromText(&replacements, seen, value)
 		}
 	}
+	add(analysis.Repo.ID, analysis.Repo.Name, analysis.Repo.Root, analysis.Repo.RemoteURL, analysis.Repo.HeadSHA, analysis.Repo.GitHubOwner, analysis.Repo.GitHubRepo)
+	add(analysis.Config.OutputDirectory)
+	for _, tool := range analysis.Tooling.Tools {
+		add(tool.Name, tool.Version, tool.Reason)
+	}
+	add(analysis.Tooling.Limitations...)
+	for _, sig := range analysis.Signals {
+		add(sig.RepoID, sig.SubjectID, sig.FilePath, sig.Message, sig.Evidence.ToolVersion)
+	}
+	for _, card := range analysis.PRCards {
+		add(card.Title, card.URL, card.Summary, card.Scope, card.TestEvidence, card.ReviewBurden, card.Durability, card.MainRisk, card.NextAction)
+		for _, finding := range append(append([]signals.Finding{}, card.Strengths...), card.Risks...) {
+			addFindingText(add, finding)
+		}
+		for _, evidence := range card.Evidence {
+			add(evidence.ID, evidence.Message)
+		}
+	}
+	for _, finding := range analysis.WeaknessMap.Strengths {
+		addFindingText(add, finding)
+	}
+	for _, finding := range analysis.WeaknessMap.Weaknesses {
+		addFindingText(add, finding)
+	}
+	for _, finding := range analysis.WeaknessMap.WatchItems {
+		addFindingText(add, finding)
+	}
+	add(analysis.WeaknessMap.NextActions...)
+	add(analysis.Profile.DisplayName, analysis.Profile.Headline)
+	for _, finding := range analysis.Profile.Strengths {
+		addFindingText(add, finding)
+	}
+	for _, finding := range analysis.Profile.ImprovementTrends {
+		addFindingText(add, finding)
+	}
+	for _, badge := range analysis.Profile.BadgeCandidates {
+		add(badge.ID, badge.Label)
+	}
+	add(analysis.Limitations...)
 	sort.Slice(replacements, func(i, j int) bool {
 		return len(replacements[i].private) > len(replacements[j].private)
 	})
 	return replacements
+}
+
+func addFindingText(add func(...string), finding signals.Finding) {
+	add(finding.Label, finding.Evidence, finding.WhyItMatters, finding.NextAction)
+}
+
+func addPathReplacementsFromText(replacements *[]pathReplacement, seen map[string]bool, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	if isPathCandidate(value) {
+		addPathReplacement(replacements, seen, value)
+	}
+	for _, candidate := range pathCandidatePattern.FindAllString(value, -1) {
+		candidate = strings.Trim(candidate, ".,;:()[]{}<>\"'`")
+		if isPathCandidate(candidate) {
+			addPathReplacement(replacements, seen, candidate)
+		}
+	}
+}
+
+func isPathCandidate(value string) bool {
+	return strings.Contains(value, "/") || strings.Contains(value, "\\")
 }
 
 func addPathReplacement(replacements *[]pathReplacement, seen map[string]bool, value string) {

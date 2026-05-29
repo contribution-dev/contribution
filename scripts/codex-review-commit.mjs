@@ -24,6 +24,7 @@ import {
 } from "./lib/codex-review-prompt.mjs";
 import { classifyReviewFailure } from "./lib/codex-review-failure.mjs";
 import { executeReviewPasses as executeSharedReviewPasses } from "./lib/codex-review-execution.mjs";
+import { reviewSeverityRank } from "./lib/review-severity.mjs";
 import { verifyFindings } from "./codex-review-verify-findings.mjs";
 
 export function parseArgs(argv) {
@@ -154,12 +155,6 @@ export function determinePassModes(context) {
   return modes;
 }
 
-const FINDING_SEVERITY_RANK = {
-  minor: 1,
-  major: 2,
-  blocker: 3,
-};
-
 function compactString(value) {
   return String(value ?? "").trim();
 }
@@ -230,16 +225,7 @@ function findingsShareRootCause(left, right) {
 
 function strongerFinding(left, right) {
   const severityDelta =
-    (FINDING_SEVERITY_RANK[
-      String(right?.severity ?? "")
-        .trim()
-        .toLowerCase()
-    ] ?? 0) -
-    (FINDING_SEVERITY_RANK[
-      String(left?.severity ?? "")
-        .trim()
-        .toLowerCase()
-    ] ?? 0);
+    reviewSeverityRank(right?.severity) - reviewSeverityRank(left?.severity);
   if (severityDelta !== 0) {
     return severityDelta > 0 ? right : left;
   }
@@ -265,8 +251,7 @@ function mergeRootCauseFindingGroup(left, right) {
     .trim()
     .toLowerCase();
   const severity =
-    (FINDING_SEVERITY_RANK[secondarySeverity] ?? 0) >
-    (FINDING_SEVERITY_RANK[primarySeverity] ?? 0)
+    reviewSeverityRank(secondarySeverity) > reviewSeverityRank(primarySeverity)
       ? secondarySeverity
       : primarySeverity;
 

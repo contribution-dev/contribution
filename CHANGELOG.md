@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Split CLI command wiring from analysis, preflight, friend-review, report, and
+  privacy behavior; remove stale config options, obsolete review scripts, the
+  unused UI-runtime review lane, and duplicate helper logic.
+- Harden public-safe exports by redacting emails and path evidence across the
+  full analysis payload, not just local signal records.
+- Add regression coverage for config validation, GitHub metadata fetching,
+  tool discovery, preflight policy, friend feedback validation, and shared
+  review severity handling.
 - Harden public-safe markdown reports so redacted PR-ledger rows keep neutral
   risk/action fallback text and generated report copy no longer uses stale V1
   phase wording.

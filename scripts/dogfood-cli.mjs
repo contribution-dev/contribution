@@ -426,10 +426,8 @@ function analysisFixture(privateRoot) {
     config: {
       since_days: 90,
       max_prs: 20,
-      include_unmerged_branches: false,
       public_safe: false,
       no_external_tools: true,
-      allow_manual_ai_pr_tags: true,
       output_directory: privateRoot,
       github_metadata_configured: false,
     },

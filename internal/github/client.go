@@ -23,15 +23,15 @@ type PullRequest struct {
 	Number       int
 	Title        string
 	URL          string
-	Author       string
-	CreatedAt    time.Time
-	MergedAt     time.Time
 	ChangedFiles int
 	Additions    int
 	Deletions    int
-	Commits      int
-	Labels       []string
 }
+
+var (
+	httpClient       = http.DefaultClient
+	githubAPIBaseURL = "https://api.github.com"
+)
 
 // ResolveToken treats the flag value as either a literal token or env var name.
 func ResolveToken(flagValue string) (string, bool) {
@@ -67,7 +67,7 @@ func FetchMergedPRs(ctx context.Context, owner, repo, token string, maxPRs int) 
 	if maxPRs <= 0 {
 		maxPRs = 20
 	}
-	url := fmt.Sprintf("https://api.github.com/repos/%s/%s/pulls?state=closed&sort=updated&direction=desc&per_page=%d", owner, repo, maxPRs)
+	url := fmt.Sprintf("%s/repos/%s/%s/pulls?state=closed&sort=updated&direction=desc&per_page=%d", githubAPIBaseURL, owner, repo, maxPRs)
 	req, err := http.NewRequestWithContext(ctx, http.MethodGet, url, nil)
 	if err != nil {
 		return Metadata{}, err
@@ -75,7 +75,7 @@ func FetchMergedPRs(ctx context.Context, owner, repo, token string, maxPRs int) 
 	req.Header.Set("Accept", "application/vnd.github+json")
 	req.Header.Set("X-GitHub-Api-Version", "2022-11-28")
 	req.Header.Set("Authorization", "Bearer "+token)
-	resp, err := http.DefaultClient.Do(req)
+	resp, err := httpClient.Do(req)
 	if err != nil {
 		return Metadata{}, err
 	}
@@ -86,21 +86,13 @@ func FetchMergedPRs(ctx context.Context, owner, repo, token string, maxPRs int) 
 		return Metadata{Reason: fmt.Sprintf("GitHub API returned %s.", resp.Status)}, nil
 	}
 	var raw []struct {
-		Number  int    `json:"number"`
-		Title   string `json:"title"`
-		HTMLURL string `json:"html_url"`
-		User    struct {
-			Login string `json:"login"`
-		} `json:"user"`
-		CreatedAt    time.Time  `json:"created_at"`
+		Number       int        `json:"number"`
+		Title        string     `json:"title"`
+		HTMLURL      string     `json:"html_url"`
 		MergedAt     *time.Time `json:"merged_at"`
 		ChangedFiles int        `json:"changed_files"`
 		Additions    int        `json:"additions"`
 		Deletions    int        `json:"deletions"`
-		Commits      int        `json:"commits"`
-		Labels       []struct {
-			Name string `json:"name"`
-		} `json:"labels"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return Metadata{}, fmt.Errorf("decode GitHub pull requests: %w", err)
@@ -114,16 +106,9 @@ func FetchMergedPRs(ctx context.Context, owner, repo, token string, maxPRs int) 
 			Number:       item.Number,
 			Title:        item.Title,
 			URL:          item.HTMLURL,
-			Author:       item.User.Login,
-			CreatedAt:    item.CreatedAt,
-			MergedAt:     *item.MergedAt,
 			ChangedFiles: item.ChangedFiles,
 			Additions:    item.Additions,
 			Deletions:    item.Deletions,
-			Commits:      item.Commits,
-		}
-		for _, label := range item.Labels {
-			pr.Labels = append(pr.Labels, label.Name)
 		}
 		metadata.PRs = append(metadata.PRs, pr)
 		if len(metadata.PRs) >= maxPRs {

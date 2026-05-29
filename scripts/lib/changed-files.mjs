@@ -148,10 +148,6 @@ export function getChangedFiles({ cwd, explicitBase, explicitHead } = {}) {
   };
 }
 
-function hasPrefix(files, prefix) {
-  return files.some((file) => file.startsWith(prefix));
-}
-
 function hasAnyPrefix(file, prefixes) {
   return prefixes.some((prefix) => file.startsWith(prefix));
 }
@@ -202,20 +198,9 @@ export function classifyChangedFiles(files) {
   const rootConfig = list.some(isRootConfigPath);
 
   return {
-    app: false,
-    mobile: false,
-    ui: false,
     tooling,
-    tsLike: list.some((file) => /\.(js|mjs|cjs|ts|tsx)$/i.test(file)),
     docsOnly,
     rootConfig,
-    appSource: false,
-    mobileSource: false,
-    uiSource: false,
-    appRelevant: goRelevant,
-    mobileRelevant: false,
-    uiRelevant: false,
     goRelevant,
-    docs: hasPrefix(list, "docs/"),
   };
 }

@@ -6,7 +6,7 @@ Thanks for contributing to `contribution`.
 
 ```bash
 pnpm install
-go mod download
+scripts/with-tools go mod download
 pnpm tools:preflight
 ```
 

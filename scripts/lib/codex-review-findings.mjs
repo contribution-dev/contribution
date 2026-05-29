@@ -14,25 +14,11 @@ import {
   isActionableCodexReviewReport,
   parseBacklogMeta,
 } from "./codex-review-state.mjs";
-
-const SEVERITY_RANK = {
-  none: 99,
-  minor: 1,
-  major: 2,
-  blocker: 3,
-};
-
-function normalizeSeverityValue(value) {
-  const normalized = String(value || "minor").toLowerCase();
-  if (
-    normalized === "blocker" ||
-    normalized === "major" ||
-    normalized === "minor"
-  ) {
-    return normalized;
-  }
-  return "minor";
-}
+import {
+  normalizeReviewSeverity,
+  parseMinReviewSeverity,
+  reviewSeverityRank,
+} from "./review-severity.mjs";
 
 function quotedShellArg(value) {
   const text = String(value ?? "");
@@ -340,10 +326,14 @@ function mergeFindingPair(left, right) {
   return {
     ...primary,
     severity:
-      (SEVERITY_RANK[normalizeSeverityValue(leftNormalized.severity)] ?? 0) >=
-      (SEVERITY_RANK[normalizeSeverityValue(rightNormalized.severity)] ?? 0)
-        ? normalizeSeverityValue(leftNormalized.severity)
-        : normalizeSeverityValue(rightNormalized.severity),
+      reviewSeverityRank(leftNormalized.severity, { fallback: "minor" }) >=
+      reviewSeverityRank(rightNormalized.severity, { fallback: "minor" })
+        ? normalizeReviewSeverity(leftNormalized.severity, {
+            fallback: "minor",
+          })
+        : normalizeReviewSeverity(rightNormalized.severity, {
+            fallback: "minor",
+          }),
     confidence: Math.max(
       clampConfidence(leftNormalized.confidence),
       clampConfidence(rightNormalized.confidence),
@@ -792,15 +782,17 @@ export function shouldNotifyFindings({
   reviewLane = "codex",
   minConfidence = 0,
 }) {
-  const threshold = SEVERITY_RANK[minSeverity] ?? SEVERITY_RANK.minor;
+  const threshold = reviewSeverityRank(
+    parseMinReviewSeverity(minSeverity, "minor"),
+  );
   const normalizedMinConfidence = clampMinConfidence(minConfidence, 0);
   const normalizedLegacyBlockerConf = clampMinConfidence(legacyBlockerConf, 0);
   const applyLaneMinConfidence =
     String(reviewLane || "codex").toLowerCase() === "local";
   const findings = Array.isArray(data?.findings) ? data.findings : [];
   for (const finding of findings) {
-    const severity = String(finding?.severity || "");
-    const findingRank = SEVERITY_RANK[severity] ?? 0;
+    const severity = normalizeReviewSeverity(finding?.severity);
+    const findingRank = reviewSeverityRank(severity);
     if (findingRank < threshold) {
       continue;
     }

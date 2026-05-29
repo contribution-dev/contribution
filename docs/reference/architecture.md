@@ -7,14 +7,22 @@ tooling layer for repository automation.
 
 - `cmd/contribution` owns process setup and linker-provided build metadata.
 - `internal/cli` owns command construction, stdout/stderr wiring, and command
-  tests.
+  tests. It should delegate product behavior to narrow internal packages.
+- `internal/analysis` owns the analyze workflow orchestration.
+- `internal/preflight` owns changed-file policy, risk classification, coverage,
+  and fail-on-risk decisions.
+- `internal/friend` owns friend-review packet creation and feedback import.
+- `internal/report` owns report rendering, public-safe exports, and shared
+  output format validation.
+- `internal/privacy` owns redaction primitives. Callers should not create
+  parallel public-safe sanitizers.
 - Public Go packages should not be added until the project has a stable library
   contract.
 
 ## Tooling layout
 
-- `scripts/codex-review-*` owns local commit review, queueing, push gating, and
-  remediation.
+- `scripts/codex-review-*` owns the Codex commit-review lane, queueing, push
+  gating, and remediation.
 - `scripts/run-changed-checks.mjs` routes changed-aware validation.
 - `.github/workflows` owns CI, release, dependency audit, and review follow-up
   automation.

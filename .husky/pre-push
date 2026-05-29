@@ -248,7 +248,7 @@ run_full_pre_push_checks() {
   log_status "Running typecheck"
   pnpm typecheck >> "$PRE_PUSH_STATUS_LOG" 2>&1 || {
     log_status "Phase 2/3 failed: typecheck"
-    report_failure "typecheck" "pnpm typecheck" "TypeScript errors found"
+    report_failure "typecheck" "pnpm typecheck" "Go vet errors found"
     exit 1
   }
 
@@ -438,7 +438,7 @@ node scripts/codex-review-clean-stale --stale-seconds "$STALE_REVIEW_SECONDS" >>
 
 log_status "Live status command: scripts/codex-review-status --watch"
 log_status "Phase 1/3: review gate (fail-fast)"
-if scripts/codex-review-push-gate --context-file "$TMP_BRANCH_STATE" --push-parent-pid "$PUSH_PARENT_PID" --ui-runtime-gate 0 >> "$PRE_PUSH_STATUS_LOG" 2>&1; then
+if scripts/codex-review-push-gate --context-file "$TMP_BRANCH_STATE" --push-parent-pid "$PUSH_PARENT_PID" >> "$PRE_PUSH_STATUS_LOG" 2>&1; then
   log_status "Phase 1/3 complete: review gate passed"
 else
   log_status "Phase 1/3 failed: codex review gate"
@@ -491,12 +491,6 @@ else
     log_status "No branch ref updates detected; skipping base-dependent code checks"
   fi
   log_status "Phase 2/3 complete: risk checks passed"
-fi
-
-# Optional: Create local database backup only after all blocking checks pass.
-if [ -f "scripts/backup-local.sh" ]; then
-  log_status "Phase 3/3: local backup (optional)"
-  ./scripts/backup-local.sh >> "$PRE_PUSH_STATUS_LOG" 2>&1 || log_status "Warning: Backup skipped (non-fatal)"
 fi
 
 # Build and E2E run in CI (GitHub Actions).

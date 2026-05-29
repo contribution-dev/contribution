@@ -24,30 +24,6 @@ func TestParseGitHubRepo(t *testing.T) {
 	}
 }
 
-func TestRedactRemoteURL(t *testing.T) {
-	tokenKey := "to" + "ken"
-	passwordKey := "pass" + "word"
-	redactMe := "redact-me"
-	tests := map[string]string{
-		"https://" + tokenKey + "=" + redactMe + "@github.com/owner/repo.git":     "https://REDACTED@github.com/owner/repo.git",
-		"https://user:" + redactMe + "@github.com/owner/repo.git":                 "https://REDACTED@github.com/owner/repo.git",
-		"ssh://git:" + redactMe + "@github.com/owner/repo.git":                    "ssh://REDACTED@github.com/owner/repo.git",
-		"git@github.com:owner/repo.git":                                           "git@github.com:owner/repo.git",
-		"https://github.com/owner/repo.git":                                       "https://github.com/owner/repo.git",
-		"https://" + tokenKey + "=" + redactMe + "@[::1]/owner/repo.git":          "https://REDACTED@[::1]/owner/repo.git",
-		"https://" + tokenKey + "=" + redactMe + "@127.0.0.1/owner/repo.git":      "https://REDACTED@127.0.0.1/owner/repo.git",
-		"https://" + tokenKey + "=" + redactMe + "@example.test/owner/repo.git?a": "https://REDACTED@example.test/owner/repo.git?a",
-		"https://example.test/owner/repo.git?" + tokenKey + "=" + redactMe:        "https://example.test/owner/repo.git?" + tokenKey + "=REDACTED",
-		"https://example.test/owner/repo.git?x=" + tokenKey + "=" + redactMe:      "https://example.test/owner/repo.git?x=REDACTED",
-		"https://example.test/owner/repo.git?" + passwordKey + "=" + redactMe:     "https://example.test/owner/repo.git?" + passwordKey + "=REDACTED",
-	}
-	for remote, want := range tests {
-		if got := RedactRemoteURL(remote); got != want {
-			t.Fatalf("RedactRemoteURL(%q) = %q, want %q", remote, got, want)
-		}
-	}
-}
-
 func TestResolveRedactsCredentialedOrigin(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -263,6 +239,25 @@ func TestParseUnifiedChangedLineRanges(t *testing.T) {
 	}
 	if _, ok := got["deleted.go"]; ok {
 		t.Fatalf("deleted file received new-side ranges: %+v", got["deleted.go"])
+	}
+}
+
+func TestDiffRejectsOptionLikeRefs(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repoPath := t.TempDir()
+	runGit(t, repoPath, "init", "-b", "main")
+	runGit(t, repoPath, "config", "user.email", "dogfood@example.test")
+	runGit(t, repoPath, "config", "user.name", "Dogfood User")
+	writeTestFile(t, repoPath, "README.md", "# fixture\n")
+	runGit(t, repoPath, "add", ".")
+	runGit(t, repoPath, "commit", "-m", "initial fixture")
+
+	if _, err := Diff(context.Background(), repoPath, "--stat", "HEAD"); err == nil {
+		t.Fatal("Diff() error = nil, want invalid ref error")
+	} else if !strings.Contains(err.Error(), "invalid git ref") {
+		t.Fatalf("Diff() error = %v, want invalid git ref", err)
 	}
 }
 

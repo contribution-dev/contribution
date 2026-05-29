@@ -10,10 +10,6 @@ export const DEFAULT_CONTRACT_PATH = path.resolve(
   REPO_ROOT,
   ".github/policy/risk-merge-contract.v1.json",
 );
-export const DEFAULT_SCHEMA_PATH = path.resolve(
-  REPO_ROOT,
-  ".github/policy/risk-merge-contract.schema.json",
-);
 
 function escapeRegex(value) {
   return value.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
@@ -56,10 +52,6 @@ export function pathMatchesAnyGlob(value, patterns) {
   return patterns.some((pattern) => pathMatchesGlob(value, pattern));
 }
 
-export function uniqueValues(values) {
-  return [...new Set(values)];
-}
-
 export async function readJson(filePath) {
   const raw = await readFile(filePath, "utf8");
   return JSON.parse(raw);
@@ -68,30 +60,4 @@ export async function readJson(filePath) {
 export async function loadRiskContract(contractPath = DEFAULT_CONTRACT_PATH) {
   const contract = await readJson(contractPath);
   return contract;
-}
-
-export function toRelativeFromRepo(filePath) {
-  const relative = path.relative(REPO_ROOT, filePath);
-  return normalizePath(relative || filePath);
-}
-
-export function requiredBrowserFlowIds(contract, changedFiles, riskTier) {
-  const browserEvidence = contract.browserEvidence;
-  if (!browserEvidence) return [];
-
-  if (!browserEvidence.requiredByRiskTier.includes(riskTier)) {
-    return [];
-  }
-
-  const ids = [];
-  for (const trigger of browserEvidence.triggers) {
-    const matched = changedFiles.some((changedFile) =>
-      pathMatchesAnyGlob(changedFile, trigger.ifChangedAny),
-    );
-    if (matched) {
-      ids.push(...trigger.requiredFlowIds);
-    }
-  }
-
-  return uniqueValues(ids);
 }

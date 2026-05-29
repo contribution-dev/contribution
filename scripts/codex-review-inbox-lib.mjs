@@ -15,6 +15,7 @@ import path from "node:path";
 import { tmpdir } from "node:os";
 import { fileURLToPath } from "node:url";
 import { writeReviewArtifacts } from "./lib/codex-review-findings.mjs";
+import { reviewSeverityRank } from "./lib/review-severity.mjs";
 import {
   buildStaleSupersessionArchiver,
   collectLiveBacklogArtifacts,
@@ -438,10 +439,7 @@ function toEpochMs(iso) {
 }
 
 function severityRank(severity) {
-  if (severity === "blocker") return 3;
-  if (severity === "major") return 2;
-  if (severity === "minor") return 1;
-  return 0;
+  return reviewSeverityRank(severity);
 }
 
 function reportSortKey(report) {

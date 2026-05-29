@@ -6,6 +6,7 @@ import { pathToFileURL } from "node:url";
 import { REPO_ROOT } from "./lib.mjs";
 import { listIssueComments } from "./github-client.mjs";
 import { consumeCommonGithubArg } from "./shared/common-github-args.mjs";
+import { reviewSeverityRank } from "../lib/review-severity.mjs";
 
 const FINDING_HEADER_REGEX =
   /^### \[(?<findingId>[^\]]+)\] \[(?<severity>[A-Z]+)\] (?<title>.+?) \(confidence (?<confidence>[0-9.]+)\)/gm;
@@ -28,10 +29,7 @@ export function isSameCommitSha(commitSha, headSha) {
 }
 
 function severityRank(severity) {
-  if (severity === "blocker") return 3;
-  if (severity === "major") return 2;
-  if (severity === "minor") return 1;
-  return 0;
+  return reviewSeverityRank(severity);
 }
 
 export function parseFindingsFromCommentBody(body) {

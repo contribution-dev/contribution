@@ -2,6 +2,7 @@
 package config
 
 import (
+	"bytes"
 	"errors"
 	"fmt"
 	"os"
@@ -21,7 +22,6 @@ type Config struct {
 	Project   ProjectConfig   `yaml:"project" json:"project"`
 	Analysis  AnalysisConfig  `yaml:"analysis" json:"analysis"`
 	Preflight PreflightConfig `yaml:"preflight" json:"preflight"`
-	Privacy   PrivacyConfig   `yaml:"privacy" json:"privacy"`
 	AIUsage   AIUsageConfig   `yaml:"ai_usage" json:"ai_usage"`
 	Reports   ReportsConfig   `yaml:"reports" json:"reports"`
 }
@@ -34,9 +34,8 @@ type ProjectConfig struct {
 
 // AnalysisConfig controls local analysis scope.
 type AnalysisConfig struct {
-	SinceDays               int  `yaml:"since_days" json:"since_days"`
-	MaxPRs                  int  `yaml:"max_prs" json:"max_prs"`
-	IncludeUnmergedBranches bool `yaml:"include_unmerged_branches" json:"include_unmerged_branches"`
+	SinceDays int `yaml:"since_days" json:"since_days"`
+	MaxPRs    int `yaml:"max_prs" json:"max_prs"`
 }
 
 // PreflightConfig controls current-diff readiness policy.
@@ -48,33 +47,15 @@ type PreflightConfig struct {
 	RiskyPaths             []string `yaml:"risky_paths" json:"risky_paths"`
 }
 
-// PrivacyConfig controls private and public export behavior.
-type PrivacyConfig struct {
-	IncludeRawDiffs                    bool `yaml:"include_raw_diffs" json:"include_raw_diffs"`
-	IncludePrivatePathsInPublicExports bool `yaml:"include_private_paths_in_public_exports" json:"include_private_paths_in_public_exports"`
-	IncludeAuthorEmails                bool `yaml:"include_author_emails" json:"include_author_emails"`
-	UploadEnabled                      bool `yaml:"upload_enabled" json:"upload_enabled"`
-}
-
 // AIUsageConfig stores self-reported AI workflow context.
 type AIUsageConfig struct {
-	SelfReportedTools []string               `yaml:"self_reported_tools" json:"self_reported_tools"`
-	SelfReportedModes []string               `yaml:"self_reported_modes" json:"self_reported_modes"`
-	AllowManualPRTags bool                   `yaml:"allow_manual_ai_pr_tags" json:"allow_manual_ai_pr_tags"`
-	ManualPRTags      map[string]ManualPRTag `yaml:"manual_pr_tags,omitempty" json:"manual_pr_tags,omitempty"`
-}
-
-// ManualPRTag stores explicit user-provided AI tags.
-type ManualPRTag struct {
-	AIAssisted bool     `yaml:"ai_assisted" json:"ai_assisted"`
-	Tools      []string `yaml:"tools" json:"tools"`
-	Confidence string   `yaml:"confidence" json:"confidence"`
+	SelfReportedTools []string `yaml:"self_reported_tools" json:"self_reported_tools"`
+	SelfReportedModes []string `yaml:"self_reported_modes" json:"self_reported_modes"`
 }
 
 // ReportsConfig controls local report output.
 type ReportsConfig struct {
-	OutputDir            string `yaml:"output_dir" json:"output_dir"`
-	PublicProfileDefault bool   `yaml:"public_profile_default" json:"public_profile_default"`
+	OutputDir string `yaml:"output_dir" json:"output_dir"`
 }
 
 // Load reads a config file from repoRoot, returning defaults when it is absent.
@@ -89,11 +70,14 @@ func Load(repoRoot string) (Config, []string, error) {
 	if err != nil {
 		return cfg, nil, fmt.Errorf("read %s: %w", path, err)
 	}
-	if err := yaml.Unmarshal(data, &cfg); err != nil {
+	decoder := yaml.NewDecoder(bytes.NewReader(data))
+	decoder.KnownFields(true)
+	if err := decoder.Decode(&cfg); err != nil {
 		return cfg, nil, fmt.Errorf("parse %s: %w", path, err)
 	}
+	warnings := Validate(cfg)
 	applyDefaults(&cfg)
-	return cfg, Validate(cfg), nil
+	return cfg, warnings, nil
 }
 
 // Default returns safe private-by-default settings.
@@ -105,9 +89,8 @@ func Default() Config {
 			DefaultBranch: "main",
 		},
 		Analysis: AnalysisConfig{
-			SinceDays:               90,
-			MaxPRs:                  20,
-			IncludeUnmergedBranches: false,
+			SinceDays: 90,
+			MaxPRs:    20,
 		},
 		Preflight: PreflightConfig{
 			MaxFiles:               20,
@@ -116,21 +99,12 @@ func Default() Config {
 			ChangedLineCoverageMin: 0,
 			RiskyPaths:             []string{},
 		},
-		Privacy: PrivacyConfig{
-			IncludeRawDiffs:                    false,
-			IncludePrivatePathsInPublicExports: false,
-			IncludeAuthorEmails:                false,
-			UploadEnabled:                      false,
-		},
 		AIUsage: AIUsageConfig{
 			SelfReportedTools: []string{},
 			SelfReportedModes: []string{},
-			AllowManualPRTags: true,
-			ManualPRTags:      map[string]ManualPRTag{},
 		},
 		Reports: ReportsConfig{
-			OutputDir:            ".contribution/reports",
-			PublicProfileDefault: false,
+			OutputDir: ".contribution/reports",
 		},
 	}
 	return cfg
@@ -156,12 +130,6 @@ func Validate(cfg Config) []string {
 	}
 	if cfg.Preflight.ChangedLineCoverageMin < 0 || cfg.Preflight.ChangedLineCoverageMin > 100 {
 		warnings = append(warnings, "preflight.changed_line_coverage_min must be between 0 and 100; ignoring the configured threshold.")
-	}
-	if cfg.Privacy.UploadEnabled {
-		warnings = append(warnings, "privacy.upload_enabled is true, but the CLI does not implement upload.")
-	}
-	if cfg.Privacy.IncludeRawDiffs {
-		warnings = append(warnings, "privacy.include_raw_diffs is true; public exports will still omit raw diffs.")
 	}
 	return warnings
 }
@@ -210,9 +178,6 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.AIUsage.SelfReportedModes == nil {
 		cfg.AIUsage.SelfReportedModes = []string{}
-	}
-	if cfg.AIUsage.ManualPRTags == nil {
-		cfg.AIUsage.ManualPRTags = map[string]ManualPRTag{}
 	}
 	if cfg.Reports.OutputDir == "" {
 		cfg.Reports.OutputDir = defaults.Reports.OutputDir

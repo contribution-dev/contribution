@@ -35,7 +35,6 @@ func TestProfileExportIsPublicSafe(t *testing.T) {
 			SubjectType: "commit",
 			SubjectID:   commitSHA,
 			Message:     "Commit " + commitSHA[:8] + " touched tests",
-			Evidence:    signals.Evidence{CommitSHA: commitSHA},
 		}},
 		PRCards: []signals.PRQualityCard{{
 			PRNumber:   123,
@@ -118,7 +117,6 @@ func TestPublicSafeAnalysisRedactsPrivateMetadata(t *testing.T) {
 			SubjectType: "commit",
 			SubjectID:   commitSHA,
 			Message:     "Commit " + commitSHA[:8] + " changed 10 lines",
-			Evidence:    signals.Evidence{CommitSHA: commitSHA},
 			PublicSafe:  true,
 			CreatedAt:   time.Now(),
 		}},
@@ -170,7 +168,7 @@ func TestPublicSafeAnalysisRedactsPrivateMetadata(t *testing.T) {
 	if got.Signals[1].SubjectID != "session.go" || got.Signals[1].FilePath != "session.go" {
 		t.Fatalf("repo-relative signal path was not redacted: %+v", got.Signals[1])
 	}
-	if got.Signals[2].SubjectID != "" || got.Signals[2].Evidence.CommitSHA != "" {
+	if got.Signals[2].SubjectID != "" {
 		t.Fatalf("commit signal metadata was not redacted: %+v", got.Signals[2])
 	}
 	if got.PRCards[0].Title != "PR #123" || got.PRCards[0].URL != "" || len(got.PRCards[0].Risks) != 0 || got.PRCards[0].MainRisk != "" || len(got.PRCards[0].Evidence) != 0 {
@@ -178,6 +176,49 @@ func TestPublicSafeAnalysisRedactsPrivateMetadata(t *testing.T) {
 	}
 	if containsText(got, "dogfood-secret-value") || containsText(got, privateRoot) || containsText(got, privateRelativePath) || containsText(got, commitSHA) || containsText(got, commitSHA[:8]) || containsText(got, commitTitle) {
 		t.Fatalf("public-safe analysis retained private text: %+v", got)
+	}
+}
+
+func TestPublicSafeAnalysisRedactsPathsAndEmailsOutsideSignals(t *testing.T) {
+	privatePath := "internal/customer/acme/session.go"
+	email := "builder@example.com"
+	analysis := signals.AnalysisReport{
+		Repo: signals.RepoMetadata{ID: "owner/private", Name: "private"},
+		PRCards: []signals.PRQualityCard{{
+			Title:        "Fix " + privatePath,
+			Label:        "mixed",
+			Confidence:   signals.ConfidenceMedium,
+			Summary:      "Changed " + privatePath + " after review from " + email,
+			MainRisk:     "Risk remains in " + privatePath,
+			NextAction:   "Ask " + email + " to review " + privatePath,
+			TestEvidence: "No tests for " + privatePath,
+		}},
+		WeaknessMap: signals.WeaknessMap{
+			Weaknesses: []signals.Finding{{
+				Label:      "Path-only finding",
+				Evidence:   privatePath + " was changed by " + email,
+				Confidence: signals.ConfidenceMedium,
+			}},
+			Confidence: signals.ConfidenceMedium,
+		},
+		Profile: signals.ProfileSummary{
+			Headline:           "Work in " + privatePath,
+			AnalyzedPRs:        1,
+			AnalysisWindowDays: 90,
+			Confidence:         signals.ConfidenceMedium,
+			Strengths:          []signals.Finding{{Label: "Reviewed", Evidence: email + " reviewed " + privatePath, Confidence: signals.ConfidenceMedium}},
+		},
+		Limitations: []string{"Contact " + email + " about " + privatePath},
+	}
+
+	got := PublicSafeAnalysis(analysis)
+	for _, forbidden := range []string{privatePath, email} {
+		if containsText(got, forbidden) {
+			t.Fatalf("public-safe analysis retained %q: %+v", forbidden, got)
+		}
+	}
+	if !containsText(got, "session.go") {
+		t.Fatalf("public-safe analysis did not preserve neutral basename: %+v", got)
 	}
 }
 
@@ -201,7 +242,6 @@ func TestPublicSafeReportArtifactsDoNotRetainPrivateIdentifiers(t *testing.T) {
 			SubjectID:   commitSHA,
 			Message:     "Commit " + commitSHA[:8] + " changed " + privateRelativePath,
 			FilePath:    privateRelativePath,
-			Evidence:    signals.Evidence{CommitSHA: commitSHA, URL: "https://example.test/private"},
 		}},
 		PRCards: []signals.PRQualityCard{{
 			Title:      "Private commit " + commitSHA[:8],

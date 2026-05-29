@@ -1,13 +1,6 @@
 #!/usr/bin/env node
 
-import {
-  readdir,
-  readFile,
-  rename,
-  rm,
-  stat,
-  writeFile,
-} from "node:fs/promises";
+import { readdir, readFile, rename, rm, stat } from "node:fs/promises";
 import path from "node:path";
 import { pathToFileURL } from "node:url";
 import {
@@ -18,13 +11,11 @@ import {
 import { writeReviewMarkdownProjection } from "./lib/codex-review-findings.mjs";
 import {
   isActionableCodexReviewReport,
-  hasDurableUiRuntimeReviewEvidence,
   hasDurableReviewEvidence,
   isQueueRecoveryReport,
   isSyntheticFailurePlaceholder,
   reportSatisfiesLane,
 } from "./lib/codex-review-state.mjs";
-import { renderMarkdownReport as renderUiRuntimeMarkdown } from "./ui-runtime-review-report";
 import {
   enqueueReviewJob,
   ensureReviewQueue,
@@ -75,7 +66,7 @@ function parseArgs(argv) {
 }
 
 function parseArtifactName(fileName) {
-  const match = /^([0-9a-f]{40})(\.ui-runtime)?\.(json|md)$/.exec(
+  const match = /^([0-9a-f]{40})\.(json|md)$/.exec(
     String(fileName ?? "").trim(),
   );
   if (!match) {
@@ -83,9 +74,9 @@ function parseArtifactName(fileName) {
   }
   return {
     sha: match[1],
-    kind: match[2] ? "ui-runtime" : "codex",
-    extension: match[3],
-    baseName: `${match[1]}${match[2] ? ".ui-runtime" : ""}`,
+    kind: "codex",
+    extension: match[2],
+    baseName: match[1],
   };
 }
 
@@ -113,16 +104,10 @@ function firstFindingModel(report) {
 }
 
 function reportKindFromPayload(report, fallbackKind = "codex") {
-  const targetType = String(report?.review_target?.type ?? "")
-    .trim()
-    .toLowerCase();
-  if (targetType === "ui-runtime") {
-    return "ui-runtime";
-  }
   const lane = String(report?.lane ?? "")
     .trim()
     .toLowerCase();
-  if (lane === "codex" || lane === "ui-runtime") {
+  if (lane === "codex") {
     return lane;
   }
   const codexStatus = String(report?.review_engines?.codex?.status ?? "")
@@ -141,22 +126,6 @@ function reportKindFromPayload(report, fallbackKind = "codex") {
     return "codex";
   }
   return fallbackKind;
-}
-
-function isRenderableUiRuntimeReport(report, sha = "") {
-  if (!report || typeof report !== "object" || Array.isArray(report)) {
-    return false;
-  }
-  const targetSha = String(report?.review_target?.sha ?? "")
-    .trim()
-    .toLowerCase();
-  if (!targetSha) {
-    return false;
-  }
-  if (sha && targetSha !== String(sha).trim().toLowerCase()) {
-    return false;
-  }
-  return true;
 }
 
 async function regenerateMarkdownProjection({
@@ -195,92 +164,6 @@ async function regenerateMarkdownProjection({
     sidecar,
     targetMd,
   });
-}
-
-async function regenerateUiRuntimeMarkdownProjection({
-  reviewsDir,
-  baseName,
-  report,
-  dryRun,
-}) {
-  if (dryRun) {
-    return;
-  }
-  await writeFile(
-    path.join(reviewsDir, `${baseName}.md`),
-    renderUiRuntimeMarkdown(report),
-    "utf8",
-  );
-}
-
-async function relocateCanonicalRuntimeArtifact({
-  reviewsDir,
-  currentBaseName,
-  sha,
-  currentReport,
-  dryRun,
-}) {
-  const currentJsonPath = path.join(reviewsDir, `${currentBaseName}.json`);
-  const currentMdPath = path.join(reviewsDir, `${currentBaseName}.md`);
-  const targetBaseName = `${sha}.ui-runtime`;
-  const targetJsonPath = path.join(reviewsDir, `${targetBaseName}.json`);
-  const targetMdPath = path.join(reviewsDir, `${targetBaseName}.md`);
-
-  if (dryRun) {
-    const targetReport =
-      currentBaseName === targetBaseName
-        ? currentReport
-        : await readJsonIfPresent(targetJsonPath);
-    return {
-      baseName: targetBaseName,
-      report:
-        currentBaseName === targetBaseName
-          ? currentReport
-          : isRenderableUiRuntimeReport(targetReport, sha)
-            ? targetReport
-            : currentReport,
-    };
-  }
-
-  if (currentBaseName === targetBaseName) {
-    return {
-      baseName: targetBaseName,
-      report: currentReport,
-    };
-  }
-
-  const targetExists = await stat(targetJsonPath).catch(() => null);
-  if (targetExists?.isFile()) {
-    const targetReport = await readJsonIfPresent(targetJsonPath);
-    if (isRenderableUiRuntimeReport(targetReport, sha)) {
-      await rm(currentJsonPath, { force: true });
-      await rm(currentMdPath, { force: true });
-      return {
-        baseName: targetBaseName,
-        report: targetReport,
-      };
-    }
-    await rm(targetJsonPath, { force: true });
-    await rm(targetMdPath, { force: true });
-  }
-
-  await rename(currentJsonPath, targetJsonPath).catch(async () => {
-    await rm(targetJsonPath, { force: true });
-    await rename(currentJsonPath, targetJsonPath);
-  });
-  await rename(currentMdPath, targetMdPath).catch(async () => {
-    const mdExists = await stat(currentMdPath).catch(() => null);
-    if (!mdExists?.isFile()) {
-      return;
-    }
-    await rm(targetMdPath, { force: true });
-    await rename(currentMdPath, targetMdPath);
-  });
-
-  return {
-    baseName: targetBaseName,
-    report: currentReport,
-  };
 }
 
 async function relocateCanonicalCodexArtifact({
@@ -365,30 +248,6 @@ async function relocateCanonicalCodexArtifact({
   };
 }
 
-function hasPromotableMisplacedReport(report, lane) {
-  if (lane === "ui-runtime") {
-    return hasDurableUiRuntimeReviewEvidence(report);
-  }
-  return hasDurableReviewEvidence(report, lane);
-}
-
-function isSyntheticUiRuntimePlaceholder(report) {
-  if (!report || typeof report !== "object" || Array.isArray(report)) {
-    return false;
-  }
-  const reviewStatus = String(report?.review_status ?? "")
-    .trim()
-    .toLowerCase();
-  const lastReviewed = String(report?.last_reviewed ?? "").trim();
-  const findings = Array.isArray(report?.findings) ? report.findings : [];
-  return Boolean(
-    reviewStatus &&
-    reviewStatus !== "ok" &&
-    !lastReviewed &&
-    findings.length === 0,
-  );
-}
-
 async function repairMisplacedLogReports({ repoRoot, reviewsDir, dryRun }) {
   const logsDir = path.join(reviewsDir, "logs");
   const entries = await readdir(logsDir, { withFileTypes: true }).catch(
@@ -412,17 +271,16 @@ async function repairMisplacedLogReports({ repoRoot, reviewsDir, dryRun }) {
     ]);
     if (!misplacedReport) continue;
 
-    const artifactLane =
-      artifact.kind === "ui-runtime" ? "ui-runtime" : "codex";
-    const canonicalIsSyntheticPlaceholder =
-      isSyntheticFailurePlaceholder(canonicalReport, artifactLane) ||
-      (artifactLane === "ui-runtime" &&
-        isSyntheticUiRuntimePlaceholder(canonicalReport));
+    const artifactLane = "codex";
+    const canonicalIsSyntheticPlaceholder = isSyntheticFailurePlaceholder(
+      canonicalReport,
+      artifactLane,
+    );
     const shouldPromote =
       !canonicalReport ||
       isQueueRecoveryReport(canonicalReport) ||
       (canonicalIsSyntheticPlaceholder &&
-        hasPromotableMisplacedReport(misplacedReport, artifactLane));
+        hasDurableReviewEvidence(misplacedReport, artifactLane));
     if (shouldPromote) {
       if (!dryRun) {
         if (canonicalReport) {
@@ -458,7 +316,6 @@ async function repairCanonicalReports({ repoRoot, reviewsDir, dryRun }) {
   let regeneratedMarkdown = 0;
   let removedQueueRecovery = 0;
   let removedOrphanMarkdown = 0;
-  let relocatedCanonicalRuntimeArtifacts = 0;
   let invariantWarnings = 0;
 
   for (const entry of entries) {
@@ -477,41 +334,6 @@ async function repairCanonicalReports({ repoRoot, reviewsDir, dryRun }) {
     let report = await readJsonIfPresent(jsonPath);
     if (!report) continue;
     const payloadKind = reportKindFromPayload(report, artifact.kind);
-
-    if (payloadKind === "ui-runtime") {
-      const relocation = await relocateCanonicalRuntimeArtifact({
-        reviewsDir,
-        currentBaseName: baseName,
-        sha,
-        currentReport: report,
-        dryRun,
-      });
-      if (relocation.baseName !== baseName) {
-        relocatedCanonicalRuntimeArtifacts += 1;
-        baseName = relocation.baseName;
-        mdPath = path.join(reportsDir, `${baseName}.md`);
-      }
-      report = relocation.report;
-
-      const mdInfo = await stat(mdPath).catch(() => null);
-      const mdHasText = mdInfo?.isFile()
-        ? await fileHasNonWhitespace(mdPath)
-        : false;
-      if (!mdHasText) {
-        if (!isRenderableUiRuntimeReport(report, sha)) {
-          invariantWarnings += 1;
-          continue;
-        }
-        await regenerateUiRuntimeMarkdownProjection({
-          reviewsDir,
-          baseName,
-          report,
-          dryRun,
-        });
-        regeneratedMarkdown += 1;
-      }
-      continue;
-    }
 
     if (payloadKind !== "codex") {
       continue;
@@ -573,7 +395,6 @@ async function repairCanonicalReports({ repoRoot, reviewsDir, dryRun }) {
     regeneratedMarkdown,
     removedQueueRecovery,
     removedOrphanMarkdown,
-    relocatedCanonicalRuntimeArtifacts,
     rerunShas,
     invariantWarnings,
   };
@@ -691,8 +512,6 @@ export async function repairLegacyReviewState({
     regeneratedMarkdown: canonical.regeneratedMarkdown,
     removedQueueRecoveryReports: canonical.removedQueueRecovery,
     removedOrphanMarkdown: canonical.removedOrphanMarkdown,
-    relocatedCanonicalRuntimeArtifacts:
-      canonical.relocatedCanonicalRuntimeArtifacts,
     removedLegacyOutcomeJobs,
     requeuedMissingCanonicalReports: rerunShas.size,
     invariantWarnings: canonical.invariantWarnings,
@@ -710,7 +529,7 @@ async function main() {
     dryRun: args.dryRun,
   });
   console.log(
-    `[codex-review-repair-state] ${args.dryRun ? "would_repair" : "repaired"} moved_logs=${result.movedMisplacedLogReports} deleted_logs=${result.deletedMisplacedLogReports} relocated_runtime=${result.relocatedCanonicalRuntimeArtifacts} regenerated_markdown=${result.regeneratedMarkdown} removed_queue_recovery=${result.removedQueueRecoveryReports} removed_legacy_outcomes=${result.removedLegacyOutcomeJobs} requeued=${result.requeuedMissingCanonicalReports} invariant_warnings=${result.invariantWarnings}`,
+    `[codex-review-repair-state] ${args.dryRun ? "would_repair" : "repaired"} moved_logs=${result.movedMisplacedLogReports} deleted_logs=${result.deletedMisplacedLogReports} regenerated_markdown=${result.regeneratedMarkdown} removed_queue_recovery=${result.removedQueueRecoveryReports} removed_legacy_outcomes=${result.removedLegacyOutcomeJobs} requeued=${result.requeuedMissingCanonicalReports} invariant_warnings=${result.invariantWarnings}`,
   );
 }
 

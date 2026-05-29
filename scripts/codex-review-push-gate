@@ -26,10 +26,6 @@ Options:
   --timeout-seconds <n>       Max wait for in-progress reviews (default: 900)
   --min-severity <minor|major|blocker|none>
                               Severity threshold for blocking (default: major)
-  --ui-runtime-gate <0|1>     Enable branch-scoped UI runtime report gate
-                              (default: from CODEX_UI_RUNTIME_REVIEW_GATE_ENABLED)
-  --ui-runtime-infra-blocking <0|1>
-                              Block on UI runtime infra failures (default: from CODEX_UI_RUNTIME_REVIEW_INFRA_BLOCKING)
   -h, --help                  Show help
 `);
 }
@@ -51,11 +47,6 @@ function parseArgs(argv) {
     minSeverity: parseMinSeverity(
       process.env.CODEX_REVIEW_PUSH_GATE_MIN_SEVERITY ?? "major",
     ),
-    uiRuntimeGateEnabled:
-      (process.env.CODEX_UI_RUNTIME_REVIEW_GATE_ENABLED ?? "1").trim() !== "0",
-    uiRuntimeInfraBlocking:
-      (process.env.CODEX_UI_RUNTIME_REVIEW_INFRA_BLOCKING ?? "0").trim() !==
-      "0",
   };
 
   for (let i = 2; i < argv.length; i += 1) {
@@ -96,14 +87,6 @@ function parseArgs(argv) {
         throw new Error(
           `${arg} is no longer supported; the push gate is validate-only`,
         );
-      case "--ui-runtime-gate":
-        args.uiRuntimeGateEnabled = String(next ?? "1") !== "0";
-        i += 1;
-        break;
-      case "--ui-runtime-infra-blocking":
-        args.uiRuntimeInfraBlocking = String(next ?? "0") !== "0";
-        i += 1;
-        break;
       case "-h":
       case "--help":
         usage();
@@ -176,9 +159,6 @@ function remediationHint(entry) {
   if (reason === "local-review-missing") {
     return `next: remove stale legacy local artifacts and rerun scripts/codex-review-prune-artifacts.mjs --reviews-dir .code-reviews`;
   }
-  if (reason.startsWith("ui-runtime-")) {
-    return `next: resolve runtime findings in .code-reviews/*.ui-runtime.md or clear obsolete lane artifacts after fixes`;
-  }
   if (
     reason === "review-status-failed" ||
     reason.startsWith("severity-threshold-")
@@ -245,8 +225,6 @@ async function main() {
     pushContext,
     minSeverity: args.minSeverity,
     timeoutMs: args.timeoutSeconds * 1000,
-    uiRuntimeGateEnabled: args.uiRuntimeGateEnabled,
-    uiRuntimeInfraBlocking: args.uiRuntimeInfraBlocking,
     shouldContinue: () => isPidAlive(args.pushParentPid),
     gitExec: (gitArgs) => defaultGitExec(gitArgs, repoRoot),
   });

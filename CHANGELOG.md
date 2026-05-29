@@ -10,6 +10,8 @@ All notable changes to this project will be documented in this file.
   in final and CI gates.
 - Rename the local CI-style package script to `ci:local` and route CLI contract
   coverage through file-list input to keep changed-aware logs readable.
+- Redact public-safe analysis output directories and credential-bearing remote
+  URLs in clone errors.
 - Fix `analyze --format json` completion output so it does not point at a
   markdown report that was not written.
 - Add the V1 local contribution intelligence CLI foundation with private

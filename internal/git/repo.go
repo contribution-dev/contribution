@@ -7,6 +7,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"net/url"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -97,7 +98,7 @@ func clone(ctx context.Context, url string) (Repo, error) {
 	args := []string{"clone", "--quiet", "--depth=250", "--no-tags", url, target}
 	if _, err := gitOutput(ctx, "", args...); err != nil {
 		_ = os.RemoveAll(parent)
-		return Repo{}, fmt.Errorf("clone %s: %w", url, err)
+		return Repo{}, fmt.Errorf("clone %s: %w", RedactRemoteURL(url), err)
 	}
 	repo := Repo{
 		Path:          target,
@@ -112,6 +113,54 @@ func clone(ctx context.Context, url string) (Repo, error) {
 		return Repo{}, err
 	}
 	return repo, nil
+}
+
+// RedactRemoteURL removes credentials from remote URLs before logging errors.
+func RedactRemoteURL(remote string) string {
+	remote = strings.TrimSpace(remote)
+	parsed, err := url.Parse(remote)
+	if err == nil && parsed.User != nil {
+		parsed.User = url.User("REDACTED")
+	}
+	if err == nil && parsed.RawQuery != "" {
+		query := parsed.Query()
+		changed := false
+		for key, values := range query {
+			if isSecretQueryKey(key) {
+				query[key] = []string{"REDACTED"}
+				changed = true
+				continue
+			}
+			for _, value := range values {
+				if strings.Contains(strings.ToLower(value), "token=") {
+					query[key] = []string{"REDACTED"}
+					changed = true
+					break
+				}
+			}
+		}
+		if changed {
+			parsed.RawQuery = query.Encode()
+		}
+	}
+	if err == nil && (parsed.User != nil || parsed.RawQuery != "") {
+		return parsed.String()
+	}
+	schemeIndex := strings.Index(remote, "://")
+	atIndex := strings.LastIndex(remote, "@")
+	if schemeIndex >= 0 && atIndex > schemeIndex+3 {
+		return remote[:schemeIndex+3] + "REDACTED@" + remote[atIndex+1:]
+	}
+	return remote
+}
+
+func isSecretQueryKey(key string) bool {
+	key = strings.ToLower(key)
+	return strings.Contains(key, "token") ||
+		strings.Contains(key, "secret") ||
+		strings.Contains(key, "password") ||
+		strings.Contains(key, "api_key") ||
+		strings.Contains(key, "apikey")
 }
 
 func hydrateMetadata(ctx context.Context, repo *Repo) error {

@@ -163,6 +163,9 @@ func runAnalyze(ctx context.Context, out io.Writer, opts analyzeOptions) (string
 	if analysis.Profile.Headline == "" {
 		analysis.Profile.Headline = "AI-native contribution profile"
 	}
+	if opts.publicSafe {
+		analysis.Config.OutputDirectory = ""
+	}
 	if err := report.WriteAnalysisBundle(outputDir, analysis, opts.format); err != nil {
 		return "", err
 	}

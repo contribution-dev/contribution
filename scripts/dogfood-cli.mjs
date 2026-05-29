@@ -541,6 +541,11 @@ function runSmoke(binary, tempRoot, options = {}) {
     analysis.privacy?.raw_diffs_included === false,
     "analysis includes raw diffs",
   );
+  assert(
+    analysis.config?.output_directory === "",
+    "public-safe analysis retained output directory",
+  );
+  assertPublicSafeFiles([path.join(jsonRun, "analysis.json")], analysisRepo);
   assertPublicSafeFiles(
     [
       path.join(jsonRun, "profile.export.json"),
@@ -549,6 +554,37 @@ function runSmoke(binary, tempRoot, options = {}) {
     analysisRepo,
   );
   assertNoTextInFiles(collectFiles(jsonRun), [SECRET_SENTINEL]);
+
+  const defaultOutput = runCli(
+    binary,
+    [
+      "analyze",
+      "--repo",
+      ".",
+      "--format",
+      "json",
+      "--public-safe",
+      "--no-external-tools",
+    ],
+    { cwd: analysisRepo, env, byName: options.byName },
+  );
+  assertReferencedPathsExist(defaultOutput, tempRoot);
+  const defaultRun = latestRunDir(
+    path.join(analysisRepo, ".contribution", "reports"),
+  );
+  const defaultAnalysis = path.join(defaultRun, "analysis.json");
+  assertFilesExist(defaultRun, [
+    "analysis.json",
+    "profile.export.json",
+    "share-card.json",
+    "tooling.json",
+  ]);
+  assertFilesAbsent(defaultRun, ["report.md"]);
+  assert(
+    readJSON(defaultAnalysis).config?.output_directory === "",
+    "default public-safe analysis retained output directory",
+  );
+  assertPublicSafeFiles([defaultAnalysis], analysisRepo);
 
   const allRoot = path.join(tempRoot, "analyze-all");
   const analyzeAll = runCli(

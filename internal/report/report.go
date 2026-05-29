@@ -134,6 +134,7 @@ func PublicSafeAnalysis(analysis signals.AnalysisReport) signals.AnalysisReport 
 	analysis.PRCards = publicCards(analysis.PRCards, len(analysis.PRCards), pathReplacements)
 	analysis.WeaknessMap = publicSafeWeaknessMap(analysis.WeaknessMap, pathReplacements)
 	analysis.Coverage = publicSafeCoverage(analysis.Coverage, pathReplacements)
+	analysis.AnalyzerFindings = publicSafeAnalyzerFindings(analysis.AnalyzerFindings, pathReplacements)
 	analysis.DeepDives = publicSafeDeepDives(analysis.DeepDives, pathReplacements)
 	analysis.Profile.Strengths = publicFindings(analysis.Profile.Strengths, len(analysis.Profile.Strengths), pathReplacements)
 	analysis.Profile.ImprovementTrends = publicFindings(analysis.Profile.ImprovementTrends, len(analysis.Profile.ImprovementTrends), pathReplacements)
@@ -216,6 +217,12 @@ func Markdown(analysis signals.AnalysisReport) string {
 	fmt.Fprintln(&buf, "## Test Evidence")
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, testEvidence(analysis))
+	if len(analysis.AnalyzerFindings) > 0 {
+		fmt.Fprintln(&buf)
+		fmt.Fprintln(&buf, "## Safety Analyzer Findings")
+		fmt.Fprintln(&buf)
+		writeAnalyzerFindings(&buf, analysis.AnalyzerFindings)
+	}
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "## Durability and Churn")
 	fmt.Fprintln(&buf)
@@ -403,7 +410,11 @@ func PreflightMarkdown(preflight signals.PreflightReport) string {
 		fmt.Fprintln(&buf, "## Rubric")
 		fmt.Fprintln(&buf)
 		for _, item := range preflight.Rubric {
-			fmt.Fprintf(&buf, "- %s: %s (%s). %s\n", item.Label, item.Status, item.Severity, item.Evidence)
+			fmt.Fprintf(&buf, "- %s: %s (%s). %s", item.Label, item.Status, item.Severity, item.Evidence)
+			if item.Recommendation != "" {
+				fmt.Fprintf(&buf, " Next: %s", item.Recommendation)
+			}
+			fmt.Fprintln(&buf)
 		}
 	}
 	if preflight.PersonalContext != nil {
@@ -606,9 +617,24 @@ func publicSafeCoverage(value signals.CoverageSummary, replacements ...[]pathRep
 	for i := range value.Files {
 		value.Files[i].Path = privacy.RedactPath(redactText(value.Files[i].Path, replacements...), false)
 	}
+	for i := range value.LowCoverageFiles {
+		value.LowCoverageFiles[i].Path = privacy.RedactPath(redactText(value.LowCoverageFiles[i].Path, replacements...), false)
+	}
 	value.Sources = redactStrings(value.Sources, replacements...)
 	value.Reason = redactText(value.Reason, replacements...)
 	return value
+}
+
+func publicSafeAnalyzerFindings(findings []signals.AnalyzerFinding, replacements ...[]pathReplacement) []signals.AnalyzerFinding {
+	out := make([]signals.AnalyzerFinding, 0, len(findings))
+	for _, finding := range findings {
+		finding.FilePath = privacy.RedactPath(redactText(finding.FilePath, replacements...), false)
+		finding.Message = "Private analyzer finding redacted."
+		finding.RuleID = redactCommitLikeText(redactText(finding.RuleID, replacements...))
+		finding.PublicSafe = true
+		out = append(out, finding)
+	}
+	return out
 }
 
 func publicSafeDeepDives(value signals.AnalysisDeepDives, replacements ...[]pathReplacement) signals.AnalysisDeepDives {
@@ -675,8 +701,13 @@ func publicSafeSignal(sig signals.Signal, sourceRepoID string, replacements ...[
 	if sig.FilePath != "" {
 		sig.FilePath = privacy.RedactPath(sig.FilePath, false)
 	}
-	sig.Message = redactCommitLikeText(redactText(sig.Message, replacements...), privateSubjectID)
+	if !sig.PublicSafe && sig.Type == "analyzer_finding" {
+		sig.Message = "Private analyzer finding redacted."
+	} else {
+		sig.Message = redactCommitLikeText(redactText(sig.Message, replacements...), privateSubjectID)
+	}
 	sig.Evidence.ToolVersion = redactText(sig.Evidence.ToolVersion, replacements...)
+	sig.PublicSafe = true
 	return sig
 }
 
@@ -743,8 +774,14 @@ func publicSafePathReplacements(analysis signals.AnalysisReport) []pathReplaceme
 	for _, file := range analysis.Coverage.Files {
 		add(file.Path)
 	}
+	for _, file := range analysis.Coverage.LowCoverageFiles {
+		add(file.Path)
+	}
 	add(analysis.Coverage.Sources...)
 	add(analysis.Coverage.Reason)
+	for _, finding := range analysis.AnalyzerFindings {
+		add(finding.RuleID, finding.FilePath, finding.Message)
+	}
 	for _, card := range analysis.PRCards {
 		add(card.Title, card.URL, card.Summary, card.Scope, card.TestEvidence, card.ReviewBurden, card.Durability, card.MainRisk, card.NextAction)
 		for _, finding := range append(append([]signals.Finding{}, card.Strengths...), card.Risks...) {

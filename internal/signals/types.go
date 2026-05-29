@@ -90,6 +90,18 @@ type ToolingReport struct {
 	Limitations []string           `json:"limitations,omitempty"`
 }
 
+// AnalyzerFinding is a normalized optional-tool finding without raw code.
+type AnalyzerFinding struct {
+	Tool       string     `json:"tool"`
+	RuleID     string     `json:"rule_id,omitempty"`
+	Severity   Severity   `json:"severity"`
+	FilePath   string     `json:"file_path,omitempty"`
+	Scope      string     `json:"scope"`
+	Message    string     `json:"message"`
+	Confidence Confidence `json:"confidence"`
+	PublicSafe bool       `json:"is_public_safe"`
+}
+
 // RepoMetadata describes the analyzed repository.
 type RepoMetadata struct {
 	ID            string `json:"id"`
@@ -248,13 +260,14 @@ type FileSummary struct {
 
 // CoverageSummary summarizes optional whole-report coverage import.
 type CoverageSummary struct {
-	Status       string                  `json:"status"`
-	CoveredLines int                     `json:"covered_lines,omitempty"`
-	TotalLines   int                     `json:"total_lines,omitempty"`
-	Percent      float64                 `json:"percent,omitempty"`
-	Files        []PreflightFileCoverage `json:"files,omitempty"`
-	Sources      []string                `json:"sources,omitempty"`
-	Reason       string                  `json:"reason,omitempty"`
+	Status           string                  `json:"status"`
+	CoveredLines     int                     `json:"covered_lines,omitempty"`
+	TotalLines       int                     `json:"total_lines,omitempty"`
+	Percent          float64                 `json:"percent,omitempty"`
+	Files            []PreflightFileCoverage `json:"files,omitempty"`
+	LowCoverageFiles []PreflightFileCoverage `json:"low_coverage_files,omitempty"`
+	Sources          []string                `json:"sources,omitempty"`
+	Reason           string                  `json:"reason,omitempty"`
 }
 
 // PreflightChangedFile is structured current-diff evidence.
@@ -270,21 +283,22 @@ type PreflightChangedFile struct {
 
 // AnalysisReport is the canonical machine-readable V1 output.
 type AnalysisReport struct {
-	Version      int                    `json:"version"`
-	GeneratedAt  time.Time              `json:"generated_at"`
-	Repo         RepoMetadata           `json:"repo"`
-	Config       AnalysisConfigSnapshot `json:"config"`
-	Tooling      ToolingReport          `json:"tooling"`
-	Inventory    FileSummary            `json:"inventory"`
-	Coverage     CoverageSummary        `json:"coverage"`
-	Signals      []Signal               `json:"signals"`
-	PRCards      []PRQualityCard        `json:"pr_quality_cards"`
-	WeaknessMap  WeaknessMap            `json:"weakness_map"`
-	DeepDives    AnalysisDeepDives      `json:"deep_dives"`
-	Profile      ProfileSummary         `json:"profile"`
-	SetupActions []SetupAction          `json:"setup_actions"`
-	Limitations  []string               `json:"limitations"`
-	Privacy      PrivacySummary         `json:"privacy"`
+	Version          int                    `json:"version"`
+	GeneratedAt      time.Time              `json:"generated_at"`
+	Repo             RepoMetadata           `json:"repo"`
+	Config           AnalysisConfigSnapshot `json:"config"`
+	Tooling          ToolingReport          `json:"tooling"`
+	Inventory        FileSummary            `json:"inventory"`
+	Coverage         CoverageSummary        `json:"coverage"`
+	AnalyzerFindings []AnalyzerFinding      `json:"analyzer_findings"`
+	Signals          []Signal               `json:"signals"`
+	PRCards          []PRQualityCard        `json:"pr_quality_cards"`
+	WeaknessMap      WeaknessMap            `json:"weakness_map"`
+	DeepDives        AnalysisDeepDives      `json:"deep_dives"`
+	Profile          ProfileSummary         `json:"profile"`
+	SetupActions     []SetupAction          `json:"setup_actions"`
+	Limitations      []string               `json:"limitations"`
+	Privacy          PrivacySummary         `json:"privacy"`
 }
 
 // ProfileExport is the public-safe profile artifact consumed by a future web app.

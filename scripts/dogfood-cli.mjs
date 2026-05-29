@@ -704,6 +704,10 @@ function runSmoke(binary, tempRoot, options = {}) {
   );
   assert(analysis.deep_dives, "analysis missing deep_dive evidence object");
   assert(
+    Array.isArray(analysis.analyzer_findings),
+    "analysis missing analyzer findings array",
+  );
+  assert(
     Array.isArray(analysis.setup_actions) && analysis.setup_actions.length > 0,
     "analysis missing confidence setup actions",
   );

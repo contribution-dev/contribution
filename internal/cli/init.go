@@ -33,7 +33,7 @@ func newInitCommand(out io.Writer) *cobra.Command {
 			if err := writef(out, "Created %s\n", path); err != nil {
 				return err
 			}
-			return writef(out, "Next: edit %s for repo-specific risky paths or AI workflow context, then run `contribution analyze --repo . --format all`.\n", path)
+			return writef(out, "Next: review risky path presets, coverage command, and AI workflow context in %s, then run `contribution analyze --repo . --format all`.\n", path)
 		},
 	}
 }

@@ -53,6 +53,7 @@ func newDoctorCommand(out io.Writer) *cobra.Command {
 				fmt.Fprintln(&buf, "GitHub token: unavailable; PR review metadata will be skipped")
 			}
 			var nextSteps []string
+			coverageStepAdded := false
 			repo, err := gitrepo.Resolve(ctx, ".")
 			if err != nil {
 				fmt.Fprintf(&buf, "Repo state: unavailable (%v)\n", err)
@@ -71,6 +72,14 @@ func newDoctorCommand(out io.Writer) *cobra.Command {
 						nextSteps = append(nextSteps, "Run `contribution init` to record repo-local defaults and preflight policy.")
 					} else {
 						fmt.Fprintf(&buf, "Config: ok (since_days=%d, max_prs=%d)\n", cfg.Analysis.SinceDays, cfg.Analysis.MaxPRs)
+						if cfg.Coverage.Command != "" && cfg.Coverage.Path != "" {
+							format := cfg.Coverage.Format
+							if format == "" {
+								format = "auto"
+							}
+							nextSteps = append(nextSteps, fmt.Sprintf("Run `%s` and pass `--coverage %s --coverage-format %s` to add coverage evidence.", cfg.Coverage.Command, cfg.Coverage.Path, format))
+							coverageStepAdded = true
+						}
 					}
 					for _, warning := range warnings {
 						fmt.Fprintf(&buf, "- warning: %s\n", warning)
@@ -92,7 +101,9 @@ func newDoctorCommand(out io.Writer) *cobra.Command {
 			} else {
 				nextSteps = append(nextSteps, "Set `GITHUB_TOKEN` or pass `--github-token gh` after `gh auth login` to include PR metadata.")
 			}
-			nextSteps = append(nextSteps, "Run `go test ./... -coverprofile=coverage.out` and pass `--coverage coverage.out --coverage-format go` to add coverage evidence.")
+			if !coverageStepAdded {
+				nextSteps = append(nextSteps, "Run `go test ./... -coverprofile=coverage.out` and pass `--coverage coverage.out --coverage-format go` to add coverage evidence.")
+			}
 			fmt.Fprintln(&buf)
 			fmt.Fprintln(&buf, "Next steps:")
 			for _, step := range uniqueDoctorSteps(nextSteps) {

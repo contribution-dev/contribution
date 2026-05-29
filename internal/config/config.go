@@ -22,6 +22,7 @@ type Config struct {
 	Project   ProjectConfig   `yaml:"project" json:"project"`
 	Analysis  AnalysisConfig  `yaml:"analysis" json:"analysis"`
 	Preflight PreflightConfig `yaml:"preflight" json:"preflight"`
+	Coverage  CoverageConfig  `yaml:"coverage" json:"coverage"`
 	AIUsage   AIUsageConfig   `yaml:"ai_usage" json:"ai_usage"`
 	Reports   ReportsConfig   `yaml:"reports" json:"reports"`
 }
@@ -45,6 +46,13 @@ type PreflightConfig struct {
 	RequireTestsForSource  bool     `yaml:"require_tests_for_source" json:"require_tests_for_source"`
 	ChangedLineCoverageMin float64  `yaml:"changed_line_coverage_min" json:"changed_line_coverage_min"`
 	RiskyPaths             []string `yaml:"risky_paths" json:"risky_paths"`
+}
+
+// CoverageConfig stores repo-specific coverage import guidance.
+type CoverageConfig struct {
+	Command string `yaml:"command" json:"command"`
+	Path    string `yaml:"path" json:"path"`
+	Format  string `yaml:"format" json:"format"`
 }
 
 // AIUsageConfig stores self-reported AI workflow context.
@@ -97,7 +105,19 @@ func Default() Config {
 			MaxLines:               800,
 			RequireTestsForSource:  false,
 			ChangedLineCoverageMin: 0,
-			RiskyPaths:             []string{},
+			RiskyPaths: []string{
+				"internal/auth/",
+				"internal/security/",
+				"internal/billing/",
+				"internal/payments/",
+				"app/api/auth/",
+				"apps/app/app/api/auth/",
+			},
+		},
+		Coverage: CoverageConfig{
+			Command: "",
+			Path:    "",
+			Format:  "auto",
 		},
 		AIUsage: AIUsageConfig{
 			SelfReportedTools: []string{},
@@ -131,18 +151,37 @@ func Validate(cfg Config) []string {
 	if cfg.Preflight.ChangedLineCoverageMin < 0 || cfg.Preflight.ChangedLineCoverageMin > 100 {
 		warnings = append(warnings, "preflight.changed_line_coverage_min must be between 0 and 100; ignoring the configured threshold.")
 	}
+	if cfg.Coverage.Format != "" && cfg.Coverage.Format != "auto" && cfg.Coverage.Format != "go" && cfg.Coverage.Format != "lcov" {
+		warnings = append(warnings, "coverage.format must be auto, go, or lcov; defaulting to auto.")
+	}
 	return warnings
 }
 
-// WriteDefault writes a default config to path.
-func WriteDefault(path string, defaultBranch string) error {
+// Suggested returns safe defaults with repo-specific local guidance.
+func Suggested(repoRoot string, defaultBranch string) Config {
 	cfg := Default()
 	if defaultBranch != "" {
 		cfg.Project.DefaultBranch = defaultBranch
 	}
+	if hasFile(repoRoot, "go.mod") {
+		cfg.Coverage.Command = "go test ./... -coverprofile=coverage.out"
+		cfg.Coverage.Path = "coverage.out"
+		cfg.Coverage.Format = "go"
+	}
+	return cfg
+}
+
+// WriteDefault writes a default config to path.
+func WriteDefault(path string, defaultBranch string) error {
+	cfg := Suggested(filepath.Dir(path), defaultBranch)
+	return Write(path, cfg)
+}
+
+// Write writes a config file.
+func Write(path string, cfg Config) error {
 	data, err := yaml.Marshal(cfg)
 	if err != nil {
-		return fmt.Errorf("marshal default config: %w", err)
+		return fmt.Errorf("marshal config: %w", err)
 	}
 	if err := os.WriteFile(path, data, 0o600); err != nil {
 		return fmt.Errorf("write %s: %w", path, err)
@@ -171,7 +210,10 @@ func applyDefaults(cfg *Config) {
 		cfg.Preflight.MaxLines = defaults.Preflight.MaxLines
 	}
 	if cfg.Preflight.RiskyPaths == nil {
-		cfg.Preflight.RiskyPaths = []string{}
+		cfg.Preflight.RiskyPaths = defaults.Preflight.RiskyPaths
+	}
+	if cfg.Coverage.Format == "" || (cfg.Coverage.Format != "auto" && cfg.Coverage.Format != "go" && cfg.Coverage.Format != "lcov") {
+		cfg.Coverage.Format = defaults.Coverage.Format
 	}
 	if cfg.AIUsage.SelfReportedTools == nil {
 		cfg.AIUsage.SelfReportedTools = []string{}
@@ -182,4 +224,12 @@ func applyDefaults(cfg *Config) {
 	if cfg.Reports.OutputDir == "" {
 		cfg.Reports.OutputDir = defaults.Reports.OutputDir
 	}
+}
+
+func hasFile(root string, relativePath string) bool {
+	if root == "" {
+		return false
+	}
+	info, err := os.Stat(filepath.Join(root, relativePath))
+	return err == nil && !info.IsDir()
 }

@@ -39,7 +39,25 @@ func TestWriteDefaultAndLoad(t *testing.T) {
 		t.Fatalf("OutputDir = %q", cfg.Reports.OutputDir)
 	}
 	if cfg.Preflight.RiskyPaths == nil {
-		t.Fatal("Preflight.RiskyPaths = nil, want empty slice")
+		t.Fatal("Preflight.RiskyPaths = nil, want suggested presets")
+	}
+	if cfg.Coverage.Command != "" {
+		t.Fatalf("Coverage.Command = %q, want empty without go.mod", cfg.Coverage.Command)
+	}
+}
+
+func TestSuggestedConfigAddsGoCoverageGuidance(t *testing.T) {
+	dir := t.TempDir()
+	if err := os.WriteFile(filepath.Join(dir, "go.mod"), []byte("module example.test/app\n"), 0o600); err != nil {
+		t.Fatalf("write go.mod: %v", err)
+	}
+
+	cfg := Suggested(dir, "trunk")
+	if cfg.Project.DefaultBranch != "trunk" {
+		t.Fatalf("DefaultBranch = %q, want trunk", cfg.Project.DefaultBranch)
+	}
+	if cfg.Coverage.Command != "go test ./... -coverprofile=coverage.out" || cfg.Coverage.Path != "coverage.out" || cfg.Coverage.Format != "go" {
+		t.Fatalf("coverage guidance = %+v", cfg.Coverage)
 	}
 }
 

@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Add the next single-player evidence pass: PR durability now ties imported
+  GitHub PRs to later fix/revert-like same-file churn, Go coverage paths are
+  normalized to repo-relative files with lowest-coverage file summaries,
+  optional analyzers can run and import normalized findings, and generated
+  config includes coverage/risky-path setup guidance.
 - Add single-player dogfooding improvements: private report ledger
   explainability, high-churn and no-test deep dives, analyze-time Go/LCOV
   coverage import, concrete confidence setup actions, GitHub CLI token support,

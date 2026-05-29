@@ -20,6 +20,7 @@ func TestAnalysisReportJSONContract(t *testing.T) {
 		"tooling",
 		"inventory",
 		"coverage",
+		"analyzer_findings",
 		"signals",
 		"pr_quality_cards",
 		"weakness_map",
@@ -106,6 +107,15 @@ func reportContractAnalysisFixture() signals.AnalysisReport {
 			Status: "unknown",
 			Reason: "No coverage report was imported.",
 		},
+		AnalyzerFindings: []signals.AnalyzerFinding{{
+			Tool:       "semgrep",
+			RuleID:     "go.example",
+			Severity:   signals.SeverityMedium,
+			FilePath:   "internal/app.go",
+			Scope:      "recently_touched",
+			Message:    "Example static finding.",
+			Confidence: signals.ConfidenceMedium,
+		}},
 		Signals: []signals.Signal{{
 			ID:          "sig-1",
 			RepoID:      "local:test",

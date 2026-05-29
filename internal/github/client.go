@@ -25,6 +25,7 @@ type PullRequest struct {
 	Number           int
 	Title            string
 	URL              string
+	MergedAt         time.Time
 	ChangedFiles     int
 	Additions        int
 	Deletions        int
@@ -131,6 +132,10 @@ func FetchMergedPRs(ctx context.Context, owner, repo, token string, maxPRs int) 
 			pr.Number = item.Number
 			pr.Title = item.Title
 			pr.URL = item.HTMLURL
+			pr.MergedAt = *item.MergedAt
+		}
+		if pr.MergedAt.IsZero() {
+			pr.MergedAt = *item.MergedAt
 		}
 		files, err := fetchPRFiles(ctx, owner, repo, token, item.Number)
 		if err != nil {
@@ -207,15 +212,16 @@ func tokenFromGH() (string, bool) {
 func fetchPRDetails(ctx context.Context, owner, repo, token string, number int) (pullRequestDetails, error) {
 	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d", githubAPIBaseURL, owner, repo, number)
 	var raw struct {
-		Number         int    `json:"number"`
-		Title          string `json:"title"`
-		HTMLURL        string `json:"html_url"`
-		ChangedFiles   int    `json:"changed_files"`
-		Additions      int    `json:"additions"`
-		Deletions      int    `json:"deletions"`
-		Commits        int    `json:"commits"`
-		Comments       int    `json:"comments"`
-		ReviewComments int    `json:"review_comments"`
+		Number         int        `json:"number"`
+		Title          string     `json:"title"`
+		HTMLURL        string     `json:"html_url"`
+		ChangedFiles   int        `json:"changed_files"`
+		Additions      int        `json:"additions"`
+		Deletions      int        `json:"deletions"`
+		Commits        int        `json:"commits"`
+		Comments       int        `json:"comments"`
+		ReviewComments int        `json:"review_comments"`
+		MergedAt       *time.Time `json:"merged_at"`
 		Head           struct {
 			SHA string `json:"sha"`
 		} `json:"head"`
@@ -228,6 +234,7 @@ func fetchPRDetails(ctx context.Context, owner, repo, token string, number int) 
 			Number:         raw.Number,
 			Title:          raw.Title,
 			URL:            raw.HTMLURL,
+			MergedAt:       derefTime(raw.MergedAt),
 			ChangedFiles:   raw.ChangedFiles,
 			Additions:      raw.Additions,
 			Deletions:      raw.Deletions,
@@ -237,6 +244,13 @@ func fetchPRDetails(ctx context.Context, owner, repo, token string, number int) 
 		},
 		headSHA: raw.Head.SHA,
 	}, nil
+}
+
+func derefTime(value *time.Time) time.Time {
+	if value == nil {
+		return time.Time{}
+	}
+	return *value
 }
 
 func fetchPRFiles(ctx context.Context, owner, repo, token string, number int) ([]string, error) {

@@ -11,6 +11,7 @@ import (
 	"testing"
 	"time"
 
+	gitrepo "github.com/contribution-dev/contribution/internal/git"
 	"github.com/contribution-dev/contribution/internal/github"
 	"github.com/contribution-dev/contribution/internal/report"
 	"github.com/contribution-dev/contribution/internal/signals"
@@ -250,4 +251,18 @@ func hasSignalType(values []signals.Signal, signalType string) bool {
 		}
 	}
 	return false
+}
+
+func TestClassifyAnalyzerFindingScopes(t *testing.T) {
+	got := classifyAnalyzerFindingScopes([]signals.AnalyzerFinding{{
+		Tool:     "semgrep",
+		FilePath: "internal/app.go",
+	}, {
+		Tool:     "semgrep",
+		FilePath: "internal/old.go",
+	}}, gitrepo.History{FileTouchCount: map[string]int{"internal/app.go": 2}})
+
+	if got[0].Scope != "recently_touched" || got[1].Scope != "repo_existing_or_unknown" {
+		t.Fatalf("scopes = %+v", got)
+	}
 }

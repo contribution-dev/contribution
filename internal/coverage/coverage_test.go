@@ -10,6 +10,9 @@ import (
 
 func TestParseGoCoverprofileAndChangedLineCoverage(t *testing.T) {
 	repo := t.TempDir()
+	if err := os.WriteFile(filepath.Join(repo, "go.mod"), []byte("module github.com/example/repo\n"), 0o600); err != nil {
+		t.Fatal(err)
+	}
 	cover := filepath.Join(repo, "coverage.out")
 	if err := os.WriteFile(cover, []byte(`mode: set
 internal/app/app.go:10.1,12.2 2 1
@@ -39,6 +42,9 @@ github.com/example/repo/internal/app/extra.go:5.1,5.8 1 1
 	if got.CoveredLines != 1 || got.TotalLines != 2 {
 		t.Fatalf("coverage = %d/%d, want 1/2", got.CoveredLines, got.TotalLines)
 	}
+	if _, ok := report.Files["internal/app/extra.go"]; !ok {
+		t.Fatalf("module-path coverage was not normalized: %+v", report.Files)
+	}
 }
 
 func TestSummarizeCoverageReport(t *testing.T) {
@@ -59,6 +65,9 @@ func TestSummarizeCoverageReport(t *testing.T) {
 	}
 	if len(got.Files) != 2 || got.Files[0].Path != "internal/api.go" || got.Files[1].Path != "internal/app.go" {
 		t.Fatalf("files not sorted/stable: %+v", got.Files)
+	}
+	if len(got.LowCoverageFiles) != 2 || got.LowCoverageFiles[0].Path != "internal/api.go" {
+		t.Fatalf("low coverage files = %+v", got.LowCoverageFiles)
 	}
 }
 

@@ -92,6 +92,11 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 	if err != nil {
 		return "", err
 	}
+	analyzerFindings, analyzerSignals, analyzerLimitations := tools.RunAnalyzers(ctx, repo.Path, repo.ID, tooling, start)
+	analyzerFindings = classifyAnalyzerFindingScopes(analyzerFindings, history)
+	if analyzerFindings == nil {
+		analyzerFindings = []signals.AnalyzerFinding{}
+	}
 
 	token, tokenAvailable := github.ResolveToken(opts.GitHubToken)
 	metadata := github.Metadata{Reason: "GitHub metadata was not requested; continuing local-only."}
@@ -115,6 +120,7 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 	allSignals := append([]signals.Signal{}, inventorySignals...)
 	allSignals = append(allSignals, historySignals...)
 	allSignals = append(allSignals, tools.Signals(repo.ID, tooling, start)...)
+	allSignals = append(allSignals, analyzerSignals...)
 	coverageSummary, coverageSignals, coverageLimitations, err := analyzeCoverage(opts.CoveragePaths, opts.CoverageFormat, repo.Path, repo.ID, start)
 	if err != nil {
 		return "", err
@@ -123,6 +129,7 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 	limitations := append([]string{}, cfgWarnings...)
 	limitations = append(limitations, historyLimitations...)
 	limitations = append(limitations, tooling.Limitations...)
+	limitations = append(limitations, analyzerLimitations...)
 	limitations = append(limitations, coverageLimitations...)
 	if metadata.Reason != "" {
 		limitations = append(limitations, metadata.Reason)
@@ -133,17 +140,18 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 	}
 
 	score := scoring.Build(scoring.Input{
-		Repo:        repo.Metadata(opts.PublicSafe),
-		History:     history,
-		GitHub:      metadata,
-		Inventory:   inventory,
-		Coverage:    coverageSummary,
-		Signals:     allSignals,
-		SinceDays:   sinceDays,
-		MaxCards:    maxPRs,
-		DisplayName: cfg.Project.Name,
-		AITools:     cfg.AIUsage.SelfReportedTools,
-		AIModes:     cfg.AIUsage.SelfReportedModes,
+		Repo:             repo.Metadata(opts.PublicSafe),
+		History:          history,
+		GitHub:           metadata,
+		Inventory:        inventory,
+		Coverage:         coverageSummary,
+		AnalyzerFindings: analyzerFindings,
+		Signals:          allSignals,
+		SinceDays:        sinceDays,
+		MaxCards:         maxPRs,
+		DisplayName:      cfg.Project.Name,
+		AITools:          cfg.AIUsage.SelfReportedTools,
+		AIModes:          cfg.AIUsage.SelfReportedModes,
 	})
 	limitations = append(limitations, score.Limitations...)
 	analysis := signals.AnalysisReport{
@@ -160,16 +168,17 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 			OutputDirectory:          outputDir,
 			GitHubMetadataConfigured: tokenAvailable,
 		},
-		Tooling:      tooling,
-		Inventory:    inventory,
-		Coverage:     coverageSummary,
-		Signals:      allSignals,
-		PRCards:      score.Cards,
-		WeaknessMap:  score.WeaknessMap,
-		DeepDives:    score.DeepDives,
-		Profile:      score.Profile,
-		SetupActions: buildSetupActions(repo, cfgWarnings, metadata, coverageSummary, tooling, tokenAvailable, !opts.NoExternalTools),
-		Limitations:  uniqueStrings(limitations),
+		Tooling:          tooling,
+		Inventory:        inventory,
+		Coverage:         coverageSummary,
+		AnalyzerFindings: analyzerFindings,
+		Signals:          allSignals,
+		PRCards:          score.Cards,
+		WeaknessMap:      score.WeaknessMap,
+		DeepDives:        score.DeepDives,
+		Profile:          score.Profile,
+		SetupActions:     buildSetupActions(repo, cfgWarnings, metadata, coverageSummary, cfg.Coverage, tooling, tokenAvailable, !opts.NoExternalTools),
+		Limitations:      uniqueStrings(limitations),
 		Privacy: signals.PrivacySummary{
 			PublicSafe:                         opts.PublicSafe,
 			RawCodeIncluded:                    false,
@@ -221,7 +230,21 @@ func analyzeCoverage(paths []string, format string, repoPath string, repoID stri
 	return summary, []signals.Signal{sig}, nil, nil
 }
 
-func buildSetupActions(repo gitrepo.Repo, cfgWarnings []string, metadata github.Metadata, coverage signals.CoverageSummary, tooling signals.ToolingReport, tokenAvailable bool, allowExternalToolChecks bool) []signals.SetupAction {
+func classifyAnalyzerFindingScopes(findings []signals.AnalyzerFinding, history gitrepo.History) []signals.AnalyzerFinding {
+	if len(findings) == 0 {
+		return findings
+	}
+	for i := range findings {
+		if findings[i].FilePath != "" && history.FileTouchCount[findings[i].FilePath] > 0 {
+			findings[i].Scope = "recently_touched"
+		} else if findings[i].Scope == "" {
+			findings[i].Scope = "repo_existing_or_unknown"
+		}
+	}
+	return findings
+}
+
+func buildSetupActions(repo gitrepo.Repo, cfgWarnings []string, metadata github.Metadata, coverage signals.CoverageSummary, coverageConfig config.CoverageConfig, tooling signals.ToolingReport, tokenAvailable bool, allowExternalToolChecks bool) []signals.SetupAction {
 	var actions []signals.SetupAction
 	for _, warning := range cfgWarnings {
 		if strings.Contains(warning, "No .contribution.yml") {
@@ -257,11 +280,19 @@ func buildSetupActions(repo gitrepo.Repo, cfgWarnings []string, metadata github.
 		})
 	}
 	if coverage.Status != "available" {
+		command := "go test ./... -coverprofile=coverage.out && contribution analyze --repo . --coverage coverage.out --coverage-format go --format all"
+		if coverageConfig.Command != "" && coverageConfig.Path != "" {
+			format := coverageConfig.Format
+			if format == "" {
+				format = "auto"
+			}
+			command = fmt.Sprintf("%s && contribution analyze --repo . --coverage %s --coverage-format %s --format all", coverageConfig.Command, coverageConfig.Path, format)
+		}
 		actions = append(actions, signals.SetupAction{
 			ID:               "import_coverage",
 			Label:            "Import coverage evidence",
-			Command:          "go test ./... -coverprofile=coverage.out && contribution analyze --repo . --coverage coverage.out --coverage-format go --format all",
-			Why:              "Coverage import lets the report distinguish test-file presence from actual executable-line coverage.",
+			Command:          command,
+			Why:              "Coverage import lets the report distinguish test-file presence from executable-line coverage. Reuse the same coverage artifact with preflight for changed-line coverage on behavior diffs.",
 			ConfidenceImpact: "medium",
 		})
 	}

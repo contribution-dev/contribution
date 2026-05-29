@@ -293,7 +293,23 @@ func TestMarkdownIncludesPrivateExplainabilityDeepDivesAndSetup(t *testing.T) {
 	analysis := signals.AnalysisReport{
 		GeneratedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		Inventory:   signals.FileSummary{SourceFiles: 2, TestFiles: 1},
-		Coverage:    signals.CoverageSummary{Status: "available", CoveredLines: 7, TotalLines: 10, Percent: 70, Files: []signals.PreflightFileCoverage{{Path: "internal/app.go", CoveredLines: 7, TotalLines: 10, Percent: 70}}},
+		Coverage: signals.CoverageSummary{
+			Status:           "available",
+			CoveredLines:     7,
+			TotalLines:       10,
+			Percent:          70,
+			Files:            []signals.PreflightFileCoverage{{Path: "internal/app.go", CoveredLines: 7, TotalLines: 10, Percent: 70}},
+			LowCoverageFiles: []signals.PreflightFileCoverage{{Path: "internal/checkout/session.go", CoveredLines: 1, TotalLines: 10, Percent: 10}},
+		},
+		AnalyzerFindings: []signals.AnalyzerFinding{{
+			Tool:       "semgrep",
+			RuleID:     "go.rule",
+			Severity:   signals.SeverityMedium,
+			FilePath:   "internal/checkout/session.go",
+			Scope:      "recently_touched",
+			Message:    "avoid this",
+			Confidence: signals.ConfidenceMedium,
+		}},
 		PRCards: []signals.PRQualityCard{{
 			Title:        "Refactor checkout flow",
 			Label:        "risky",
@@ -347,6 +363,9 @@ func TestMarkdownIncludesPrivateExplainabilityDeepDivesAndSetup(t *testing.T) {
 		"## Confidence Setup",
 		"contribution analyze --repo . --github-token gh --format all",
 		"Imported coverage covers 70.0%",
+		"Lowest-coverage files: internal/checkout/session.go 10.0%",
+		"## Safety Analyzer Findings",
+		"semgrep go.rule in internal/checkout/session.go [recently_touched]",
 	} {
 		if !strings.Contains(text, want) {
 			t.Fatalf("Markdown missing %q:\n%s", want, text)
@@ -360,9 +379,21 @@ func TestPublicSafeAnalysisRedactsDeepDivesAndCoverage(t *testing.T) {
 	analysis := PublicSafeAnalysis(signals.AnalysisReport{
 		Repo: signals.RepoMetadata{ID: "owner/private", Name: "private", HeadSHA: commitSHA},
 		Coverage: signals.CoverageSummary{
-			Status: "available",
-			Files:  []signals.PreflightFileCoverage{{Path: privatePath, CoveredLines: 1, TotalLines: 1, Percent: 100}},
+			Status:           "available",
+			Files:            []signals.PreflightFileCoverage{{Path: privatePath, CoveredLines: 1, TotalLines: 1, Percent: 100}},
+			LowCoverageFiles: []signals.PreflightFileCoverage{{Path: privatePath, CoveredLines: 1, TotalLines: 1, Percent: 100}},
 		},
+		AnalyzerFindings: []signals.AnalyzerFinding{{Tool: "semgrep", RuleID: "private.rule", FilePath: privatePath, Scope: "recently_touched", Message: "Finding in " + privatePath, Confidence: signals.ConfidenceMedium}},
+		Signals: []signals.Signal{{
+			RepoID:      "owner/private",
+			Source:      "semgrep",
+			Type:        "analyzer_finding",
+			SubjectType: "file",
+			SubjectID:   privatePath,
+			FilePath:    privatePath,
+			Message:     "semgrep reported Finding in " + privatePath,
+			PublicSafe:  false,
+		}},
 		DeepDives: signals.AnalysisDeepDives{
 			HighChurn: []signals.HighChurnDeepDive{{
 				Path:       privatePath,
@@ -378,7 +409,7 @@ func TestPublicSafeAnalysisRedactsDeepDivesAndCoverage(t *testing.T) {
 		},
 		Profile: signals.ProfileSummary{Confidence: signals.ConfidenceMedium},
 	})
-	if containsText(analysis, privatePath) || containsText(analysis, commitSHA) || containsText(analysis, commitSHA[:8]) || containsText(analysis, "Fix "+privatePath) {
+	if containsText(analysis, privatePath) || containsText(analysis, commitSHA) || containsText(analysis, commitSHA[:8]) || containsText(analysis, "Fix "+privatePath) || containsText(analysis, "Finding in "+privatePath) {
 		t.Fatalf("public-safe analysis retained private deep-dive details: %+v", analysis)
 	}
 	if !containsText(analysis, "session.go") {

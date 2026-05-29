@@ -151,9 +151,39 @@ func writeSetupActions(buf *bytes.Buffer, actions []signals.SetupAction) {
 	}
 }
 
+func writeAnalyzerFindings(buf *bytes.Buffer, findings []signals.AnalyzerFinding) {
+	if len(findings) == 0 {
+		fmt.Fprintln(buf, "No optional analyzer findings were imported.")
+		return
+	}
+	for _, finding := range findings {
+		location := finding.FilePath
+		if location == "" {
+			location = "repo"
+		}
+		rule := finding.RuleID
+		if rule == "" {
+			rule = "finding"
+		}
+		scope := finding.Scope
+		if scope == "" {
+			scope = "repo_existing_or_unknown"
+		}
+		fmt.Fprintf(buf, "- %s %s in %s [%s]: %s (%s confidence)\n", finding.Tool, rule, location, scope, finding.Message, finding.Confidence)
+	}
+}
+
 func testEvidence(analysis signals.AnalysisReport) string {
 	if analysis.Coverage.Status == "available" {
-		return fmt.Sprintf("Repository inventory found %d test files and %d source files. Imported coverage covers %.1f%% of executable lines in %d file(s).", analysis.Inventory.TestFiles, analysis.Inventory.SourceFiles, analysis.Coverage.Percent, len(analysis.Coverage.Files))
+		text := fmt.Sprintf("Repository inventory found %d test files and %d source files. Imported coverage covers %.1f%% of executable lines in %d file(s).", analysis.Inventory.TestFiles, analysis.Inventory.SourceFiles, analysis.Coverage.Percent, len(analysis.Coverage.Files))
+		if len(analysis.Coverage.LowCoverageFiles) > 0 {
+			parts := make([]string, 0, len(analysis.Coverage.LowCoverageFiles))
+			for _, file := range analysis.Coverage.LowCoverageFiles {
+				parts = append(parts, fmt.Sprintf("%s %.1f%%", file.Path, file.Percent))
+			}
+			text += " Lowest-coverage files: " + strings.Join(parts, "; ") + "."
+		}
+		return text
 	}
 	if analysis.Inventory.TestFiles == 0 {
 		return "No test files were found in the repository inventory. This does not prove behavior is untested, but this report has no coverage import or test-file evidence to rely on."

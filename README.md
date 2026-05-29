@@ -10,7 +10,7 @@ social APIs, or store hosted state.
 ## Requirements
 
 - Go 1.26.3
-- Node.js 22.22.2 and pnpm 10.20.0 for repository automation
+- Node.js 24.16.0 and pnpm 11.4.0 for repository automation
 - `golangci-lint` and `govulncheck` for the full local gate
 
 The repo is bootstrapped to use local tools from `.tools/`. `pnpm` scripts and
@@ -46,11 +46,13 @@ scripts/with-tools go run ./cmd/contribution analyze --repo . --coverage coverag
 
 Core product commands:
 
-- `contribution init` creates safe default `.contribution.yml` config.
+- `contribution init` creates safe default `.contribution.yml` config with
+  risky-path presets and coverage command hints when the repo type is known.
 - `contribution doctor` reports required and optional tool availability.
 - `contribution analyze` writes `analysis.json`, `report.md`,
   `profile.export.json`, `share-card.json`, and `tooling.json`, with optional
-  Go/LCOV coverage import.
+  Go/LCOV coverage import, GitHub durability enrichment, and optional analyzer
+  findings when tools are installed.
 - `contribution preflight` writes V2 current-diff readiness artifacts with
   changed-line ranges, optional Go/LCOV coverage, policy rubric evidence, and
   recent personal pattern checks.

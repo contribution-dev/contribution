@@ -118,6 +118,7 @@ func Summarize(report Report) signals.CoverageSummary {
 	}
 	out.Status = "available"
 	out.Percent = percent(out.CoveredLines, out.TotalLines)
+	out.LowCoverageFiles = lowestCoverageFiles(out.Files, 5)
 	out.Reason = ""
 	return out
 }
@@ -279,6 +280,13 @@ func normalizePath(path string, repoRoot string) string {
 	if path == "" {
 		return ""
 	}
+	if modulePath := goModulePath(repoRoot); modulePath != "" {
+		if path == modulePath {
+			path = "."
+		} else if strings.HasPrefix(path, modulePath+"/") {
+			path = strings.TrimPrefix(path, modulePath+"/")
+		}
+	}
 	if filepath.IsAbs(path) {
 		rel, err := filepath.Rel(repoRoot, path)
 		if err != nil {
@@ -291,6 +299,48 @@ func normalizePath(path string, repoRoot string) string {
 		return ""
 	}
 	return path
+}
+
+func goModulePath(repoRoot string) string {
+	if repoRoot == "" {
+		return ""
+	}
+	// #nosec G304 -- repoRoot is the analyzed repository and go.mod is the standard module file.
+	data, err := os.ReadFile(filepath.Join(repoRoot, "go.mod"))
+	if err != nil {
+		return ""
+	}
+	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	for scanner.Scan() {
+		line := strings.TrimSpace(scanner.Text())
+		if strings.HasPrefix(line, "module ") {
+			return strings.TrimSpace(strings.TrimPrefix(line, "module "))
+		}
+	}
+	return ""
+}
+
+func lowestCoverageFiles(files []signals.PreflightFileCoverage, limit int) []signals.PreflightFileCoverage {
+	filtered := make([]signals.PreflightFileCoverage, 0, len(files))
+	for _, file := range files {
+		if file.TotalLines == 0 {
+			continue
+		}
+		filtered = append(filtered, file)
+	}
+	sort.Slice(filtered, func(i, j int) bool {
+		if filtered[i].Percent == filtered[j].Percent {
+			if filtered[i].TotalLines == filtered[j].TotalLines {
+				return filtered[i].Path < filtered[j].Path
+			}
+			return filtered[i].TotalLines > filtered[j].TotalLines
+		}
+		return filtered[i].Percent < filtered[j].Percent
+	})
+	if len(filtered) < limit {
+		limit = len(filtered)
+	}
+	return append([]signals.PreflightFileCoverage{}, filtered[:limit]...)
 }
 
 func addRange(report *Report, path string, startLine int, endLine int, covered bool) {

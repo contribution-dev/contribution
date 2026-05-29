@@ -1,6 +1,7 @@
 package scoring
 
 import (
+	"strings"
 	"testing"
 	"time"
 
@@ -142,4 +143,82 @@ func TestBuildExplainsHighChurnArtifacts(t *testing.T) {
 	if got := out.DeepDives.HighChurn[0]; got.Path != "internal/report/report.go" || got.Touches != 3 || len(got.Artifacts) != 1 {
 		t.Fatalf("high churn detail = %+v", got)
 	}
+}
+
+func TestBuildUsesGitHubDurabilityEvidence(t *testing.T) {
+	mergedAt := time.Date(2026, 1, 1, 12, 0, 0, 0, time.UTC)
+	history := gitrepo.History{
+		Commits: []gitrepo.Commit{{
+			SHA:           "fix1234567890",
+			Date:          mergedAt.Add(24 * time.Hour),
+			Subject:       "fix auth regression",
+			Files:         []gitrepo.ChangedFile{{Path: "internal/auth/session.go", Additions: 4}},
+			SourceTouched: true,
+			RiskyTouched:  true,
+			IsFollowUpFix: true,
+		}},
+		FileTouchCount: map[string]int{"internal/auth/session.go": 3},
+		HighChurnFiles: []string{"internal/auth/session.go"},
+	}
+	out := Build(Input{
+		Repo:    signals.RepoMetadata{DefaultBranch: "main"},
+		History: history,
+		GitHub: github.Metadata{Available: true, PRs: []github.PullRequest{{
+			Number:           7,
+			Title:            "Change auth session",
+			MergedAt:         mergedAt,
+			ChangedFiles:     1,
+			Additions:        20,
+			Deletions:        5,
+			Files:            []string{"internal/auth/session.go"},
+			ReviewCount:      2,
+			RequestedChanges: 1,
+			CheckRuns:        2,
+			FailedChecks:     1,
+		}}},
+		Inventory: signals.FileSummary{TotalFiles: 1, SourceFiles: 1},
+		SinceDays: 90,
+		MaxCards:  20,
+	})
+
+	if len(out.Cards) != 1 {
+		t.Fatalf("cards = %d, want 1", len(out.Cards))
+	}
+	card := out.Cards[0]
+	if card.Label != "risky" || !strings.Contains(card.Durability, "later fix/revert-like") {
+		t.Fatalf("card = %+v, want risky durability evidence", card)
+	}
+	if !hasWeakness(out.WeaknessMap.Weaknesses, "Some PRs needed post-merge follow-up") {
+		t.Fatalf("weaknesses = %+v, want post-merge follow-up weakness", out.WeaknessMap.Weaknesses)
+	}
+}
+
+func TestBuildAddsAnalyzerWeakness(t *testing.T) {
+	out := Build(Input{
+		Repo:      signals.RepoMetadata{DefaultBranch: "main"},
+		History:   gitrepo.History{FileTouchCount: map[string]int{}},
+		Inventory: signals.FileSummary{TotalFiles: 1, SourceFiles: 1},
+		AnalyzerFindings: []signals.AnalyzerFinding{{
+			Tool:       "semgrep",
+			RuleID:     "go.rule",
+			Severity:   signals.SeverityMedium,
+			FilePath:   "internal/app.go",
+			Message:    "avoid this",
+			Confidence: signals.ConfidenceMedium,
+		}},
+		SinceDays: 90,
+		MaxCards:  20,
+	})
+	if !hasWeakness(out.WeaknessMap.Weaknesses, "Optional analyzers found issues") {
+		t.Fatalf("weaknesses = %+v, want analyzer weakness", out.WeaknessMap.Weaknesses)
+	}
+}
+
+func hasWeakness(findings []signals.Finding, label string) bool {
+	for _, finding := range findings {
+		if finding.Label == label {
+			return true
+		}
+	}
+	return false
 }

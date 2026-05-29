@@ -70,7 +70,7 @@ func TestFetchMergedPRsFiltersMergedAndLimits(t *testing.T) {
 				{"number":3,"title":"merged three","html_url":"https://example.test/3","merged_at":"2026-01-02T00:00:00Z"}
 			]`))
 		case r.URL.Path == "/repos/owner/repo/pulls/2":
-			_, _ = w.Write([]byte(`{"number":2,"title":"merged two","html_url":"https://example.test/2","changed_files":2,"additions":10,"deletions":3,"commits":2,"comments":4,"review_comments":5,"head":{"sha":"abcdef123456"}}`))
+			_, _ = w.Write([]byte(`{"number":2,"title":"merged two","html_url":"https://example.test/2","merged_at":"2026-01-01T00:00:00Z","changed_files":2,"additions":10,"deletions":3,"commits":2,"comments":4,"review_comments":5,"head":{"sha":"abcdef123456"}}`))
 		case r.URL.Path == "/repos/owner/repo/pulls/3":
 			_, _ = w.Write([]byte(`{"number":3,"title":"merged three","html_url":"https://example.test/3","changed_files":3,"additions":20,"deletions":4,"commits":1,"head":{"sha":"123456abcdef"}}`))
 		case r.URL.Path == "/repos/owner/repo/pulls/2/files":
@@ -106,6 +106,9 @@ func TestFetchMergedPRsFiltersMergedAndLimits(t *testing.T) {
 	}
 	if got.PRs[0].ChangedFiles != 2 || got.PRs[0].Additions != 10 || got.PRs[0].Deletions != 3 || got.PRs[0].IssueComments != 4 || got.PRs[0].ReviewComments != 5 {
 		t.Fatalf("PR detail counts missing: %+v", got.PRs[0])
+	}
+	if got.PRs[0].MergedAt.IsZero() {
+		t.Fatalf("MergedAt was not imported: %+v", got.PRs[0])
 	}
 }
 

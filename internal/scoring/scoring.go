@@ -12,17 +12,18 @@ import (
 
 // Input is the deterministic evidence available to V1 scoring.
 type Input struct {
-	Repo        signals.RepoMetadata
-	History     gitrepo.History
-	GitHub      github.Metadata
-	Inventory   signals.FileSummary
-	Coverage    signals.CoverageSummary
-	Signals     []signals.Signal
-	SinceDays   int
-	MaxCards    int
-	DisplayName string
-	AITools     []string
-	AIModes     []string
+	Repo             signals.RepoMetadata
+	History          gitrepo.History
+	GitHub           github.Metadata
+	Inventory        signals.FileSummary
+	Coverage         signals.CoverageSummary
+	AnalyzerFindings []signals.AnalyzerFinding
+	Signals          []signals.Signal
+	SinceDays        int
+	MaxCards         int
+	DisplayName      string
+	AITools          []string
+	AIModes          []string
 }
 
 // Output is the labeled report state.
@@ -50,7 +51,7 @@ func buildCards(input Input) []signals.PRQualityCard {
 	if input.GitHub.Available && len(input.GitHub.PRs) > 0 {
 		cards := make([]signals.PRQualityCard, 0, min(len(input.GitHub.PRs), input.MaxCards))
 		for _, pr := range input.GitHub.PRs {
-			cards = append(cards, cardFromPR(pr))
+			cards = append(cards, cardFromPR(pr, input.History))
 			if len(cards) >= input.MaxCards {
 				break
 			}
@@ -67,7 +68,7 @@ func buildCards(input Input) []signals.PRQualityCard {
 	return cards
 }
 
-func cardFromPR(pr github.PullRequest) signals.PRQualityCard {
+func cardFromPR(pr github.PullRequest, history gitrepo.History) signals.PRQualityCard {
 	totalLines := pr.Additions + pr.Deletions
 	label := "mixed"
 	confidence := signals.ConfidenceMedium
@@ -76,6 +77,7 @@ func cardFromPR(pr github.PullRequest) signals.PRQualityCard {
 	var strengths []signals.Finding
 	var risks []signals.Finding
 	sourceFiles, testFiles, riskyFiles := classifyPaths(pr.Files)
+	durability := prDurabilityContext(pr, history)
 	if pr.ChangedFiles <= 5 && totalLines <= 300 {
 		label = "strong"
 		strengths = append(strengths, signals.Finding{
@@ -98,6 +100,50 @@ func cardFromPR(pr github.PullRequest) signals.PRQualityCard {
 		mainRisk = "Large review surface."
 		nextAction = "Split the next comparable change before opening review."
 	}
+	if pr.RequestedChanges > 0 {
+		risks = append(risks, signals.Finding{
+			Label:        "Requested changes during review",
+			Evidence:     fmt.Sprintf("PR #%d had %d requested-change review(s).", pr.Number, pr.RequestedChanges),
+			Confidence:   signals.ConfidenceMedium,
+			WhyItMatters: "Requested changes are useful review signal, but repeated rounds can indicate unclear scope or missing preflight checks.",
+			NextAction:   "Use preflight to call out risky paths, tests, and review focus before opening comparable PRs.",
+		})
+		if label == "strong" {
+			label = "mixed"
+		}
+		mainRisk = "Review requested changes before merge."
+		nextAction = "Preflight comparable changes and spell out review boundaries before opening review."
+	}
+	if pr.FailedChecks > 0 {
+		risks = append(risks, signals.Finding{
+			Label:        "Checks did not all pass",
+			Evidence:     fmt.Sprintf("PR #%d had %d failing or non-success check run(s).", pr.Number, pr.FailedChecks),
+			Confidence:   signals.ConfidenceMedium,
+			WhyItMatters: "Failing checks before merge are churn and reviewer-load signals.",
+			NextAction:   "Run the same validation locally before opening the next comparable PR.",
+		})
+		label = "risky"
+		mainRisk = "Checks failed before merge."
+		nextAction = "Run local validation before review and include failures in the PR notes if they are expected."
+	}
+	if durability.FollowUpArtifacts > 0 {
+		risks = append(risks, signals.Finding{
+			Label:        "Post-merge follow-up churn",
+			Evidence:     fmt.Sprintf("After PR #%d merged, %d fix/revert-like commit(s) touched files from the PR.", pr.Number, durability.FollowUpArtifacts),
+			Confidence:   signals.ConfidenceMedium,
+			WhyItMatters: "Follow-up fixes on the same files are direct durability evidence, though message heuristics remain imperfect.",
+			NextAction:   "Inspect the follow-up commits before repeating this PR shape.",
+		})
+		label = "risky"
+		mainRisk = "Post-merge follow-up churn touched this PR's files."
+		nextAction = "Inspect later fixes on these files and add regression coverage before a similar change."
+	} else if pr.CheckRuns > 0 && pr.FailedChecks == 0 && len(durability.HighChurnFiles) == 0 {
+		strengths = append(strengths, signals.Finding{
+			Label:      "Durability evidence",
+			Evidence:   fmt.Sprintf("PR #%d had no matching fix/revert follow-up in local history and imported checks passed or were neutral/skipped.", pr.Number),
+			Confidence: signals.ConfidenceMedium,
+		})
+	}
 	if sourceFiles > 0 && testFiles == 0 {
 		risks = append(risks, signals.Finding{
 			Label:        "No test files visible",
@@ -119,7 +165,6 @@ func cardFromPR(pr github.PullRequest) signals.PRQualityCard {
 	}
 	testEvidence := prTestEvidence(pr, sourceFiles, testFiles)
 	reviewBurden := prReviewBurden(pr)
-	durability := prDurability(pr)
 	return signals.PRQualityCard{
 		PRNumber:     pr.Number,
 		Title:        pr.Title,
@@ -130,7 +175,7 @@ func cardFromPR(pr github.PullRequest) signals.PRQualityCard {
 		Scope:        scopeDescription(pr.ChangedFiles, totalLines),
 		TestEvidence: testEvidence,
 		ReviewBurden: reviewBurden,
-		Durability:   durability,
+		Durability:   prDurability(pr, durability),
 		MainRisk:     mainRisk,
 		Strengths:    strengths,
 		Risks:        risks,
@@ -253,6 +298,18 @@ func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMa
 			fixLike++
 		}
 	}
+	var requestedChangePRs, failedCheckPRs, followUpPRs int
+	for _, pr := range input.GitHub.PRs {
+		if pr.RequestedChanges > 0 {
+			requestedChangePRs++
+		}
+		if pr.FailedChecks > 0 {
+			failedCheckPRs++
+		}
+		if prDurabilityContext(pr, input.History).FollowUpArtifacts > 0 {
+			followUpPRs++
+		}
+	}
 
 	confidence := signals.ConfidenceMedium
 	if input.GitHub.Available && len(input.History.Commits) >= 10 {
@@ -331,6 +388,42 @@ func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMa
 			Confidence:   signals.ConfidenceMedium,
 			WhyItMatters: "Repeated edits to the same files can indicate unstable boundaries or incomplete fixes.",
 			NextAction:   "Before editing these files again, inspect recent commits and add regression tests around the changed behavior.",
+		})
+	}
+	if followUpPRs > 0 {
+		weaknesses = append(weaknesses, signals.Finding{
+			Label:        "Some PRs needed post-merge follow-up",
+			Evidence:     fmt.Sprintf("%d imported PR(s) had later fix/revert-like commits touching their changed files.", followUpPRs),
+			Confidence:   signals.ConfidenceMedium,
+			WhyItMatters: "This is stronger durability evidence than commit-message counts alone because it ties follow-up churn back to the PR's files.",
+			NextAction:   "Inspect those PRs before repeating the same shape, especially if they also changed high-churn files.",
+		})
+	}
+	if requestedChangePRs > 0 {
+		weaknesses = append(weaknesses, signals.Finding{
+			Label:        "Review requested changes on imported PRs",
+			Evidence:     fmt.Sprintf("%d imported PR(s) had requested-change reviews.", requestedChangePRs),
+			Confidence:   signals.ConfidenceMedium,
+			WhyItMatters: "Requested changes are useful, but repeated review rounds can point to unclear scope or missing preflight checks.",
+			NextAction:   "Use preflight to call out scope, risky paths, and test evidence before opening comparable PRs.",
+		})
+	}
+	if failedCheckPRs > 0 {
+		weaknesses = append(weaknesses, signals.Finding{
+			Label:        "Checks failed on imported PRs",
+			Evidence:     fmt.Sprintf("%d imported PR(s) had failing or non-success check runs.", failedCheckPRs),
+			Confidence:   signals.ConfidenceMedium,
+			WhyItMatters: "Failing checks before merge add churn and reviewer load.",
+			NextAction:   "Run the same validation locally before review and keep CI-only failures visible in the PR notes.",
+		})
+	}
+	if len(input.AnalyzerFindings) > 0 {
+		weaknesses = append(weaknesses, signals.Finding{
+			Label:        "Optional analyzers found issues",
+			Evidence:     fmt.Sprintf("%d optional analyzer finding(s) were imported.", len(input.AnalyzerFindings)),
+			Confidence:   signals.ConfidenceMedium,
+			WhyItMatters: "Static, secret, dependency, and vulnerability findings are not proof of broken code, but they are concrete risk evidence to triage before review.",
+			NextAction:   "Triage the analyzer findings and separate new risk from inherited backlog before sharing the report.",
 		})
 	}
 	if len(weaknesses) == 0 {
@@ -576,14 +669,57 @@ func prReviewBurden(pr github.PullRequest) string {
 	return strings.Join(parts, ", ") + "."
 }
 
-func prDurability(pr github.PullRequest) string {
-	if pr.CheckRuns == 0 {
-		return "Post-merge churn is unavailable; check-run metadata was not imported."
+type prDurabilityEvidence struct {
+	FollowUpArtifacts int
+	HighChurnFiles    []string
+}
+
+func prDurabilityContext(pr github.PullRequest, history gitrepo.History) prDurabilityEvidence {
+	if len(pr.Files) == 0 {
+		return prDurabilityEvidence{}
 	}
-	if pr.FailedChecks > 0 {
+	prFiles := map[string]bool{}
+	for _, file := range pr.Files {
+		prFiles[file] = true
+	}
+	evidence := prDurabilityEvidence{}
+	for _, file := range history.HighChurnFiles {
+		if prFiles[file] {
+			evidence.HighChurnFiles = append(evidence.HighChurnFiles, file)
+		}
+	}
+	for _, commit := range history.Commits {
+		if !pr.MergedAt.IsZero() && !commit.Date.IsZero() && !commit.Date.After(pr.MergedAt) {
+			continue
+		}
+		if !commit.IsFollowUpFix && !commit.IsRevert {
+			continue
+		}
+		for _, file := range commit.Files {
+			if prFiles[file.Path] {
+				evidence.FollowUpArtifacts++
+				break
+			}
+		}
+	}
+	return evidence
+}
+
+func prDurability(pr github.PullRequest, evidence prDurabilityEvidence) string {
+	switch {
+	case evidence.FollowUpArtifacts > 0 && len(evidence.HighChurnFiles) > 0:
+		return fmt.Sprintf("%d later fix/revert-like commit(s) touched files from this PR; high-churn overlap: %s.", evidence.FollowUpArtifacts, strings.Join(evidence.HighChurnFiles, ", "))
+	case evidence.FollowUpArtifacts > 0:
+		return fmt.Sprintf("%d later fix/revert-like commit(s) touched files from this PR.", evidence.FollowUpArtifacts)
+	case len(evidence.HighChurnFiles) > 0:
+		return fmt.Sprintf("No later fix/revert-like commit matched this PR, but changed files overlap high-churn files: %s.", strings.Join(evidence.HighChurnFiles, ", "))
+	case pr.CheckRuns == 0:
+		return "Post-merge churn is limited to local history; check-run metadata was not imported."
+	case pr.FailedChecks > 0:
 		return fmt.Sprintf("%d of %d imported check runs did not pass.", pr.FailedChecks, pr.CheckRuns)
+	default:
+		return fmt.Sprintf("No matching fix/revert follow-up was found in local history; %d imported check runs passed or were neutral/skipped.", pr.CheckRuns)
 	}
-	return fmt.Sprintf("%d imported check runs passed or were neutral/skipped.", pr.CheckRuns)
 }
 
 func classifyPaths(paths []string) (sourceFiles int, testFiles int, riskyFiles int) {

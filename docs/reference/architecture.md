@@ -56,9 +56,10 @@ CLI preflight only: it produces files and action outputs, but does not upload,
 comment, host, or persist state.
 
 Single-player coaching stays local-first. Private `report.md` may explain
-artifact titles, high-churn files, no-test artifacts, coverage import, and
-confidence setup actions. Public-safe analysis/redaction must neutralize those
-details before profile, share-card, packet, or public-safe markdown output.
+artifact titles, high-churn files, no-test artifacts, PR durability evidence,
+coverage import, optional analyzer findings, and confidence setup actions.
+Public-safe analysis/redaction must neutralize those details before profile,
+share-card, packet, or public-safe markdown output.
 
 The CLI should not contain hosted profile pages, OpenGraph rendering, X API
 integrations, Discord-specific sharing code, share buttons, social mention

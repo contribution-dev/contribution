@@ -5,9 +5,19 @@ updates:
     directory: "/"
     schedule:
       interval: "weekly"
-    open-pull-requests-limit: 2
+      day: "monday"
+      time: "09:00"
+      timezone: "America/New_York"
+    labels:
+      - "dependencies"
+      - "go"
+    commit-message:
+      prefix: "deps(go)"
+    open-pull-requests-limit: 3
     groups:
-      go-non-major:
+      go-minor-and-patch:
+        patterns:
+          - "*"
         update-types:
           - "minor"
           - "patch"
@@ -15,15 +25,42 @@ updates:
   - package-ecosystem: "npm"
     directory: "/"
     schedule:
-      interval: "monthly"
-    open-pull-requests-limit: 1
+      interval: "weekly"
+      day: "tuesday"
+      time: "09:00"
+      timezone: "America/New_York"
+    labels:
+      - "dependencies"
+      - "javascript"
+    commit-message:
+      prefix: "deps(npm)"
+    open-pull-requests-limit: 3
+    versioning-strategy: "increase"
     groups:
-      npm-non-major:
+      npm-minor-and-patch:
+        patterns:
+          - "*"
         update-types:
           - "minor"
           - "patch"
+
   - package-ecosystem: "github-actions"
     directory: "/"
     schedule:
-      interval: "monthly"
-    open-pull-requests-limit: 1
+      interval: "weekly"
+      day: "wednesday"
+      time: "09:00"
+      timezone: "America/New_York"
+    labels:
+      - "dependencies"
+      - "github-actions"
+    commit-message:
+      prefix: "deps(actions)"
+    open-pull-requests-limit: 2
+    groups:
+      github-actions-minor-and-patch:
+        patterns:
+          - "*"
+        update-types:
+          - "minor"
+          - "patch"

@@ -862,6 +862,12 @@ function runSmoke(binary, tempRoot, options = {}) {
     "package auth\n\nfunc ValidateSession() bool { return true }\n",
   );
   commitAll(preflightRepoInfo.repo, "change auth session");
+  const preflightCoverage = path.join(preflightRepoInfo.repo, "coverage.out");
+  writeRepoFile(
+    preflightRepoInfo.repo,
+    "coverage.out",
+    "mode: set\ninternal/auth/session.go:3.1,3.50 1 1\n",
+  );
   const preflightRoot = path.join(tempRoot, "preflight-output");
   const preflight = runCli(
     binary,
@@ -875,6 +881,10 @@ function runSmoke(binary, tempRoot, options = {}) {
       preflightRoot,
       "--format",
       "json",
+      "--coverage",
+      preflightCoverage,
+      "--coverage-format",
+      "go",
     ],
     { cwd: preflightRepoInfo.repo, env, byName: options.byName },
   );
@@ -882,9 +892,16 @@ function runSmoke(binary, tempRoot, options = {}) {
   const preflightJSON = readJSON(
     path.join(latestRunDir(preflightRoot), "preflight.json"),
   );
+  assert(preflightJSON.version === 2, "preflight did not emit V2 schema");
   assert(
-    preflightJSON.changed_files?.includes("internal/auth/session.go"),
+    preflightJSON.changed_files?.some(
+      (file) => file.path === "internal/auth/session.go",
+    ),
     "preflight missing changed risky file",
+  );
+  assert(
+    preflightJSON.changed_files?.some((file) => file.line_ranges?.length > 0),
+    "preflight missing changed line ranges",
   );
   assert(
     preflightJSON.risk_level === "high",
@@ -893,6 +910,14 @@ function runSmoke(binary, tempRoot, options = {}) {
   assert(
     preflightJSON.file_summary?.risky_files > 0,
     "preflight risky file count missing",
+  );
+  assert(
+    preflightJSON.coverage?.status === "available",
+    "preflight did not import changed-line coverage",
+  );
+  assert(
+    preflightJSON.rubric?.some((item) => item.id === "changed_line_coverage"),
+    "preflight missing changed-line coverage rubric",
   );
 
   const packetRepo = createGitRepo(tempRoot, "packet-repo").repo;
@@ -909,6 +934,8 @@ function runSmoke(binary, tempRoot, options = {}) {
   );
   assertReferencedPathsExist(packet, tempRoot);
   const packetJSON = readJSON(findPacketOutput(packetRoot));
+  assert(packetJSON.version === 2, "packet did not emit V2 schema");
+  assert(packetJSON.packet_id, "packet missing stable packet_id");
   assert(
     packetJSON.public_safe === true,
     "packet is not public-safe by default",
@@ -920,7 +947,73 @@ function runSmoke(binary, tempRoot, options = {}) {
     (packetJSON.card?.risks ?? []).length === 0,
     "packet did not redact risks",
   );
+  assert(
+    packetJSON.artifact_label === "PR #123",
+    "packet did not use neutral public artifact label",
+  );
+  assert(packetJSON.rubric?.length > 0, "packet missing structured rubric");
   assertPublicSafeFiles([findPacketOutput(packetRoot)], packetRepo);
+
+  const feedbackRoot = path.join(tempRoot, "feedback-output");
+  const feedbackFixture = path.join(tempRoot, "friend-feedback.export.json");
+  writeJSON(feedbackFixture, {
+    version: 1,
+    packet_id: packetJSON.packet_id,
+    submitted_at: "2026-05-28T00:00:00Z",
+    reviewer_label: "Reviewer 1",
+    overall_trust: "high",
+    confidence: "medium",
+    answers: [
+      {
+        question_id: "problem_fit",
+        question: "Does this change solve the intended problem cleanly?",
+        answer:
+          "The change is focused and solves the stated problem with enough context.",
+      },
+      {
+        question_id: "test_evidence",
+        question: "Are tests appropriate for the changed behavior?",
+        answer:
+          "The tests cover the changed behavior and make the review easier.",
+      },
+    ],
+    public_safe: true,
+  });
+  const feedbackImport = runCli(
+    binary,
+    [
+      "import-feedback",
+      "--analysis",
+      path.join(fixtureDir, "analysis.json"),
+      "--feedback",
+      feedbackFixture,
+      "--output",
+      feedbackRoot,
+      "--format",
+      "all",
+      "--public-safe",
+    ],
+    { cwd: packetRepo, env, byName: options.byName },
+  );
+  assertReferencedPathsExist(feedbackImport, tempRoot);
+  assertFilesExist(feedbackRoot, [
+    "analysis.json",
+    "report.md",
+    "profile.export.json",
+    "share-card.json",
+    "tooling.json",
+  ]);
+  const importedFeedback = assertAnalysisPublicSafe(
+    path.join(feedbackRoot, "analysis.json"),
+    packetRepo,
+  );
+  assert(
+    importedFeedback.signals?.some(
+      (signal) => signal.source === "friend_feedback",
+    ),
+    "feedback import did not add friend_feedback signals",
+  );
+  assertPublicSafeFiles(collectFiles(feedbackRoot), packetRepo);
 }
 
 function currentGoTarget() {

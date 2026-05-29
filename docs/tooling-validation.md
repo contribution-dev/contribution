@@ -63,7 +63,8 @@ changes.
 ## CLI dogfood
 
 - `pnpm dogfood:smoke` builds the real CLI and exercises it against temporary
-  Git repos under `/tmp/contribution-*`.
+  Git repos under `/tmp/contribution-*`, including V2 preflight coverage,
+  packet, and feedback-import flows.
 - `pnpm dogfood:real` builds the real CLI, analyzes this repository into
   `/tmp/contribution-*`, checks inventory against Git-visible files, confirms
   local-only confidence is not `high`, and asserts public-safe outputs do not
@@ -76,6 +77,9 @@ changes.
   behavior and required coverage. CLI architecture references under
   `docs/reference/architecture.md` also count as contract evidence when they
   define CLI boundaries.
+- `action.yml` is covered by script contract tests and CI dogfoods it with
+  `version: local`; the action should remain a thin wrapper around
+  `contribution preflight`.
 
 ## Manual release-candidate dogfood
 

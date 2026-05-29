@@ -282,6 +282,11 @@ func ShareCard(analysis signals.AnalysisReport) signals.ShareCard {
 	}
 }
 
+// PublicSafeCard returns a single neutral, public-safe card.
+func PublicSafeCard(card signals.PRQualityCard, ordinal int) signals.PRQualityCard {
+	return publicCard(card, ordinal)
+}
+
 // WritePreflight writes current-diff preflight artifacts.
 func WritePreflight(outputDir string, preflight signals.PreflightReport, format string) error {
 	if err := os.MkdirAll(outputDir, 0o750); err != nil {
@@ -326,10 +331,46 @@ func PreflightMarkdown(preflight signals.PreflightReport) string {
 	fmt.Fprintf(&buf, "- Dependencies: %d\n", preflight.FileSummary.DependencyFiles)
 	fmt.Fprintf(&buf, "- Generated/vendor: %d\n", preflight.FileSummary.GeneratedFiles+preflight.FileSummary.VendorFiles)
 	fmt.Fprintf(&buf, "- Risky paths: %d\n", preflight.FileSummary.RiskyFiles)
+	fmt.Fprintf(&buf, "- Changed lines: %d\n", preflight.TotalChangedLines)
+	if len(preflight.ChangedFiles) > 0 {
+		fmt.Fprintln(&buf)
+		fmt.Fprintln(&buf, "## Changed Files")
+		fmt.Fprintln(&buf)
+		for _, file := range preflight.ChangedFiles {
+			fmt.Fprintf(&buf, "- %s: +%d/-%d", file.Path, file.Additions, file.Deletions)
+			if len(file.LineRanges) > 0 {
+				fmt.Fprintf(&buf, " (%s)", formatLineRanges(file.LineRanges))
+			}
+			fmt.Fprintln(&buf)
+		}
+	}
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "## Test Evidence")
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, preflight.TestEvidence)
+	if preflight.Coverage.Status != "" {
+		fmt.Fprintln(&buf)
+		fmt.Fprintln(&buf, "## Changed-Line Coverage")
+		fmt.Fprintln(&buf)
+		switch preflight.Coverage.Status {
+		case "available":
+			fmt.Fprintf(&buf, "%.1f%% (%d/%d executable changed lines)\n", preflight.Coverage.Percent, preflight.Coverage.CoveredLines, preflight.Coverage.TotalLines)
+		default:
+			if preflight.Coverage.Reason != "" {
+				fmt.Fprintln(&buf, preflight.Coverage.Reason)
+			} else {
+				fmt.Fprintln(&buf, "Changed-line coverage is unknown.")
+			}
+		}
+	}
+	if len(preflight.Rubric) > 0 {
+		fmt.Fprintln(&buf)
+		fmt.Fprintln(&buf, "## Rubric")
+		fmt.Fprintln(&buf)
+		for _, item := range preflight.Rubric {
+			fmt.Fprintf(&buf, "- %s: %s (%s). %s\n", item.Label, item.Status, item.Severity, item.Evidence)
+		}
+	}
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "## Reviewer Focus")
 	fmt.Fprintln(&buf)
@@ -343,6 +384,18 @@ func PreflightMarkdown(preflight signals.PreflightReport) string {
 		fmt.Fprintf(&buf, "- %s\n", item)
 	}
 	return buf.String()
+}
+
+func formatLineRanges(ranges []signals.LineRange) string {
+	parts := make([]string, 0, len(ranges))
+	for _, rng := range ranges {
+		if rng.Start == rng.End {
+			parts = append(parts, fmt.Sprintf("L%d", rng.Start))
+		} else {
+			parts = append(parts, fmt.Sprintf("L%d-L%d", rng.Start, rng.End))
+		}
+	}
+	return strings.Join(parts, ", ")
 }
 
 // WritePacket writes friend-review packet artifacts.
@@ -361,6 +414,8 @@ func PacketMarkdown(packet signals.FriendReviewPacket) string {
 	var buf bytes.Buffer
 	fmt.Fprintln(&buf, "# Friend Review Packet")
 	fmt.Fprintln(&buf)
+	fmt.Fprintf(&buf, "Packet ID: %s\n", packet.PacketID)
+	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "## Context")
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, packet.Context)
@@ -371,10 +426,14 @@ func PacketMarkdown(packet signals.FriendReviewPacket) string {
 		fmt.Fprintf(&buf, "- %s\n", item)
 	}
 	fmt.Fprintln(&buf)
-	fmt.Fprintln(&buf, "## Questions")
+	fmt.Fprintln(&buf, "## Rubric")
 	fmt.Fprintln(&buf)
-	for i, question := range packet.Questions {
-		fmt.Fprintf(&buf, "%d. %s\n", i+1, question)
+	for i, question := range packet.Rubric {
+		if question.Focus == "" {
+			fmt.Fprintf(&buf, "%d. %s\n", i+1, question.Prompt)
+		} else {
+			fmt.Fprintf(&buf, "%d. %s (%s)\n", i+1, question.Prompt, question.Focus)
+		}
 	}
 	fmt.Fprintln(&buf)
 	fmt.Fprintf(&buf, "Confidence: %s\n", packet.Confidence)

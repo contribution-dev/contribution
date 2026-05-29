@@ -324,9 +324,10 @@ func gitInventoryPaths(ctx context.Context, repoPath string) ([]string, error) {
 
 // ChangedFile is a changed path in commit history or a diff.
 type ChangedFile struct {
-	Path      string `json:"path"`
-	Additions int    `json:"additions,omitempty"`
-	Deletions int    `json:"deletions,omitempty"`
+	Path       string              `json:"path"`
+	Additions  int                 `json:"additions,omitempty"`
+	Deletions  int                 `json:"deletions,omitempty"`
+	LineRanges []signals.LineRange `json:"line_ranges,omitempty"`
 }
 
 // Commit is a recent commit with classified file context.
@@ -399,6 +400,13 @@ func Diff(ctx context.Context, repoPath, base, head string) (DiffSummary, error)
 		}
 	}
 	files := parseNumstat(out)
+	patch, patchErr := gitOutput(ctx, repoPath, "diff", "--unified=0", "--no-color", spec)
+	if patchErr == nil {
+		ranges := parseUnifiedChangedLineRanges(patch)
+		for i := range files {
+			files[i].LineRanges = ranges[files[i].Path]
+		}
+	}
 	summary := newFileSummary()
 	for _, file := range files {
 		addFileSummary(&summary, file.Path)
@@ -524,6 +532,69 @@ func parseNumstatLine(line string) (ChangedFile, bool) {
 	deletions := parseNumstatCount(parts[1])
 	path := strings.Join(parts[2:], "\t")
 	return ChangedFile{Path: filepath.ToSlash(path), Additions: additions, Deletions: deletions}, true
+}
+
+func parseUnifiedChangedLineRanges(out string) map[string][]signals.LineRange {
+	ranges := map[string][]signals.LineRange{}
+	currentPath := ""
+	for _, raw := range strings.Split(out, "\n") {
+		line := strings.TrimSpace(raw)
+		if strings.HasPrefix(line, "+++ ") {
+			currentPath = parseUnifiedPath(strings.TrimSpace(strings.TrimPrefix(line, "+++ ")))
+			continue
+		}
+		if currentPath == "" || !strings.HasPrefix(line, "@@ ") {
+			continue
+		}
+		rng, ok := parseUnifiedNewRange(line)
+		if ok {
+			ranges[currentPath] = append(ranges[currentPath], rng)
+		}
+	}
+	return ranges
+}
+
+func parseUnifiedPath(path string) string {
+	if tab := strings.Index(path, "\t"); tab >= 0 {
+		path = path[:tab]
+	}
+	path = strings.TrimSpace(path)
+	if path == "/dev/null" {
+		return ""
+	}
+	path = strings.TrimPrefix(path, "b/")
+	path = strings.Trim(path, `"`)
+	return filepath.ToSlash(path)
+}
+
+func parseUnifiedNewRange(line string) (signals.LineRange, bool) {
+	plus := strings.Index(line, "+")
+	if plus < 0 {
+		return signals.LineRange{}, false
+	}
+	rest := line[plus+1:]
+	end := strings.Index(rest, " ")
+	if end < 0 {
+		return signals.LineRange{}, false
+	}
+	token := rest[:end]
+	parts := strings.SplitN(token, ",", 2)
+	start, err := strconv.Atoi(parts[0])
+	if err != nil || start <= 0 {
+		return signals.LineRange{}, false
+	}
+	count := 1
+	if len(parts) == 2 {
+		parsed, err := strconv.Atoi(parts[1])
+		if err != nil {
+			return signals.LineRange{}, false
+		}
+		count = parsed
+	}
+	if count <= 0 {
+		return signals.LineRange{}, false
+	}
+	return signals.LineRange{Start: start, End: start + count - 1}, true
 }
 
 func parseNumstatCount(value string) int {

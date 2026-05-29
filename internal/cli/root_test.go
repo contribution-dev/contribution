@@ -74,6 +74,32 @@ func TestInvalidFormatFailsBeforeRepoAccess(t *testing.T) {
 	}
 }
 
+func TestInvalidCoverageFormatFailsBeforeRepoAccess(t *testing.T) {
+	stdout, stderr, err := executeForTest([]string{"preflight", "--coverage-format", "cobertura"}, BuildInfo{})
+	if err == nil {
+		t.Fatal("Execute() error = nil, want unsupported coverage format")
+	}
+	if !strings.Contains(err.Error(), `unsupported coverage format "cobertura"`) {
+		t.Fatalf("error = %v, want unsupported coverage format", err)
+	}
+	if stdout != "" || stderr != "" {
+		t.Fatalf("stdout/stderr = %q/%q, want empty", stdout, stderr)
+	}
+}
+
+func TestInvalidFailOnRiskFailsBeforeRepoAccess(t *testing.T) {
+	stdout, stderr, err := executeForTest([]string{"preflight", "--fail-on-risk", "low"}, BuildInfo{})
+	if err == nil {
+		t.Fatal("Execute() error = nil, want unsupported fail-on-risk")
+	}
+	if !strings.Contains(err.Error(), `unsupported fail-on-risk "low"`) {
+		t.Fatalf("error = %v, want unsupported fail-on-risk", err)
+	}
+	if stdout != "" || stderr != "" {
+		t.Fatalf("stdout/stderr = %q/%q, want empty", stdout, stderr)
+	}
+}
+
 func TestReportRequiresInput(t *testing.T) {
 	stdout, stderr, err := executeForTest([]string{"report"}, BuildInfo{})
 	if err == nil {
@@ -129,6 +155,22 @@ func TestPacketRequiresPR(t *testing.T) {
 	}
 	if !strings.Contains(err.Error(), "--pr is required") {
 		t.Fatalf("error = %v, want missing PR", err)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty before process-level error handling", stderr)
+	}
+}
+
+func TestImportFeedbackRequiresAnalysis(t *testing.T) {
+	stdout, stderr, err := executeForTest([]string{"import-feedback"}, BuildInfo{})
+	if err == nil {
+		t.Fatal("Execute() error = nil, want missing analysis")
+	}
+	if !strings.Contains(err.Error(), "--analysis is required") {
+		t.Fatalf("error = %v, want missing analysis", err)
 	}
 	if stdout != "" {
 		t.Fatalf("stdout = %q, want empty", stdout)

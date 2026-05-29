@@ -2,9 +2,12 @@ package cli
 
 import (
 	"context"
+	"crypto/sha256"
+	"encoding/base32"
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/contribution-dev/contribution/internal/report"
@@ -78,11 +81,17 @@ func findPRCard(cards []signals.PRQualityCard, pr int) (signals.PRQualityCard, b
 }
 
 func buildPacket(repo signals.RepoMetadata, card signals.PRQualityCard, publicSafe bool, now time.Time) signals.FriendReviewPacket {
+	artifactLabel := card.Title
 	if publicSafe {
+		repo.ID = "private-repository"
+		repo.Name = "private repository"
 		repo.Root = ""
 		repo.RemoteURL = ""
-		card.URL = ""
-		card.Risks = nil
+		repo.HeadSHA = ""
+		repo.GitHubOwner = ""
+		repo.GitHubRepo = ""
+		card = report.PublicSafeCard(card, 1)
+		artifactLabel = card.Title
 	}
 	evidence := []string{
 		card.Summary,
@@ -92,23 +101,31 @@ func buildPacket(repo signals.RepoMetadata, card signals.PRQualityCard, publicSa
 		"Durability: " + card.Durability,
 	}
 	return signals.FriendReviewPacket{
-		Version:     1,
-		GeneratedAt: now,
-		Repo:        repo,
-		PRNumber:    card.PRNumber,
-		Context:     fmt.Sprintf("PR #%d was flagged as %s confidence with a %s artifact label. The packet omits raw diffs by default.", card.PRNumber, card.Confidence, card.Label),
-		Card:        card,
-		Evidence:    evidence,
-		Questions: []string{
-			"Does this PR solve the intended problem cleanly?",
-			"Is the implementation maintainable?",
-			"Are tests appropriate for the changed behavior?",
-			"What is the biggest risk?",
-			"What should the author improve next?",
-			"Would you trust this developer with similar work?",
-			"How confident are you?",
+		Version:       2,
+		GeneratedAt:   now,
+		PacketID:      packetID(repo.ID, card.PRNumber, artifactLabel),
+		Repo:          repo,
+		PRNumber:      card.PRNumber,
+		ArtifactLabel: artifactLabel,
+		Context:       fmt.Sprintf("%s was flagged as %s confidence with a %s artifact label. The packet omits raw diffs by default.", artifactLabel, card.Confidence, card.Label),
+		Card:          card,
+		Evidence:      evidence,
+		Rubric: []signals.ReviewRubricQuestion{
+			{ID: "problem_fit", Prompt: "Does this change solve the intended problem cleanly?", Focus: "scope and correctness"},
+			{ID: "maintainability", Prompt: "Is the implementation maintainable?", Focus: "boundaries, readability, and future changes"},
+			{ID: "test_evidence", Prompt: "Are tests appropriate for the changed behavior?", Focus: "missing or weak verification"},
+			{ID: "main_risk", Prompt: "What is the biggest risk?", Focus: "security, data, durability, or review burden"},
+			{ID: "next_improvement", Prompt: "What should the author improve next?", Focus: "one concrete next action"},
+			{ID: "trust", Prompt: "Would you trust this developer with similar work?", Focus: "overall trust signal"},
+			{ID: "confidence", Prompt: "How confident are you in this feedback?", Focus: "low, medium, or high"},
 		},
 		Confidence: card.Confidence,
 		PublicSafe: publicSafe,
 	}
+}
+
+func packetID(repoID string, pr int, label string) string {
+	h := sha256.Sum256([]byte(fmt.Sprintf("%s\x00%d\x00%s", repoID, pr, label)))
+	encoded := base32.StdEncoding.WithPadding(base32.NoPadding).EncodeToString(h[:])
+	return "pkt-" + strings.ToLower(encoded[:16])
 }

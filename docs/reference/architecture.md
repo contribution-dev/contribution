@@ -40,6 +40,12 @@ regenerating public-safe JSON and markdown from an existing `analysis.json`.
 Both reuse the same redaction engine as `analyze --public-safe` and
 `report --public-safe`.
 
+V2 workflow artifacts stay CLI-owned. `preflight.json` carries current-diff
+readiness, changed-line coverage, and rubric evidence; `friend-review-packet.json`
+and `friend-feedback.export.json` bridge public-safe human feedback. The root
+GitHub Action is a wrapper around local CLI preflight only: it produces files
+and action outputs, but does not upload, comment, host, or persist state.
+
 The CLI should not contain hosted profile pages, OpenGraph rendering, X API
 integrations, Discord-specific sharing code, share buttons, social mention
 tracking, reply workers, auth, storage, or hosted background jobs.

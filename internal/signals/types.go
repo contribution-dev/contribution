@@ -208,6 +208,17 @@ type FileSummary struct {
 	RiskyFiles      int            `json:"risky_files"`
 }
 
+// PreflightChangedFile is structured current-diff evidence.
+type PreflightChangedFile struct {
+	Path       string      `json:"path"`
+	Additions  int         `json:"additions,omitempty"`
+	Deletions  int         `json:"deletions,omitempty"`
+	LineRanges []LineRange `json:"line_ranges,omitempty"`
+	Class      string      `json:"class,omitempty"`
+	Language   string      `json:"language,omitempty"`
+	Risky      bool        `json:"risky,omitempty"`
+}
+
 // AnalysisReport is the canonical machine-readable V1 output.
 type AnalysisReport struct {
 	Version     int                    `json:"version"`
@@ -260,34 +271,94 @@ type ShareCard struct {
 	PublicSafe bool       `json:"public_safe"`
 }
 
+// PreflightCoverage summarizes changed-line coverage evidence.
+type PreflightCoverage struct {
+	Status       string                  `json:"status"`
+	CoveredLines int                     `json:"covered_lines,omitempty"`
+	TotalLines   int                     `json:"total_lines,omitempty"`
+	Percent      float64                 `json:"percent,omitempty"`
+	Files        []PreflightFileCoverage `json:"files,omitempty"`
+	Sources      []string                `json:"sources,omitempty"`
+	Reason       string                  `json:"reason,omitempty"`
+}
+
+// PreflightFileCoverage summarizes changed-line coverage for one file.
+type PreflightFileCoverage struct {
+	Path         string  `json:"path"`
+	CoveredLines int     `json:"covered_lines"`
+	TotalLines   int     `json:"total_lines"`
+	Percent      float64 `json:"percent"`
+}
+
+// PreflightRubricItem is a structured review-readiness check.
+type PreflightRubricItem struct {
+	ID             string `json:"id"`
+	Label          string `json:"label"`
+	Status         string `json:"status"`
+	Severity       string `json:"severity"`
+	Evidence       string `json:"evidence"`
+	Recommendation string `json:"recommendation,omitempty"`
+}
+
 // PreflightReport summarizes current-diff review readiness.
 type PreflightReport struct {
-	Version       int            `json:"version"`
-	GeneratedAt   time.Time      `json:"generated_at"`
-	Repo          RepoMetadata   `json:"repo"`
-	Base          string         `json:"base"`
-	Head          string         `json:"head"`
-	RiskLevel     string         `json:"risk_level"`
-	Why           []string       `json:"why"`
-	ChangedFiles  []string       `json:"changed_files,omitempty"`
-	FileSummary   FileSummary    `json:"file_summary"`
-	TestEvidence  string         `json:"test_evidence"`
-	Tooling       ToolingReport  `json:"tooling"`
-	ReviewerFocus []string       `json:"reviewer_focus"`
-	Limitations   []string       `json:"limitations"`
-	Privacy       PrivacySummary `json:"privacy"`
+	Version           int                    `json:"version"`
+	GeneratedAt       time.Time              `json:"generated_at"`
+	Repo              RepoMetadata           `json:"repo"`
+	Base              string                 `json:"base"`
+	Head              string                 `json:"head"`
+	RiskLevel         string                 `json:"risk_level"`
+	Why               []string               `json:"why"`
+	ChangedFiles      []PreflightChangedFile `json:"changed_files,omitempty"`
+	FileSummary       FileSummary            `json:"file_summary"`
+	TotalChangedLines int                    `json:"total_changed_lines"`
+	Coverage          PreflightCoverage      `json:"coverage"`
+	Rubric            []PreflightRubricItem  `json:"rubric"`
+	TestEvidence      string                 `json:"test_evidence"`
+	Tooling           ToolingReport          `json:"tooling"`
+	ReviewerFocus     []string               `json:"reviewer_focus"`
+	Limitations       []string               `json:"limitations"`
+	Privacy           PrivacySummary         `json:"privacy"`
+}
+
+// ReviewRubricQuestion is a structured reviewer prompt in a friend packet.
+type ReviewRubricQuestion struct {
+	ID     string `json:"id"`
+	Prompt string `json:"prompt"`
+	Focus  string `json:"focus,omitempty"`
 }
 
 // FriendReviewPacket is the bridge artifact for friend feedback.
 type FriendReviewPacket struct {
-	Version     int           `json:"version"`
-	GeneratedAt time.Time     `json:"generated_at"`
-	Repo        RepoMetadata  `json:"repo"`
-	PRNumber    int           `json:"pr_number"`
-	Context     string        `json:"context"`
-	Card        PRQualityCard `json:"card"`
-	Evidence    []string      `json:"evidence"`
-	Questions   []string      `json:"questions"`
-	Confidence  Confidence    `json:"confidence"`
-	PublicSafe  bool          `json:"public_safe"`
+	Version       int                    `json:"version"`
+	GeneratedAt   time.Time              `json:"generated_at"`
+	PacketID      string                 `json:"packet_id"`
+	Repo          RepoMetadata           `json:"repo"`
+	PRNumber      int                    `json:"pr_number"`
+	ArtifactLabel string                 `json:"artifact_label"`
+	Context       string                 `json:"context"`
+	Card          PRQualityCard          `json:"card"`
+	Evidence      []string               `json:"evidence"`
+	Rubric        []ReviewRubricQuestion `json:"rubric"`
+	Confidence    Confidence             `json:"confidence"`
+	PublicSafe    bool                   `json:"public_safe"`
+}
+
+// FriendFeedbackAnswer is one structured reviewer response.
+type FriendFeedbackAnswer struct {
+	QuestionID string `json:"question_id"`
+	Question   string `json:"question,omitempty"`
+	Answer     string `json:"answer"`
+}
+
+// FriendFeedbackExport is the public-safe feedback import contract.
+type FriendFeedbackExport struct {
+	Version       int                    `json:"version"`
+	PacketID      string                 `json:"packet_id"`
+	SubmittedAt   time.Time              `json:"submitted_at"`
+	ReviewerLabel string                 `json:"reviewer_label,omitempty"`
+	OverallTrust  string                 `json:"overall_trust"`
+	Confidence    Confidence             `json:"confidence"`
+	Answers       []FriendFeedbackAnswer `json:"answers"`
+	PublicSafe    bool                   `json:"public_safe"`
 }

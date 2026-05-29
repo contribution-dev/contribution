@@ -61,6 +61,21 @@ jobs:
       - name: Run govulncheck
         run: go run golang.org/x/vuln/cmd/govulncheck@latest ./...
 
+  preflight-action:
+    runs-on: ubuntu-latest
+    timeout-minutes: 10
+    steps:
+      - uses: actions/checkout@v6
+        with:
+          fetch-depth: 0
+      - uses: ./
+        with:
+          base: origin/main
+          head: HEAD
+          output-dir: .contribution/preflight
+          fail-on-risk: never
+          version: local
+
   goreleaser-snapshot:
     runs-on: ubuntu-latest
     timeout-minutes: 15

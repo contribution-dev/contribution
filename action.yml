@@ -1,0 +1,111 @@
+name: Contribution.dev Preflight
+description: Run Contribution.dev CLI preflight on a pull request diff.
+
+inputs:
+  base:
+    description: Base branch or SHA for preflight.
+    required: false
+    default: main
+  head:
+    description: Head branch or SHA for preflight.
+    required: false
+    default: HEAD
+  output-dir:
+    description: Directory root for preflight artifacts.
+    required: false
+    default: .contribution/preflight
+  coverage:
+    description: Optional coverage artifact path.
+    required: false
+    default: ""
+  coverage-format:
+    description: "Coverage format: auto, go, or lcov."
+    required: false
+    default: auto
+  fail-on-risk:
+    description: "Exit nonzero for risk: never, medium, or high."
+    required: false
+    default: never
+  version:
+    description: CLI version to install, or local to build from the checked-out repo.
+    required: false
+    default: latest
+
+outputs:
+  risk-level:
+    description: Preflight risk level.
+    value: ${{ steps.preflight.outputs.risk-level }}
+  artifact-dir:
+    description: Directory containing preflight artifacts.
+    value: ${{ steps.preflight.outputs.artifact-dir }}
+  preflight-json:
+    description: Path to preflight.json.
+    value: ${{ steps.preflight.outputs.preflight-json }}
+  preflight-markdown:
+    description: Path to preflight.md.
+    value: ${{ steps.preflight.outputs.preflight-markdown }}
+
+runs:
+  using: composite
+  steps:
+    - uses: actions/setup-go@v6
+      with:
+        go-version-file: ${{ github.action_path }}/.go-version
+        cache: true
+
+    - name: Install Contribution.dev CLI
+      shell: bash
+      env:
+        CONTRIBUTION_VERSION: ${{ inputs.version }}
+      run: |
+        set -euo pipefail
+        if [[ "$CONTRIBUTION_VERSION" == "local" ]]; then
+          go build -trimpath -o "$RUNNER_TEMP/contribution" ./cmd/contribution
+        else
+          go install "github.com/contribution-dev/contribution/cmd/contribution@${CONTRIBUTION_VERSION}"
+          cp "$(go env GOPATH)/bin/contribution" "$RUNNER_TEMP/contribution"
+        fi
+        "$RUNNER_TEMP/contribution" version
+
+    - name: Run preflight
+      id: preflight
+      shell: bash
+      env:
+        BASE: ${{ inputs.base }}
+        HEAD_REF: ${{ inputs.head }}
+        OUTPUT_DIR: ${{ inputs.output-dir }}
+        COVERAGE: ${{ inputs.coverage }}
+        COVERAGE_FORMAT: ${{ inputs.coverage-format }}
+        FAIL_ON_RISK: ${{ inputs.fail-on-risk }}
+      run: |
+        set -euo pipefail
+        args=(
+          preflight
+          --base "$BASE"
+          --head "$HEAD_REF"
+          --output "$OUTPUT_DIR"
+          --format all
+          --coverage-format "$COVERAGE_FORMAT"
+          --fail-on-risk "$FAIL_ON_RISK"
+        )
+        if [[ -n "${COVERAGE//[[:space:]]/}" ]]; then
+          args+=(--coverage "$COVERAGE")
+        fi
+        set +e
+        "$RUNNER_TEMP/contribution" "${args[@]}"
+        status=$?
+        set -e
+        artifact_dir="$(find "$OUTPUT_DIR" -mindepth 1 -maxdepth 1 -type d | sort | tail -n 1)"
+        json_path="$artifact_dir/preflight.json"
+        markdown_path="$artifact_dir/preflight.md"
+        risk="$(grep -m 1 '"risk_level"' "$json_path" | sed -E 's/.*"risk_level"[[:space:]]*:[[:space:]]*"([^"]+)".*/\1/')"
+        {
+          echo "risk-level=$risk"
+          echo "artifact-dir=$artifact_dir"
+          echo "preflight-json=$json_path"
+          echo "preflight-markdown=$markdown_path"
+        } >> "$GITHUB_OUTPUT"
+        if [[ -n "${GITHUB_STEP_SUMMARY:-}" && -f "$markdown_path" ]]; then
+          cat "$markdown_path" >> "$GITHUB_STEP_SUMMARY"
+        fi
+        exit "$status"

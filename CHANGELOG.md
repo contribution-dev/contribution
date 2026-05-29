@@ -4,6 +4,12 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Add V2 preflight artifacts with structured changed files, changed-line
+  coverage import, rubric evidence, repo policy checks, fail-on-risk behavior,
+  and a reusable GitHub Action wrapper.
+- Add V2 friend-review packets and `import-feedback` for public-safe feedback
+  exports, including feedback usefulness signals based on specificity and
+  completeness.
 - Make repository inventory Git-aware, add config-file counts, line-aware
   history scope, confidence caps for local-only conclusions, and stricter
   public-safe SHA/title redaction.

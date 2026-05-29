@@ -19,6 +19,9 @@ func TestLoadMissingConfigUsesSafeDefaults(t *testing.T) {
 	if cfg.AIUsage.AllowManualPRTags != true {
 		t.Fatal("AllowManualPRTags = false, want true")
 	}
+	if cfg.Preflight.MaxFiles != 20 || cfg.Preflight.MaxLines != 800 {
+		t.Fatalf("Preflight limits = %d files/%d lines, want 20/800", cfg.Preflight.MaxFiles, cfg.Preflight.MaxLines)
+	}
 	if len(warnings) == 0 {
 		t.Fatal("expected missing config warning")
 	}
@@ -39,5 +42,8 @@ func TestWriteDefaultAndLoad(t *testing.T) {
 	}
 	if cfg.Reports.OutputDir != ".contribution/reports" {
 		t.Fatalf("OutputDir = %q", cfg.Reports.OutputDir)
+	}
+	if cfg.Preflight.RiskyPaths == nil {
+		t.Fatal("Preflight.RiskyPaths = nil, want empty slice")
 	}
 }

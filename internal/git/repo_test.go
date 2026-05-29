@@ -233,6 +233,39 @@ func TestParseHistoryUsesNumstat(t *testing.T) {
 	}
 }
 
+func TestParseUnifiedChangedLineRanges(t *testing.T) {
+	out := strings.Join([]string{
+		"diff --git a/internal/app.go b/internal/app.go",
+		"--- a/internal/app.go",
+		"+++ b/internal/app.go",
+		"@@ -10,0 +11,2 @@",
+		"+one",
+		"+two",
+		"@@ -20 +22 @@",
+		"-old",
+		"+new",
+		"diff --git a/deleted.go b/deleted.go",
+		"--- a/deleted.go",
+		"+++ /dev/null",
+		"@@ -1 +0,0 @@",
+	}, "\n")
+
+	got := parseUnifiedChangedLineRanges(out)
+	ranges := got["internal/app.go"]
+	if len(ranges) != 2 {
+		t.Fatalf("ranges = %+v, want 2 ranges", ranges)
+	}
+	if ranges[0].Start != 11 || ranges[0].End != 12 {
+		t.Fatalf("first range = %+v, want 11-12", ranges[0])
+	}
+	if ranges[1].Start != 22 || ranges[1].End != 22 {
+		t.Fatalf("second range = %+v, want 22-22", ranges[1])
+	}
+	if _, ok := got["deleted.go"]; ok {
+		t.Fatalf("deleted file received new-side ranges: %+v", got["deleted.go"])
+	}
+}
+
 func writeTestFile(t *testing.T, root string, rel string, content string) {
 	t.Helper()
 	target := filepath.Join(root, rel)

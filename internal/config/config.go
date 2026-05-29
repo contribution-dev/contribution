@@ -17,12 +17,13 @@ const (
 
 // Config is the editable V1 repository configuration.
 type Config struct {
-	Version  int            `yaml:"version" json:"version"`
-	Project  ProjectConfig  `yaml:"project" json:"project"`
-	Analysis AnalysisConfig `yaml:"analysis" json:"analysis"`
-	Privacy  PrivacyConfig  `yaml:"privacy" json:"privacy"`
-	AIUsage  AIUsageConfig  `yaml:"ai_usage" json:"ai_usage"`
-	Reports  ReportsConfig  `yaml:"reports" json:"reports"`
+	Version   int             `yaml:"version" json:"version"`
+	Project   ProjectConfig   `yaml:"project" json:"project"`
+	Analysis  AnalysisConfig  `yaml:"analysis" json:"analysis"`
+	Preflight PreflightConfig `yaml:"preflight" json:"preflight"`
+	Privacy   PrivacyConfig   `yaml:"privacy" json:"privacy"`
+	AIUsage   AIUsageConfig   `yaml:"ai_usage" json:"ai_usage"`
+	Reports   ReportsConfig   `yaml:"reports" json:"reports"`
 }
 
 // ProjectConfig contains project identity settings.
@@ -36,6 +37,15 @@ type AnalysisConfig struct {
 	SinceDays               int  `yaml:"since_days" json:"since_days"`
 	MaxPRs                  int  `yaml:"max_prs" json:"max_prs"`
 	IncludeUnmergedBranches bool `yaml:"include_unmerged_branches" json:"include_unmerged_branches"`
+}
+
+// PreflightConfig controls current-diff readiness policy.
+type PreflightConfig struct {
+	MaxFiles               int      `yaml:"max_files" json:"max_files"`
+	MaxLines               int      `yaml:"max_lines" json:"max_lines"`
+	RequireTestsForSource  bool     `yaml:"require_tests_for_source" json:"require_tests_for_source"`
+	ChangedLineCoverageMin float64  `yaml:"changed_line_coverage_min" json:"changed_line_coverage_min"`
+	RiskyPaths             []string `yaml:"risky_paths" json:"risky_paths"`
 }
 
 // PrivacyConfig controls private and public export behavior.
@@ -99,6 +109,13 @@ func Default() Config {
 			MaxPRs:                  20,
 			IncludeUnmergedBranches: false,
 		},
+		Preflight: PreflightConfig{
+			MaxFiles:               20,
+			MaxLines:               800,
+			RequireTestsForSource:  false,
+			ChangedLineCoverageMin: 0,
+			RiskyPaths:             []string{},
+		},
 		Privacy: PrivacyConfig{
 			IncludeRawDiffs:                    false,
 			IncludePrivatePathsInPublicExports: false,
@@ -130,6 +147,15 @@ func Validate(cfg Config) []string {
 	}
 	if cfg.Analysis.MaxPRs <= 0 {
 		warnings = append(warnings, "analysis.max_prs must be positive; defaulting to 20.")
+	}
+	if cfg.Preflight.MaxFiles < 0 {
+		warnings = append(warnings, "preflight.max_files must be zero or positive; defaulting to 20.")
+	}
+	if cfg.Preflight.MaxLines < 0 {
+		warnings = append(warnings, "preflight.max_lines must be zero or positive; defaulting to 800.")
+	}
+	if cfg.Preflight.ChangedLineCoverageMin < 0 || cfg.Preflight.ChangedLineCoverageMin > 100 {
+		warnings = append(warnings, "preflight.changed_line_coverage_min must be between 0 and 100; ignoring the configured threshold.")
 	}
 	if cfg.Privacy.UploadEnabled {
 		warnings = append(warnings, "privacy.upload_enabled is true, but V1 does not implement upload.")
@@ -169,6 +195,15 @@ func applyDefaults(cfg *Config) {
 	}
 	if cfg.Analysis.MaxPRs <= 0 {
 		cfg.Analysis.MaxPRs = defaults.Analysis.MaxPRs
+	}
+	if cfg.Preflight.MaxFiles < 0 {
+		cfg.Preflight.MaxFiles = defaults.Preflight.MaxFiles
+	}
+	if cfg.Preflight.MaxLines < 0 {
+		cfg.Preflight.MaxLines = defaults.Preflight.MaxLines
+	}
+	if cfg.Preflight.RiskyPaths == nil {
+		cfg.Preflight.RiskyPaths = []string{}
 	}
 	if cfg.AIUsage.SelfReportedTools == nil {
 		cfg.AIUsage.SelfReportedTools = []string{}

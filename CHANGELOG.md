@@ -12,6 +12,8 @@ All notable changes to this project will be documented in this file.
   coverage through file-list input to keep changed-aware logs readable.
 - Redact public-safe analysis output directories and credential-bearing remote
   URLs in clone errors.
+- Redact credentialed remotes from stored analysis metadata, sanitize
+  regenerated public-safe reports, and dogfood credential/error leak paths.
 - Fix `analyze --format json` completion output so it does not point at a
   markdown report that was not written.
 - Add the V1 local contribution intelligence CLI foundation with private

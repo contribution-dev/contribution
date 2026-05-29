@@ -1,6 +1,13 @@
 package git
 
-import "testing"
+import (
+	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"strings"
+	"testing"
+)
 
 func TestParseGitHubRepo(t *testing.T) {
 	tests := map[string][2]string{
@@ -37,6 +44,49 @@ func TestRedactRemoteURL(t *testing.T) {
 		if got := RedactRemoteURL(remote); got != want {
 			t.Fatalf("RedactRemoteURL(%q) = %q, want %q", remote, got, want)
 		}
+	}
+}
+
+func TestResolveRedactsCredentialedOrigin(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repoPath := t.TempDir()
+	runGit(t, repoPath, "init", "-b", "main")
+	runGit(t, repoPath, "config", "user.email", "dogfood@example.test")
+	runGit(t, repoPath, "config", "user.name", "Dogfood User")
+	readme := filepath.Join(repoPath, "README.md")
+	if err := os.WriteFile(readme, []byte("# fixture\n"), 0o600); err != nil {
+		t.Fatalf("write README: %v", err)
+	}
+	runGit(t, repoPath, "add", ".")
+	runGit(t, repoPath, "commit", "-m", "initial fixture")
+	secret := "dogfood-secret-value"
+	remote := "https://token=" + secret + "@github.com/owner/private.git"
+	runGit(t, repoPath, "remote", "add", "origin", remote)
+
+	repo, err := Resolve(context.Background(), repoPath)
+	if err != nil {
+		t.Fatalf("Resolve() error = %v", err)
+	}
+	if strings.Contains(repo.RemoteURL, secret) {
+		t.Fatalf("remote URL retained secret: %q", repo.RemoteURL)
+	}
+	if !strings.Contains(repo.RemoteURL, "REDACTED") {
+		t.Fatalf("remote URL missing redaction marker: %q", repo.RemoteURL)
+	}
+	if repo.GitHubOwner != "owner" || repo.GitHubRepo != "private" {
+		t.Fatalf("GitHub metadata = %q/%q, want owner/private", repo.GitHubOwner, repo.GitHubRepo)
+	}
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	// #nosec G204 -- tests execute the fixed git binary with test-controlled args.
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
 	}
 }
 

@@ -80,6 +80,7 @@ function isCliFacingPath(file) {
     "docs/prd-cli.md",
     "docs/product-architecture.md",
     "docs/cli-contract.md",
+    "docs/reference/architecture.md",
   ].includes(file);
 }
 
@@ -91,6 +92,7 @@ function isCoveragePath(file) {
     "scripts/dogfood-cli.mjs",
     "scripts/check-cli-contract-coverage.mjs",
     "docs/cli-contract.md",
+    "docs/reference/architecture.md",
     ".github/workflows/ci.yml",
     ".github/workflows/release.yml",
     "docs/tooling-validation.md",

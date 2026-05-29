@@ -1,6 +1,8 @@
 package report
 
 import (
+	"encoding/json"
+	"strings"
 	"testing"
 	"time"
 
@@ -44,4 +46,95 @@ func TestProfileExportIsPublicSafe(t *testing.T) {
 	if got := export.SelectedArtifacts[0]; got.URL != "" || len(got.Risks) != 0 || got.MainRisk != "" || got.NextAction != "" {
 		t.Fatalf("selected artifact was not redacted: %+v", got)
 	}
+}
+
+func TestPublicSafeAnalysisRedactsPrivateMetadata(t *testing.T) {
+	secret := "token=dogfood-secret-value"
+	privateRoot := "/private/tmp/contribution-secret-repo"
+	analysis := signals.AnalysisReport{
+		Repo: signals.RepoMetadata{
+			ID:          "owner/private-repo",
+			Name:        "private-repo",
+			Root:        privateRoot,
+			RemoteURL:   "https://" + secret + "@github.com/owner/private-repo.git",
+			GitHubOwner: "owner",
+			GitHubRepo:  "private-repo",
+		},
+		Config: signals.AnalysisConfigSnapshot{
+			OutputDirectory:          privateRoot + "/.contribution/reports/run",
+			GitHubMetadataConfigured: true,
+		},
+		Tooling: signals.ToolingReport{
+			Tools:       []signals.ToolAvailability{{Name: "example", Reason: "failed with " + secret}},
+			Limitations: []string{"tool failed with " + secret},
+		},
+		Signals: []signals.Signal{{
+			RepoID:     "owner/private-repo",
+			SubjectID:  "owner/private-repo",
+			FilePath:   privateRoot + "/internal/auth/session.go",
+			Message:    "failed with " + secret,
+			PublicSafe: true,
+			CreatedAt:  time.Now(),
+		}},
+		PRCards: []signals.PRQualityCard{{
+			PRNumber: 123,
+			Title:    "Fix " + secret,
+			URL:      "https://github.com/owner/private-repo/pull/123",
+			Risks:    []signals.Finding{{Label: "private"}},
+			Evidence: []signals.SignalRef{{ID: "private"}},
+			MainRisk: "private risk",
+		}},
+		WeaknessMap: signals.WeaknessMap{
+			Weaknesses:  []signals.Finding{{Label: "Secret", Evidence: secret, WhyItMatters: secret, NextAction: secret}},
+			NextActions: []string{"rotate " + secret},
+		},
+		Profile: signals.ProfileSummary{
+			Headline:           "AI-native contribution profile",
+			AnalyzedPRs:        1,
+			AnalysisWindowDays: 90,
+			Confidence:         signals.ConfidenceMedium,
+			Strengths:          []signals.Finding{{Label: "Secret", Evidence: secret}},
+		},
+		Limitations: []string{"limitation " + secret},
+		Privacy: signals.PrivacySummary{
+			RawCodeIncluded:                    true,
+			RawDiffsIncluded:                   true,
+			PrivatePathsIncludedInPublicExport: true,
+			AuthorEmailsIncluded:               true,
+			UploadEnabled:                      true,
+		},
+	}
+
+	got := PublicSafeAnalysis(analysis)
+	if got.Repo.Root != "" || got.Repo.RemoteURL != "" || got.Repo.GitHubOwner != "" || got.Repo.GitHubRepo != "" {
+		t.Fatalf("repo metadata was not redacted: %+v", got.Repo)
+	}
+	if got.Config.OutputDirectory != "" || !got.Config.PublicSafe || got.Config.GitHubMetadataConfigured {
+		t.Fatalf("config was not public-safe: %+v", got.Config)
+	}
+	if !got.Privacy.PublicSafe || got.Privacy.RawCodeIncluded || got.Privacy.RawDiffsIncluded || got.Privacy.UploadEnabled {
+		t.Fatalf("privacy flags were not public-safe: %+v", got.Privacy)
+	}
+	if got.Signals[0].RepoID != "private-repository" || got.Signals[0].SubjectID != "private-repository" || got.Signals[0].FilePath != "session.go" {
+		t.Fatalf("signal metadata was not redacted: %+v", got.Signals[0])
+	}
+	if got.PRCards[0].URL != "" || len(got.PRCards[0].Risks) != 0 || got.PRCards[0].MainRisk != "" || len(got.PRCards[0].Evidence) != 0 {
+		t.Fatalf("PR card was not redacted: %+v", got.PRCards[0])
+	}
+	if containsText(got, "dogfood-secret-value") || containsText(got, privateRoot) {
+		t.Fatalf("public-safe analysis retained private text: %+v", got)
+	}
+}
+
+func containsText(analysis signals.AnalysisReport, needle string) bool {
+	export := ProfileExport(analysis)
+	return containsInJSON(analysis, needle) || containsInJSON(export, needle)
+}
+
+func containsInJSON(value any, needle string) bool {
+	data, err := json.Marshal(value)
+	if err != nil {
+		return false
+	}
+	return strings.Contains(string(data), needle)
 }

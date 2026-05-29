@@ -19,7 +19,8 @@ const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(SCRIPT_DIR, "..");
 const TMP_PARENT = "/tmp";
 const DEFAULT_BINARY = path.join(ROOT, "bin", "contribution");
-const SECRET_SENTINEL = "token=dogfood-secret-value";
+const SECRET_VALUE = "dogfood-secret-value";
+const SECRET_SENTINEL = `token=${SECRET_VALUE}`;
 const MODES = new Set(["smoke", "release"]);
 
 function parseArgs(argv) {
@@ -287,6 +288,7 @@ function assertNoTextInFiles(files, patterns) {
 function assertPublicSafeFiles(files, privateRoot) {
   assertNoTextInFiles(files, [
     SECRET_SENTINEL,
+    SECRET_VALUE,
     privateRoot,
     /authorization:/iu,
     /bearer\s+/iu,
@@ -295,6 +297,50 @@ function assertPublicSafeFiles(files, privateRoot) {
     /secret=/iu,
     /[A-Z0-9._%+-]+@[A-Z0-9.-]+\.[A-Z]{2,}/iu,
   ]);
+}
+
+function assertResultNoSecrets(result) {
+  const text = `${result.stdout}\n${result.stderr}`;
+  assert(
+    !text.includes(SECRET_SENTINEL),
+    "command output leaked token sentinel",
+  );
+  assert(!text.includes(SECRET_VALUE), "command output leaked token value");
+}
+
+function assertAnalysisPublicSafe(file, privateRoot) {
+  const analysis = readJSON(file);
+  assert(
+    analysis.privacy?.public_safe === true,
+    "analysis.json public_safe mismatch",
+  );
+  assert(
+    analysis.privacy?.upload_enabled === false,
+    "analysis upload posture changed",
+  );
+  assert(
+    analysis.privacy?.raw_code_included === false,
+    "analysis includes raw code",
+  );
+  assert(
+    analysis.privacy?.raw_diffs_included === false,
+    "analysis includes raw diffs",
+  );
+  assert(
+    analysis.config?.public_safe === true,
+    "analysis config public_safe mismatch",
+  );
+  assert(
+    analysis.config?.output_directory === "",
+    "public-safe analysis retained output directory",
+  );
+  assert(!analysis.repo?.root, "public-safe analysis retained repo root");
+  assert(
+    !analysis.repo?.remote_url,
+    "public-safe analysis retained repo remote",
+  );
+  assertPublicSafeFiles([file], privateRoot);
+  return analysis;
 }
 
 function findPacketOutput(root) {
@@ -485,7 +531,33 @@ function runSmoke(binary, tempRoot, options = {}) {
     "doctor did not exercise missing optional tool handling",
   );
 
+  const cloneFailure = runCli(
+    binary,
+    [
+      "analyze",
+      "--repo",
+      `https://127.0.0.1/repo.git?token=${SECRET_VALUE}`,
+      "--format",
+      "json",
+      "--public-safe",
+      "--no-external-tools",
+    ],
+    {
+      cwd: initRepo,
+      env: { ...env, GIT_TERMINAL_PROMPT: "0" },
+      expectedStatus: "nonzero",
+      byName: options.byName,
+    },
+  );
+  assertResultNoSecrets(cloneFailure);
+
   const analysisRepo = createGitRepo(tempRoot, "analysis-repo").repo;
+  git(analysisRepo, [
+    "remote",
+    "add",
+    "origin",
+    `https://token=${SECRET_VALUE}@example.test/private/repo.git`,
+  ]);
   writeRepoFile(
     analysisRepo,
     "internal/app.go",
@@ -497,6 +569,33 @@ function runSmoke(binary, tempRoot, options = {}) {
     'package app\n\nimport "testing"\n\nfunc TestValue(t *testing.T) { if Value() != 1 { t.Fatal(Value()) } }\n',
   );
   commitAll(analysisRepo, "add app code and tests");
+
+  const privateRemoteRoot = path.join(tempRoot, "analyze-private-remote");
+  runCli(
+    binary,
+    [
+      "analyze",
+      "--repo",
+      ".",
+      "--output",
+      privateRemoteRoot,
+      "--format",
+      "json",
+      "--no-external-tools",
+    ],
+    { cwd: analysisRepo, env, byName: options.byName },
+  );
+  const privateRemoteAnalysis = readJSON(
+    path.join(latestRunDir(privateRemoteRoot), "analysis.json"),
+  );
+  assert(
+    privateRemoteAnalysis.repo?.remote_url?.includes("REDACTED"),
+    "private analysis did not retain a redacted remote URL",
+  );
+  assertNoTextInFiles(collectFiles(privateRemoteRoot), [
+    SECRET_SENTINEL,
+    SECRET_VALUE,
+  ]);
 
   const jsonRoot = path.join(tempRoot, "analyze-json");
   const analyzeJSON = runCli(
@@ -523,29 +622,11 @@ function runSmoke(binary, tempRoot, options = {}) {
     "tooling.json",
   ]);
   assertFilesAbsent(jsonRun, ["report.md"]);
-  const analysis = readJSON(path.join(jsonRun, "analysis.json"));
+  const analysis = assertAnalysisPublicSafe(
+    path.join(jsonRun, "analysis.json"),
+    analysisRepo,
+  );
   assert(analysis.version === 1, "analysis.json version mismatch");
-  assert(
-    analysis.privacy?.public_safe === true,
-    "analysis.json public_safe mismatch",
-  );
-  assert(
-    analysis.privacy?.upload_enabled === false,
-    "analysis upload posture changed",
-  );
-  assert(
-    analysis.privacy?.raw_code_included === false,
-    "analysis includes raw code",
-  );
-  assert(
-    analysis.privacy?.raw_diffs_included === false,
-    "analysis includes raw diffs",
-  );
-  assert(
-    analysis.config?.output_directory === "",
-    "public-safe analysis retained output directory",
-  );
-  assertPublicSafeFiles([path.join(jsonRun, "analysis.json")], analysisRepo);
   assertPublicSafeFiles(
     [
       path.join(jsonRun, "profile.export.json"),
@@ -580,11 +661,7 @@ function runSmoke(binary, tempRoot, options = {}) {
     "tooling.json",
   ]);
   assertFilesAbsent(defaultRun, ["report.md"]);
-  assert(
-    readJSON(defaultAnalysis).config?.output_directory === "",
-    "default public-safe analysis retained output directory",
-  );
-  assertPublicSafeFiles([defaultAnalysis], analysisRepo);
+  assertAnalysisPublicSafe(defaultAnalysis, analysisRepo);
 
   const allRoot = path.join(tempRoot, "analyze-all");
   const analyzeAll = runCli(
@@ -611,6 +688,8 @@ function runSmoke(binary, tempRoot, options = {}) {
     "share-card.json",
     "tooling.json",
   ]);
+  assertAnalysisPublicSafe(path.join(allRun, "analysis.json"), analysisRepo);
+  assertPublicSafeFiles(collectFiles(allRun), analysisRepo);
 
   const reportRoot = path.join(tempRoot, "report-output");
   const report = runCli(
@@ -640,6 +719,39 @@ function runSmoke(binary, tempRoot, options = {}) {
     ],
     analysisRepo,
   );
+
+  const privateReportRoot = path.join(tempRoot, "report-private-input");
+  const privateReportFixture = path.join(tempRoot, "report-private-fixture");
+  writeJSON(
+    path.join(privateReportFixture, "analysis.json"),
+    analysisFixture(analysisRepo),
+  );
+  const privateReport = runCli(
+    binary,
+    [
+      "report",
+      "--input",
+      path.join(privateReportFixture, "analysis.json"),
+      "--output",
+      privateReportRoot,
+      "--format",
+      "all",
+      "--public-safe",
+    ],
+    { cwd: analysisRepo, env, byName: options.byName },
+  );
+  assertReferencedPathsExist(privateReport, tempRoot);
+  assertFilesExist(privateReportRoot, [
+    "analysis.json",
+    "report.md",
+    "profile.export.json",
+    "share-card.json",
+  ]);
+  assertAnalysisPublicSafe(
+    path.join(privateReportRoot, "analysis.json"),
+    analysisRepo,
+  );
+  assertPublicSafeFiles(collectFiles(privateReportRoot), analysisRepo);
 
   const preflightRepoInfo = createGitRepo(tempRoot, "preflight-repo");
   writeRepoFile(
@@ -811,12 +923,15 @@ function runReleaseArtifactSmoke(tempRoot) {
     ],
     { cwd: repo, env, byName: true },
   );
-  assertFilesExist(latestRunDir(output), [
+  const releaseRun = latestRunDir(output);
+  assertFilesExist(releaseRun, [
     "analysis.json",
     "profile.export.json",
     "share-card.json",
     "tooling.json",
   ]);
+  assertAnalysisPublicSafe(path.join(releaseRun, "analysis.json"), repo);
+  assertPublicSafeFiles(collectFiles(releaseRun), repo);
 }
 
 function main() {

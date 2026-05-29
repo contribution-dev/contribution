@@ -30,9 +30,7 @@ func newReportCommand(out io.Writer) *cobra.Command {
 				return err
 			}
 			if publicSafe {
-				analysis.Privacy.PublicSafe = true
-				analysis.Repo.Root = ""
-				analysis.Repo.RemoteURL = ""
+				analysis = report.PublicSafeAnalysis(analysis)
 			}
 			if output == "" {
 				output = filepath.Dir(input)

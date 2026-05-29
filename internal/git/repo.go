@@ -16,6 +16,7 @@ import (
 	"strings"
 	"time"
 
+	"github.com/contribution-dev/contribution/internal/privacy"
 	"github.com/contribution-dev/contribution/internal/signals"
 )
 
@@ -102,7 +103,7 @@ func clone(ctx context.Context, url string) (Repo, error) {
 	}
 	repo := Repo{
 		Path:          target,
-		RemoteURL:     url,
+		RemoteURL:     RedactRemoteURL(url),
 		IsRemoteClone: true,
 		cleanup: func() error {
 			return os.RemoveAll(parent)
@@ -117,50 +118,7 @@ func clone(ctx context.Context, url string) (Repo, error) {
 
 // RedactRemoteURL removes credentials from remote URLs before logging errors.
 func RedactRemoteURL(remote string) string {
-	remote = strings.TrimSpace(remote)
-	parsed, err := url.Parse(remote)
-	if err == nil && parsed.User != nil {
-		parsed.User = url.User("REDACTED")
-	}
-	if err == nil && parsed.RawQuery != "" {
-		query := parsed.Query()
-		changed := false
-		for key, values := range query {
-			if isSecretQueryKey(key) {
-				query[key] = []string{"REDACTED"}
-				changed = true
-				continue
-			}
-			for _, value := range values {
-				if strings.Contains(strings.ToLower(value), "token=") {
-					query[key] = []string{"REDACTED"}
-					changed = true
-					break
-				}
-			}
-		}
-		if changed {
-			parsed.RawQuery = query.Encode()
-		}
-	}
-	if err == nil && (parsed.User != nil || parsed.RawQuery != "") {
-		return parsed.String()
-	}
-	schemeIndex := strings.Index(remote, "://")
-	atIndex := strings.LastIndex(remote, "@")
-	if schemeIndex >= 0 && atIndex > schemeIndex+3 {
-		return remote[:schemeIndex+3] + "REDACTED@" + remote[atIndex+1:]
-	}
-	return remote
-}
-
-func isSecretQueryKey(key string) bool {
-	key = strings.ToLower(key)
-	return strings.Contains(key, "token") ||
-		strings.Contains(key, "secret") ||
-		strings.Contains(key, "password") ||
-		strings.Contains(key, "api_key") ||
-		strings.Contains(key, "apikey")
+	return privacy.RedactRemoteURL(remote)
 }
 
 func hydrateMetadata(ctx context.Context, repo *Repo) error {
@@ -171,7 +129,7 @@ func hydrateMetadata(ctx context.Context, repo *Repo) error {
 	if repo.RemoteURL == "" {
 		remote, err := gitOutput(ctx, repo.Path, "remote", "get-url", "origin")
 		if err == nil {
-			repo.RemoteURL = strings.TrimSpace(remote)
+			repo.RemoteURL = RedactRemoteURL(remote)
 		}
 	}
 	branch, err := DefaultBranch(ctx, repo.Path)
@@ -223,6 +181,12 @@ func DefaultBranch(ctx context.Context, repoPath string) (string, error) {
 // ParseGitHubRepo extracts owner and repo from common GitHub remote URL forms.
 func ParseGitHubRepo(remote string) (string, string) {
 	remote = strings.TrimSpace(remote)
+	if parsed, err := url.Parse(remote); err == nil && parsed.Hostname() == "github.com" {
+		parts := strings.Split(strings.Trim(strings.TrimSuffix(parsed.Path, ".git"), "/"), "/")
+		if len(parts) >= 2 {
+			return parts[0], parts[1]
+		}
+	}
 	remote = strings.TrimSuffix(remote, ".git")
 	switch {
 	case strings.HasPrefix(remote, "https://github.com/"):
@@ -599,6 +563,7 @@ func gitOutput(ctx context.Context, dir string, args ...string) (string, error) 
 		if text == "" {
 			text = err.Error()
 		}
+		text = privacy.RedactSecretLikeText(text)
 		return "", fmt.Errorf("%s", text)
 	}
 	return string(out), nil

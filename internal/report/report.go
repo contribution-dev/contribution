@@ -9,6 +9,7 @@ import (
 	"path/filepath"
 	"strings"
 
+	"github.com/contribution-dev/contribution/internal/privacy"
 	"github.com/contribution-dev/contribution/internal/signals"
 )
 
@@ -77,6 +78,43 @@ func WriteReportOnly(outputDir string, analysis signals.AnalysisReport, format s
 		return err
 	}
 	return writeJSON(filepath.Join(outputDir, "share-card.json"), ShareCard(analysis))
+}
+
+// PublicSafeAnalysis returns an analysis report suitable for public-safe output.
+func PublicSafeAnalysis(analysis signals.AnalysisReport) signals.AnalysisReport {
+	privateRepoID := analysis.Repo.ID
+	publicRepoID := "private-repository"
+	analysis.Repo.ID = publicRepoID
+	analysis.Repo.Name = "private repository"
+	analysis.Repo.Root = ""
+	analysis.Repo.RemoteURL = ""
+	analysis.Repo.GitHubOwner = ""
+	analysis.Repo.GitHubRepo = ""
+	analysis.Config.PublicSafe = true
+	analysis.Config.OutputDirectory = ""
+	analysis.Config.GitHubMetadataConfigured = false
+	analysis.Privacy.PublicSafe = true
+	analysis.Privacy.RawCodeIncluded = false
+	analysis.Privacy.RawDiffsIncluded = false
+	analysis.Privacy.PrivatePathsIncludedInPublicExport = false
+	analysis.Privacy.AuthorEmailsIncluded = false
+	analysis.Privacy.UploadEnabled = false
+	analysis.PRCards = publicCards(analysis.PRCards, len(analysis.PRCards))
+	analysis.WeaknessMap = publicSafeWeaknessMap(analysis.WeaknessMap)
+	analysis.Profile.Strengths = publicFindings(analysis.Profile.Strengths, len(analysis.Profile.Strengths))
+	analysis.Profile.ImprovementTrends = publicFindings(analysis.Profile.ImprovementTrends, len(analysis.Profile.ImprovementTrends))
+	analysis.Profile.Headline = redactText(analysis.Profile.Headline)
+	analysis.Profile.DisplayName = redactText(analysis.Profile.DisplayName)
+	analysis.Limitations = redactStrings(analysis.Limitations)
+	for i := range analysis.Signals {
+		analysis.Signals[i] = publicSafeSignal(analysis.Signals[i], privateRepoID, publicRepoID)
+	}
+	for i := range analysis.Tooling.Tools {
+		analysis.Tooling.Tools[i].Version = redactText(analysis.Tooling.Tools[i].Version)
+		analysis.Tooling.Tools[i].Reason = redactText(analysis.Tooling.Tools[i].Reason)
+	}
+	analysis.Tooling.Limitations = redactStrings(analysis.Tooling.Limitations)
+	return analysis
 }
 
 // ReadAnalysis reads analysis.json.
@@ -425,6 +463,8 @@ func publicFindings(findings []signals.Finding, limit int) []signals.Finding {
 	out := make([]signals.Finding, 0, limit)
 	for i := 0; i < limit; i++ {
 		f := findings[i]
+		f.Label = redactText(f.Label)
+		f.Evidence = redactText(f.Evidence)
 		f.NextAction = ""
 		f.WhyItMatters = ""
 		out = append(out, f)
@@ -438,15 +478,73 @@ func publicCards(cards []signals.PRQualityCard, limit int) []signals.PRQualityCa
 	}
 	out := make([]signals.PRQualityCard, 0, limit)
 	for i := 0; i < limit; i++ {
-		card := cards[i]
-		card.URL = ""
-		card.Risks = nil
-		card.MainRisk = ""
-		card.NextAction = ""
-		card.Evidence = nil
-		out = append(out, card)
+		out = append(out, publicCard(cards[i]))
 	}
 	return out
+}
+
+func publicCard(card signals.PRQualityCard) signals.PRQualityCard {
+	card.Title = redactText(card.Title)
+	card.URL = ""
+	card.Summary = redactText(card.Summary)
+	card.Scope = redactText(card.Scope)
+	card.TestEvidence = redactText(card.TestEvidence)
+	card.ReviewBurden = redactText(card.ReviewBurden)
+	card.Durability = redactText(card.Durability)
+	card.MainRisk = ""
+	card.Strengths = publicFindings(card.Strengths, len(card.Strengths))
+	card.Risks = nil
+	card.Evidence = nil
+	card.NextAction = ""
+	return card
+}
+
+func publicSafeWeaknessMap(value signals.WeaknessMap) signals.WeaknessMap {
+	value.Strengths = redactFindings(value.Strengths)
+	value.Weaknesses = redactFindings(value.Weaknesses)
+	value.WatchItems = redactFindings(value.WatchItems)
+	value.NextActions = redactStrings(value.NextActions)
+	return value
+}
+
+func publicSafeSignal(sig signals.Signal, privateRepoID string, publicRepoID string) signals.Signal {
+	if sig.RepoID == privateRepoID {
+		sig.RepoID = publicRepoID
+	}
+	if sig.SubjectID == privateRepoID {
+		sig.SubjectID = publicRepoID
+	}
+	if filepath.IsAbs(sig.FilePath) {
+		sig.FilePath = privacy.RedactPath(sig.FilePath, false)
+	}
+	sig.Message = redactText(sig.Message)
+	sig.Evidence.URL = ""
+	sig.Evidence.ToolVersion = redactText(sig.Evidence.ToolVersion)
+	return sig
+}
+
+func redactFindings(findings []signals.Finding) []signals.Finding {
+	out := make([]signals.Finding, 0, len(findings))
+	for _, finding := range findings {
+		finding.Label = redactText(finding.Label)
+		finding.Evidence = redactText(finding.Evidence)
+		finding.WhyItMatters = redactText(finding.WhyItMatters)
+		finding.NextAction = redactText(finding.NextAction)
+		out = append(out, finding)
+	}
+	return out
+}
+
+func redactStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	for _, value := range values {
+		out = append(out, redactText(value))
+	}
+	return out
+}
+
+func redactText(value string) string {
+	return privacy.RedactSecretLikeText(value)
 }
 
 func firstStrings(values []string, limit int) []string {

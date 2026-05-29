@@ -68,7 +68,9 @@ changes.
   current-runner artifact check is the intended default; add cross-OS artifact
   execution only if release risk justifies the extra CI cost.
 - `docs/cli-contract.md` is the compact contract map for user-visible command
-  behavior and required coverage.
+  behavior and required coverage. CLI architecture references under
+  `docs/reference/architecture.md` also count as contract evidence when they
+  define CLI boundaries.
 
 ## Manual release-candidate dogfood
 

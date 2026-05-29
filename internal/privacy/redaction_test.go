@@ -42,3 +42,16 @@ func TestRedactSecretLikeTextRedactsGitURLFromError(t *testing.T) {
 		t.Fatalf("redacted text missing redacted query: %q", got)
 	}
 }
+
+func TestRedactSecretLikeTextRedactsAuthorizationBearerToken(t *testing.T) {
+	secret := "dogfood-secret-value"
+	text := "request failed with Authorization: Bearer " + secret
+
+	got := RedactSecretLikeText(text)
+	if strings.Contains(got, secret) {
+		t.Fatalf("redacted text still contains bearer token: %q", got)
+	}
+	if !strings.Contains(got, "Authorization:REDACTED") {
+		t.Fatalf("redacted text missing authorization redaction marker: %q", got)
+	}
+}

@@ -9,9 +9,10 @@ import (
 )
 
 var (
-	urlPattern        = regexp.MustCompile(`[a-z][a-z0-9+.-]*://[^\s'"]+`)
-	assignmentPattern = regexp.MustCompile(`(?i)\b(token|secret|password|api_?key|apikey|access_key|authorization)\s*[:=]\s*[^\s'"]+`)
-	bearerPattern     = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+`)
+	urlPattern           = regexp.MustCompile(`[a-z][a-z0-9+.-]*://[^\s'"]+`)
+	authorizationPattern = regexp.MustCompile(`(?i)\bauthorization\s*[:=]\s*(?:[A-Za-z]+\s+)?[^\s'"]+`)
+	assignmentPattern    = regexp.MustCompile(`(?i)\b(token|secret|password|api_?key|apikey|access_key)\s*[:=]\s*[^\s'"]+`)
+	bearerPattern        = regexp.MustCompile(`(?i)\bbearer\s+[A-Za-z0-9._~+/=-]+`)
 )
 
 // RedactPath removes local filesystem detail from a path for public exports.
@@ -80,6 +81,7 @@ func RedactRemoteURL(remote string) string {
 // RedactSecretLikeText removes obvious token material from command output.
 func RedactSecretLikeText(value string) string {
 	value = urlPattern.ReplaceAllStringFunc(value, RedactRemoteURL)
+	value = authorizationPattern.ReplaceAllStringFunc(value, redactAssignment)
 	value = assignmentPattern.ReplaceAllStringFunc(value, redactAssignment)
 	value = bearerPattern.ReplaceAllString(value, "Bearer REDACTED")
 	return value

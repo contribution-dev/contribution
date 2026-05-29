@@ -7,11 +7,17 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strings"
 
 	"github.com/contribution-dev/contribution/internal/privacy"
 	"github.com/contribution-dev/contribution/internal/signals"
 )
+
+type pathReplacement struct {
+	private string
+	public  string
+}
 
 // WriteAnalysisBundle writes the V1 analysis artifacts.
 func WriteAnalysisBundle(outputDir string, analysis signals.AnalysisReport, format string) error {
@@ -84,6 +90,7 @@ func WriteReportOnly(outputDir string, analysis signals.AnalysisReport, format s
 func PublicSafeAnalysis(analysis signals.AnalysisReport) signals.AnalysisReport {
 	privateRepoID := analysis.Repo.ID
 	publicRepoID := "private-repository"
+	pathReplacements := publicSafePathReplacements(analysis.Signals)
 	analysis.Repo.ID = publicRepoID
 	analysis.Repo.Name = "private repository"
 	analysis.Repo.Root = ""
@@ -93,27 +100,29 @@ func PublicSafeAnalysis(analysis signals.AnalysisReport) signals.AnalysisReport 
 	analysis.Config.PublicSafe = true
 	analysis.Config.OutputDirectory = ""
 	analysis.Config.GitHubMetadataConfigured = false
+	analysis.Config.SelfReportedAITools = nil
+	analysis.Config.SelfReportedAIModes = nil
 	analysis.Privacy.PublicSafe = true
 	analysis.Privacy.RawCodeIncluded = false
 	analysis.Privacy.RawDiffsIncluded = false
 	analysis.Privacy.PrivatePathsIncludedInPublicExport = false
 	analysis.Privacy.AuthorEmailsIncluded = false
 	analysis.Privacy.UploadEnabled = false
-	analysis.PRCards = publicCards(analysis.PRCards, len(analysis.PRCards))
-	analysis.WeaknessMap = publicSafeWeaknessMap(analysis.WeaknessMap)
-	analysis.Profile.Strengths = publicFindings(analysis.Profile.Strengths, len(analysis.Profile.Strengths))
-	analysis.Profile.ImprovementTrends = publicFindings(analysis.Profile.ImprovementTrends, len(analysis.Profile.ImprovementTrends))
-	analysis.Profile.Headline = redactText(analysis.Profile.Headline)
-	analysis.Profile.DisplayName = redactText(analysis.Profile.DisplayName)
-	analysis.Limitations = redactStrings(analysis.Limitations)
+	analysis.PRCards = publicCards(analysis.PRCards, len(analysis.PRCards), pathReplacements)
+	analysis.WeaknessMap = publicSafeWeaknessMap(analysis.WeaknessMap, pathReplacements)
+	analysis.Profile.Strengths = publicFindings(analysis.Profile.Strengths, len(analysis.Profile.Strengths), pathReplacements)
+	analysis.Profile.ImprovementTrends = publicFindings(analysis.Profile.ImprovementTrends, len(analysis.Profile.ImprovementTrends), pathReplacements)
+	analysis.Profile.Headline = redactText(analysis.Profile.Headline, pathReplacements)
+	analysis.Profile.DisplayName = redactText(analysis.Profile.DisplayName, pathReplacements)
+	analysis.Limitations = redactStrings(analysis.Limitations, pathReplacements)
 	for i := range analysis.Signals {
-		analysis.Signals[i] = publicSafeSignal(analysis.Signals[i], privateRepoID, publicRepoID)
+		analysis.Signals[i] = publicSafeSignal(analysis.Signals[i], privateRepoID, publicRepoID, pathReplacements)
 	}
 	for i := range analysis.Tooling.Tools {
-		analysis.Tooling.Tools[i].Version = redactText(analysis.Tooling.Tools[i].Version)
-		analysis.Tooling.Tools[i].Reason = redactText(analysis.Tooling.Tools[i].Reason)
+		analysis.Tooling.Tools[i].Version = redactText(analysis.Tooling.Tools[i].Version, pathReplacements)
+		analysis.Tooling.Tools[i].Reason = redactText(analysis.Tooling.Tools[i].Reason, pathReplacements)
 	}
-	analysis.Tooling.Limitations = redactStrings(analysis.Tooling.Limitations)
+	analysis.Tooling.Limitations = redactStrings(analysis.Tooling.Limitations, pathReplacements)
 	return analysis
 }
 
@@ -208,19 +217,20 @@ func Markdown(analysis signals.AnalysisReport) string {
 
 // ProfileExport builds the public-safe profile export.
 func ProfileExport(analysis signals.AnalysisReport) signals.ProfileExport {
+	pathReplacements := publicSafePathReplacements(analysis.Signals)
 	var export signals.ProfileExport
 	export.Version = 1
 	export.GeneratedAt = analysis.GeneratedAt
-	export.Profile.DisplayName = analysis.Profile.DisplayName
+	export.Profile.DisplayName = redactText(analysis.Profile.DisplayName, pathReplacements)
 	export.Profile.Headline = "AI-native contribution profile"
 	export.Profile.Visibility = "private_by_default"
 	export.Summary.AnalyzedPRs = analysis.Profile.AnalyzedPRs
 	export.Summary.AnalysisWindowDays = analysis.Profile.AnalysisWindowDays
 	export.Summary.Confidence = analysis.Profile.Confidence
-	export.Strengths = publicFindings(analysis.Profile.Strengths, 3)
-	export.ImprovementTrends = publicFindings(analysis.Profile.ImprovementTrends, 2)
+	export.Strengths = publicFindings(analysis.Profile.Strengths, 3, pathReplacements)
+	export.ImprovementTrends = publicFindings(analysis.Profile.ImprovementTrends, 2, pathReplacements)
 	export.BadgeCandidates = analysis.Profile.BadgeCandidates
-	export.SelectedArtifacts = publicCards(analysis.PRCards, 3)
+	export.SelectedArtifacts = publicCards(analysis.PRCards, 3, pathReplacements)
 	export.Redaction.PublicSafe = true
 	export.Redaction.RawCodeIncluded = false
 	export.Redaction.RawDiffsIncluded = false
@@ -230,11 +240,12 @@ func ProfileExport(analysis signals.AnalysisReport) signals.ProfileExport {
 
 // ShareCard builds the compact positive sharing export.
 func ShareCard(analysis signals.AnalysisReport) signals.ShareCard {
+	pathReplacements := publicSafePathReplacements(analysis.Signals)
 	highlights := []string{
 		fmt.Sprintf("%d artifacts analyzed", analysis.Profile.AnalyzedPRs),
 	}
 	for _, strength := range analysis.Profile.Strengths {
-		highlights = append(highlights, strength.Label)
+		highlights = append(highlights, redactText(strength.Label, pathReplacements))
 		if len(highlights) == 3 {
 			break
 		}
@@ -244,7 +255,7 @@ func ShareCard(analysis signals.AnalysisReport) signals.ShareCard {
 	}
 	subtitle := "Improving contribution quality across recent work"
 	if len(analysis.Profile.ImprovementTrends) > 0 {
-		subtitle = analysis.Profile.ImprovementTrends[0].Label
+		subtitle = redactText(analysis.Profile.ImprovementTrends[0].Label, pathReplacements)
 	}
 	return signals.ShareCard{
 		Version:    1,
@@ -456,15 +467,15 @@ func durability(analysis signals.AnalysisReport) string {
 	return fmt.Sprintf("The analysis found %d high-churn file signals and %d low-confidence fix or revert signals. Treat message-based fix signals as directional, not proof.", highChurn, fixLike)
 }
 
-func publicFindings(findings []signals.Finding, limit int) []signals.Finding {
+func publicFindings(findings []signals.Finding, limit int, replacements ...[]pathReplacement) []signals.Finding {
 	if len(findings) < limit {
 		limit = len(findings)
 	}
 	out := make([]signals.Finding, 0, limit)
 	for i := 0; i < limit; i++ {
 		f := findings[i]
-		f.Label = redactText(f.Label)
-		f.Evidence = redactText(f.Evidence)
+		f.Label = redactText(f.Label, replacements...)
+		f.Evidence = redactText(f.Evidence, replacements...)
 		f.NextAction = ""
 		f.WhyItMatters = ""
 		out = append(out, f)
@@ -472,79 +483,119 @@ func publicFindings(findings []signals.Finding, limit int) []signals.Finding {
 	return out
 }
 
-func publicCards(cards []signals.PRQualityCard, limit int) []signals.PRQualityCard {
+func publicCards(cards []signals.PRQualityCard, limit int, replacements ...[]pathReplacement) []signals.PRQualityCard {
 	if len(cards) < limit {
 		limit = len(cards)
 	}
 	out := make([]signals.PRQualityCard, 0, limit)
 	for i := 0; i < limit; i++ {
-		out = append(out, publicCard(cards[i]))
+		out = append(out, publicCard(cards[i], replacements...))
 	}
 	return out
 }
 
-func publicCard(card signals.PRQualityCard) signals.PRQualityCard {
-	card.Title = redactText(card.Title)
+func publicCard(card signals.PRQualityCard, replacements ...[]pathReplacement) signals.PRQualityCard {
+	card.Title = redactText(card.Title, replacements...)
 	card.URL = ""
-	card.Summary = redactText(card.Summary)
-	card.Scope = redactText(card.Scope)
-	card.TestEvidence = redactText(card.TestEvidence)
-	card.ReviewBurden = redactText(card.ReviewBurden)
-	card.Durability = redactText(card.Durability)
+	card.Summary = redactText(card.Summary, replacements...)
+	card.Scope = redactText(card.Scope, replacements...)
+	card.TestEvidence = redactText(card.TestEvidence, replacements...)
+	card.ReviewBurden = redactText(card.ReviewBurden, replacements...)
+	card.Durability = redactText(card.Durability, replacements...)
 	card.MainRisk = ""
-	card.Strengths = publicFindings(card.Strengths, len(card.Strengths))
+	card.Strengths = publicFindings(card.Strengths, len(card.Strengths), replacements...)
 	card.Risks = nil
 	card.Evidence = nil
 	card.NextAction = ""
 	return card
 }
 
-func publicSafeWeaknessMap(value signals.WeaknessMap) signals.WeaknessMap {
-	value.Strengths = redactFindings(value.Strengths)
-	value.Weaknesses = redactFindings(value.Weaknesses)
-	value.WatchItems = redactFindings(value.WatchItems)
-	value.NextActions = redactStrings(value.NextActions)
+func publicSafeWeaknessMap(value signals.WeaknessMap, replacements ...[]pathReplacement) signals.WeaknessMap {
+	value.Strengths = redactFindings(value.Strengths, replacements...)
+	value.Weaknesses = redactFindings(value.Weaknesses, replacements...)
+	value.WatchItems = redactFindings(value.WatchItems, replacements...)
+	value.NextActions = redactStrings(value.NextActions, replacements...)
 	return value
 }
 
-func publicSafeSignal(sig signals.Signal, privateRepoID string, publicRepoID string) signals.Signal {
+func publicSafeSignal(sig signals.Signal, privateRepoID string, publicRepoID string, replacements ...[]pathReplacement) signals.Signal {
 	if sig.RepoID == privateRepoID {
 		sig.RepoID = publicRepoID
 	}
 	if sig.SubjectID == privateRepoID {
 		sig.SubjectID = publicRepoID
 	}
-	if filepath.IsAbs(sig.FilePath) {
+	if sig.SubjectType == "file" && sig.SubjectID != "" {
+		sig.SubjectID = privacy.RedactPath(sig.SubjectID, false)
+	}
+	if sig.FilePath != "" {
 		sig.FilePath = privacy.RedactPath(sig.FilePath, false)
 	}
-	sig.Message = redactText(sig.Message)
+	sig.Message = redactText(sig.Message, replacements...)
 	sig.Evidence.URL = ""
-	sig.Evidence.ToolVersion = redactText(sig.Evidence.ToolVersion)
+	sig.Evidence.ToolVersion = redactText(sig.Evidence.ToolVersion, replacements...)
 	return sig
 }
 
-func redactFindings(findings []signals.Finding) []signals.Finding {
+func redactFindings(findings []signals.Finding, replacements ...[]pathReplacement) []signals.Finding {
 	out := make([]signals.Finding, 0, len(findings))
 	for _, finding := range findings {
-		finding.Label = redactText(finding.Label)
-		finding.Evidence = redactText(finding.Evidence)
-		finding.WhyItMatters = redactText(finding.WhyItMatters)
-		finding.NextAction = redactText(finding.NextAction)
+		finding.Label = redactText(finding.Label, replacements...)
+		finding.Evidence = redactText(finding.Evidence, replacements...)
+		finding.WhyItMatters = redactText(finding.WhyItMatters, replacements...)
+		finding.NextAction = redactText(finding.NextAction, replacements...)
 		out = append(out, finding)
 	}
 	return out
 }
 
-func redactStrings(values []string) []string {
+func redactStrings(values []string, replacements ...[]pathReplacement) []string {
 	out := make([]string, 0, len(values))
 	for _, value := range values {
-		out = append(out, redactText(value))
+		out = append(out, redactText(value, replacements...))
 	}
 	return out
 }
 
-func redactText(value string) string {
+func redactText(value string, replacements ...[]pathReplacement) string {
+	if len(replacements) > 0 {
+		for _, replacement := range replacements[0] {
+			value = strings.ReplaceAll(value, replacement.private, replacement.public)
+		}
+	}
 	return privacy.RedactSecretLikeText(value)
+}
+
+func publicSafePathReplacements(sigs []signals.Signal) []pathReplacement {
+	var replacements []pathReplacement
+	seen := map[string]bool{}
+	for _, sig := range sigs {
+		addPathReplacement(&replacements, seen, sig.FilePath)
+		if sig.SubjectType == "file" {
+			addPathReplacement(&replacements, seen, sig.SubjectID)
+		}
+	}
+	sort.Slice(replacements, func(i, j int) bool {
+		return len(replacements[i].private) > len(replacements[j].private)
+	})
+	return replacements
+}
+
+func addPathReplacement(replacements *[]pathReplacement, seen map[string]bool, value string) {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return
+	}
+	public := privacy.RedactPath(value, false)
+	add := func(private string) {
+		if private == "" || private == public || seen[private] {
+			return
+		}
+		*replacements = append(*replacements, pathReplacement{private: private, public: public})
+		seen[private] = true
+	}
+	add(value)
+	add(filepath.ToSlash(value))
 }
 
 func firstStrings(values []string, limit int) []string {

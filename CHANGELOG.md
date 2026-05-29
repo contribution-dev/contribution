@@ -10,6 +10,8 @@ All notable changes to this project will be documented in this file.
   in final and CI gates.
 - Rename the local CI-style package script to `ci:local` and route CLI contract
   coverage through file-list input to keep changed-aware logs readable.
+- Redact authorization bearer credentials and repo-relative path evidence from
+  public-safe outputs.
 - Redact public-safe analysis output directories and credential-bearing remote
   URLs in clone errors.
 - Redact credentialed remotes from stored analysis metadata, sanitize

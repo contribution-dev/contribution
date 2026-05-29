@@ -80,6 +80,30 @@ func TestResolveRedactsCredentialedOrigin(t *testing.T) {
 	}
 }
 
+func TestResolveRedactsCloneFailureOutput(t *testing.T) {
+	bin := t.TempDir()
+	fakeGit := filepath.Join(bin, "git")
+	script := "#!/bin/sh\nprintf 'fatal: unable to access %s: authentication failed\\n' \"$5\" >&2\nexit 1\n"
+	if err := os.WriteFile(fakeGit, []byte(script), 0o700); err != nil {
+		t.Fatalf("write fake git: %v", err)
+	}
+	t.Setenv("PATH", bin)
+	secret := "dogfood-secret-value"
+	remote := "https://example.test/owner/repo.git?token=" + secret
+
+	_, err := Resolve(context.Background(), remote)
+	if err == nil {
+		t.Fatal("Resolve() error = nil, want clone failure")
+	}
+	got := err.Error()
+	if strings.Contains(got, secret) {
+		t.Fatalf("clone error retained secret: %q", got)
+	}
+	if !strings.Contains(got, "token=REDACTED") {
+		t.Fatalf("clone error missing redacted query marker: %q", got)
+	}
+}
+
 func runGit(t *testing.T, dir string, args ...string) {
 	t.Helper()
 	// #nosec G204 -- tests execute the fixed git binary with test-controlled args.

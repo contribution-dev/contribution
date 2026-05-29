@@ -10,6 +10,7 @@ import (
 )
 
 func TestProfileExportIsPublicSafe(t *testing.T) {
+	privateRelativePath := "internal/customer/acme/session.go"
 	analysis := signals.AnalysisReport{
 		GeneratedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		Profile: signals.ProfileSummary{
@@ -19,16 +20,22 @@ func TestProfileExportIsPublicSafe(t *testing.T) {
 			Confidence:         signals.ConfidenceMedium,
 			Strengths: []signals.Finding{{
 				Label:      "Focused local changes",
-				Evidence:   "1 recent commit changed five or fewer files.",
+				Evidence:   "High-churn files include " + privateRelativePath + ".",
 				Confidence: signals.ConfidenceMedium,
 			}},
 		},
+		Signals: []signals.Signal{{
+			SubjectType: "file",
+			SubjectID:   privateRelativePath,
+			FilePath:    privateRelativePath,
+		}},
 		PRCards: []signals.PRQualityCard{{
 			PRNumber:   123,
-			Title:      "Sensitive PR",
+			Title:      "Sensitive PR for " + privateRelativePath,
 			URL:        "https://example.test/private",
 			Label:      "mixed",
 			Confidence: signals.ConfidenceLow,
+			Summary:    "Changed " + privateRelativePath,
 			Risks: []signals.Finding{{
 				Label: "Private risk",
 			}},
@@ -46,11 +53,15 @@ func TestProfileExportIsPublicSafe(t *testing.T) {
 	if got := export.SelectedArtifacts[0]; got.URL != "" || len(got.Risks) != 0 || got.MainRisk != "" || got.NextAction != "" {
 		t.Fatalf("selected artifact was not redacted: %+v", got)
 	}
+	if containsInJSON(export, privateRelativePath) {
+		t.Fatalf("profile export retained private path: %+v", export)
+	}
 }
 
 func TestPublicSafeAnalysisRedactsPrivateMetadata(t *testing.T) {
 	secret := "token=dogfood-secret-value"
 	privateRoot := "/private/tmp/contribution-secret-repo"
+	privateRelativePath := "internal/customer/acme/session.go"
 	analysis := signals.AnalysisReport{
 		Repo: signals.RepoMetadata{
 			ID:          "owner/private-repo",
@@ -63,6 +74,8 @@ func TestPublicSafeAnalysisRedactsPrivateMetadata(t *testing.T) {
 		Config: signals.AnalysisConfigSnapshot{
 			OutputDirectory:          privateRoot + "/.contribution/reports/run",
 			GitHubMetadataConfigured: true,
+			SelfReportedAITools:      []string{"tool " + secret},
+			SelfReportedAIModes:      []string{"Authorization: Bearer dogfood-secret-value"},
 		},
 		Tooling: signals.ToolingReport{
 			Tools:       []signals.ToolAvailability{{Name: "example", Reason: "failed with " + secret}},
@@ -75,6 +88,14 @@ func TestPublicSafeAnalysisRedactsPrivateMetadata(t *testing.T) {
 			Message:    "failed with " + secret,
 			PublicSafe: true,
 			CreatedAt:  time.Now(),
+		}, {
+			RepoID:      "owner/private-repo",
+			SubjectType: "file",
+			SubjectID:   privateRelativePath,
+			FilePath:    privateRelativePath,
+			Message:     privateRelativePath + " changed 4 times",
+			PublicSafe:  false,
+			CreatedAt:   time.Now(),
 		}},
 		PRCards: []signals.PRQualityCard{{
 			PRNumber: 123,
@@ -85,7 +106,7 @@ func TestPublicSafeAnalysisRedactsPrivateMetadata(t *testing.T) {
 			MainRisk: "private risk",
 		}},
 		WeaknessMap: signals.WeaknessMap{
-			Weaknesses:  []signals.Finding{{Label: "Secret", Evidence: secret, WhyItMatters: secret, NextAction: secret}},
+			Weaknesses:  []signals.Finding{{Label: "Secret", Evidence: "High-churn files include " + privateRelativePath + " with " + secret, WhyItMatters: secret, NextAction: secret}},
 			NextActions: []string{"rotate " + secret},
 		},
 		Profile: signals.ProfileSummary{
@@ -112,16 +133,22 @@ func TestPublicSafeAnalysisRedactsPrivateMetadata(t *testing.T) {
 	if got.Config.OutputDirectory != "" || !got.Config.PublicSafe || got.Config.GitHubMetadataConfigured {
 		t.Fatalf("config was not public-safe: %+v", got.Config)
 	}
+	if len(got.Config.SelfReportedAITools) != 0 || len(got.Config.SelfReportedAIModes) != 0 {
+		t.Fatalf("self-reported AI config was not cleared: %+v", got.Config)
+	}
 	if !got.Privacy.PublicSafe || got.Privacy.RawCodeIncluded || got.Privacy.RawDiffsIncluded || got.Privacy.UploadEnabled {
 		t.Fatalf("privacy flags were not public-safe: %+v", got.Privacy)
 	}
 	if got.Signals[0].RepoID != "private-repository" || got.Signals[0].SubjectID != "private-repository" || got.Signals[0].FilePath != "session.go" {
 		t.Fatalf("signal metadata was not redacted: %+v", got.Signals[0])
 	}
+	if got.Signals[1].SubjectID != "session.go" || got.Signals[1].FilePath != "session.go" {
+		t.Fatalf("repo-relative signal path was not redacted: %+v", got.Signals[1])
+	}
 	if got.PRCards[0].URL != "" || len(got.PRCards[0].Risks) != 0 || got.PRCards[0].MainRisk != "" || len(got.PRCards[0].Evidence) != 0 {
 		t.Fatalf("PR card was not redacted: %+v", got.PRCards[0])
 	}
-	if containsText(got, "dogfood-secret-value") || containsText(got, privateRoot) {
+	if containsText(got, "dogfood-secret-value") || containsText(got, privateRoot) || containsText(got, privateRelativePath) {
 		t.Fatalf("public-safe analysis retained private text: %+v", got)
 	}
 }

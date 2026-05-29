@@ -313,9 +313,17 @@ func gitInventoryPaths(ctx context.Context, repoPath string) ([]string, error) {
 		if path == "." || strings.HasPrefix(path, "../") || filepath.IsAbs(path) {
 			continue
 		}
+		if isDefaultReportArtifactPath(path) {
+			continue
+		}
 		paths = append(paths, path)
 	}
 	return paths, nil
+}
+
+func isDefaultReportArtifactPath(path string) bool {
+	lower := strings.ToLower(filepath.ToSlash(path))
+	return lower == ".contribution/reports" || strings.HasPrefix(lower, ".contribution/reports/")
 }
 
 // ChangedFile is a changed path in commit history or a diff.
@@ -774,20 +782,33 @@ func addFileSummary(summary *signals.FileSummary, path string) {
 
 func highChurnFiles(counts map[string]int) []string {
 	type pair struct {
-		path  string
-		count int
+		path      string
+		count     int
+		score     int
+		classRank int
 	}
 	var pairs []pair
 	for path, count := range counts {
 		if count >= 3 {
-			pairs = append(pairs, pair{path: path, count: count})
+			pairs = append(pairs, pair{
+				path:      path,
+				count:     count,
+				score:     count * highChurnWeight(path),
+				classRank: highChurnClassRank(path),
+			})
 		}
 	}
 	sort.Slice(pairs, func(i, j int) bool {
-		if pairs[i].count == pairs[j].count {
-			return pairs[i].path < pairs[j].path
+		if pairs[i].score != pairs[j].score {
+			return pairs[i].score > pairs[j].score
 		}
-		return pairs[i].count > pairs[j].count
+		if pairs[i].classRank != pairs[j].classRank {
+			return pairs[i].classRank > pairs[j].classRank
+		}
+		if pairs[i].count != pairs[j].count {
+			return pairs[i].count > pairs[j].count
+		}
+		return pairs[i].path < pairs[j].path
 	})
 	limit := min(len(pairs), 5)
 	out := make([]string, 0, limit)
@@ -795,6 +816,26 @@ func highChurnFiles(counts map[string]int) []string {
 		out = append(out, pairs[i].path)
 	}
 	return out
+}
+
+func highChurnWeight(path string) int {
+	return highChurnClassRank(path)
+}
+
+func highChurnClassRank(path string) int {
+	class := ClassifyPath(path)
+	switch {
+	case class.IsSecurityRelated:
+		return 5
+	case class.IsSource || class.IsMigration || class.IsDependency:
+		return 4
+	case class.IsTest:
+		return 3
+	case class.IsConfig || class.IsInfrastructure:
+		return 2
+	default:
+		return 1
+	}
 }
 
 func gitOutput(ctx context.Context, dir string, args ...string) (string, error) {

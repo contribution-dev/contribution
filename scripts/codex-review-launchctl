@@ -144,13 +144,18 @@ function launchctlDomain() {
   return "gui/$(id -u)";
 }
 
+const XML_ESCAPES = new Map([
+  ["&", "&amp;"],
+  ["<", "&lt;"],
+  [">", "&gt;"],
+  ['"', "&quot;"],
+  ["'", "&apos;"],
+]);
+
 function xmlEscape(value) {
-  return String(value ?? "")
-    .replaceAll("&", "&amp;")
-    .replaceAll("<", "&lt;")
-    .replaceAll(">", "&gt;")
-    .replaceAll('"', "&quot;")
-    .replaceAll("'", "&apos;");
+  return String(value ?? "").replace(/[&<>"']/gu, (char) =>
+    XML_ESCAPES.get(char),
+  );
 }
 
 function launchdPath(repoRoot = "") {

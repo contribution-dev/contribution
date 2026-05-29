@@ -40,8 +40,12 @@ func TestResolveToken(t *testing.T) {
 func TestResolveTokenFromGitHubCLI(t *testing.T) {
 	dir := t.TempDir()
 	ghPath := filepath.Join(dir, "gh")
-	if err := os.WriteFile(ghPath, []byte("#!/bin/sh\nprintf 'gh-cli-token\\n'\n"), 0o700); err != nil {
+	if err := os.WriteFile(ghPath, []byte("#!/bin/sh\nprintf 'gh-cli-token\\n'\n"), 0o600); err != nil {
 		t.Fatalf("write fake gh: %v", err)
+	}
+	// #nosec G302 -- the test fixture must be executable and is private to t.TempDir.
+	if err := os.Chmod(ghPath, 0o500); err != nil {
+		t.Fatalf("chmod fake gh: %v", err)
 	}
 	t.Setenv("PATH", dir)
 	t.Setenv("GITHUB_TOKEN", "")
@@ -66,13 +70,13 @@ func TestFetchMergedPRsFiltersMergedAndLimits(t *testing.T) {
 			}
 			_, _ = w.Write([]byte(`[
 				{"number":1,"title":"open","html_url":"https://example.test/1","merged_at":null},
-				{"number":2,"title":"merged two","html_url":"https://example.test/2","merged_at":"2026-01-01T00:00:00Z"},
-				{"number":3,"title":"merged three","html_url":"https://example.test/3","merged_at":"2026-01-02T00:00:00Z"}
+				{"number":2,"title":"merged two","html_url":"https://example.test/2","merged_at":"2026-01-01T00:00:00Z","merge_commit_sha":"merge222"},
+				{"number":3,"title":"merged three","html_url":"https://example.test/3","merged_at":"2026-01-02T00:00:00Z","merge_commit_sha":"merge333"}
 			]`))
 		case r.URL.Path == "/repos/owner/repo/pulls/2":
-			_, _ = w.Write([]byte(`{"number":2,"title":"merged two","html_url":"https://example.test/2","merged_at":"2026-01-01T00:00:00Z","changed_files":2,"additions":10,"deletions":3,"commits":2,"comments":4,"review_comments":5,"head":{"sha":"abcdef123456"}}`))
+			_, _ = w.Write([]byte(`{"number":2,"title":"merged two","html_url":"https://example.test/2","merged_at":"2026-01-01T00:00:00Z","changed_files":2,"additions":10,"deletions":3,"commits":2,"comments":4,"review_comments":5,"merge_commit_sha":"merge222detail","head":{"sha":"abcdef123456"}}`))
 		case r.URL.Path == "/repos/owner/repo/pulls/3":
-			_, _ = w.Write([]byte(`{"number":3,"title":"merged three","html_url":"https://example.test/3","changed_files":3,"additions":20,"deletions":4,"commits":1,"head":{"sha":"123456abcdef"}}`))
+			_, _ = w.Write([]byte(`{"number":3,"title":"merged three","html_url":"https://example.test/3","changed_files":3,"additions":20,"deletions":4,"commits":1,"merge_commit_sha":"merge333detail","head":{"sha":"123456abcdef"}}`))
 		case r.URL.Path == "/repos/owner/repo/pulls/2/files":
 			_, _ = w.Write([]byte(`[{"filename":"internal/app.go"},{"filename":"internal/app_test.go"}]`))
 		case r.URL.Path == "/repos/owner/repo/pulls/3/files":
@@ -109,6 +113,9 @@ func TestFetchMergedPRsFiltersMergedAndLimits(t *testing.T) {
 	}
 	if got.PRs[0].MergedAt.IsZero() {
 		t.Fatalf("MergedAt was not imported: %+v", got.PRs[0])
+	}
+	if got.PRs[0].MergeCommitSHA != "merge222detail" || got.PRs[1].MergeCommitSHA != "merge333detail" {
+		t.Fatalf("MergeCommitSHA was not imported: %+v", got.PRs)
 	}
 }
 

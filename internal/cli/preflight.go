@@ -26,6 +26,7 @@ func newPreflightCommand(out io.Writer) *cobra.Command {
 	var coverageFormat string
 	var failOnRisk string
 	var worktree bool
+	var noExternalTools bool
 	cmd := &cobra.Command{
 		Use:   "preflight",
 		Short: "Analyze the current diff before review.",
@@ -75,10 +76,20 @@ func newPreflightCommand(out io.Writer) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			tooling := tools.Discover(ctx, true, start)
+			tooling := tools.Discover(ctx, !noExternalTools, start)
 			limitations := append([]string{}, cfgWarnings...)
 			limitations = append(limitations, coverageInputLimitations...)
 			limitations = append(limitations, tooling.Limitations...)
+			analyzerFindings := []signals.AnalyzerFinding{}
+			if !noExternalTools {
+				allAnalyzerFindings, _, analyzerLimitations := tools.RunAnalyzers(ctx, repo.Path, repo.ID, tooling, start)
+				var omitted int
+				analyzerFindings, omitted = preflightpkg.AnalyzerFindingsForChangedFiles(allAnalyzerFindings, diff.Files)
+				limitations = append(limitations, analyzerLimitations...)
+				if omitted > 0 {
+					limitations = append(limitations, fmt.Sprintf("%d optional analyzer finding(s) were omitted because they did not match changed files.", omitted))
+				}
+			}
 			personal := signals.PersonalPreflightContext{}
 			history, _, historyLimitations, historyErr := gitrepo.CollectHistory(ctx, repo.Path, repo.ID, start.AddDate(0, 0, -cfg.Analysis.SinceDays), cfg.Analysis.MaxPRs, start)
 			if historyErr != nil {
@@ -87,7 +98,7 @@ func newPreflightCommand(out io.Writer) *cobra.Command {
 				personal = preflightpkg.PersonalContextFromHistory(history)
 				limitations = append(limitations, historyLimitations...)
 			}
-			preflight := preflightpkg.BuildWithPersonal(repo.Metadata(false), base, head, diff, coverage, cfg.Preflight, personal, tooling, limitations, start)
+			preflight := preflightpkg.BuildWithPersonalAndAnalyzers(repo.Metadata(false), base, head, diff, coverage, cfg.Preflight, personal, analyzerFindings, tooling, limitations, start)
 			root, err := outputRootForCurrent(output, repo, cfg)
 			if err != nil {
 				return err
@@ -110,5 +121,6 @@ func newPreflightCommand(out io.Writer) *cobra.Command {
 	cmd.Flags().StringVar(&coverageFormat, "coverage-format", "auto", "Coverage format: auto, go, or lcov.")
 	cmd.Flags().StringVar(&failOnRisk, "fail-on-risk", "never", "Exit nonzero for risk: never, medium, or high.")
 	cmd.Flags().BoolVar(&worktree, "worktree", false, "Compare base against current tracked and untracked worktree changes.")
+	cmd.Flags().BoolVar(&noExternalTools, "no-external-tools", false, "Skip optional external analyzer checks.")
 	return cmd
 }

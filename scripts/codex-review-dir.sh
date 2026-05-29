@@ -79,11 +79,18 @@ resolve_codex_reviews_dir() {
       case "$collapsed_candidate" in
         logs|logs/*)
           collapse_ok=1
-          old_ifs="${IFS:- }"
-          IFS='/'
-          set -- $collapsed_candidate
-          IFS="$old_ifs"
-          for segment in "$@"; do
+          remaining_candidate="$collapsed_candidate"
+          while [ -n "$remaining_candidate" ]; do
+            case "$remaining_candidate" in
+              */*)
+                segment="${remaining_candidate%%/*}"
+                remaining_candidate="${remaining_candidate#*/}"
+                ;;
+              *)
+                segment="$remaining_candidate"
+                remaining_candidate=""
+                ;;
+            esac
             [ -z "$segment" ] && continue
             if [ "$segment" != "logs" ]; then
               collapse_ok=0

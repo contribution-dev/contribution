@@ -173,6 +173,8 @@ func TestInventoryUsesGitVisibleFiles(t *testing.T) {
 	writeTestFile(t, repoPath, "bin/contribution", "binary\n")
 	writeTestFile(t, repoPath, "node_modules/pkg/index.js", "module.exports = {}\n")
 	writeTestFile(t, repoPath, "docs-shared/vision.md", "private\n")
+	writeTestFile(t, repoPath, ".contribution/reports/2026-05-29T000000Z/analysis.json", "{}\n")
+	writeTestFile(t, repoPath, ".contribution/reports/2026-05-29T000000Z/profile.export.json", "{}\n")
 	if err := os.Remove(filepath.Join(repoPath, "deleted.txt")); err != nil {
 		t.Fatalf("remove deleted tracked file: %v", err)
 	}
@@ -181,9 +183,14 @@ func TestInventoryUsesGitVisibleFiles(t *testing.T) {
 	if err != nil {
 		t.Fatalf("Inventory() error = %v", err)
 	}
-	want := len(gitVisibleExistingFiles(t, repoPath))
+	want := 0
+	for _, path := range gitVisibleExistingFiles(t, repoPath) {
+		if !isDefaultReportArtifactPath(path) {
+			want++
+		}
+	}
 	if summary.TotalFiles != want {
-		t.Fatalf("TotalFiles = %d, want git-visible existing files %d", summary.TotalFiles, want)
+		t.Fatalf("TotalFiles = %d, want git-visible existing files excluding default report artifacts %d", summary.TotalFiles, want)
 	}
 	if summary.SourceFiles != 3 {
 		t.Fatalf("SourceFiles = %d, want 3", summary.SourceFiles)
@@ -219,6 +226,24 @@ func TestParseHistoryUsesNumstat(t *testing.T) {
 	}
 	if !history.Commits[0].SourceTouched || !history.Commits[0].TestsTouched {
 		t.Fatalf("classification flags were not populated: %+v", history.Commits[0])
+	}
+}
+
+func TestHighChurnFilesPrioritizesBehaviorOverDocsNoise(t *testing.T) {
+	got := highChurnFiles(map[string]int{
+		"CHANGELOG.md":           12,
+		"README.md":              9,
+		"docs/guide.md":          8,
+		"internal/app.go":        3,
+		"internal/app_test.go":   3,
+		"internal/auth/guard.go": 2,
+	})
+
+	if len(got) == 0 || got[0] != "internal/app.go" {
+		t.Fatalf("highChurnFiles() = %+v, want behavior file first", got)
+	}
+	if !containsPath(got, "CHANGELOG.md") {
+		t.Fatalf("highChurnFiles() = %+v, want docs churn still retained", got)
 	}
 }
 
@@ -354,6 +379,15 @@ func changedFileByPath(files []ChangedFile, path string) *ChangedFile {
 		}
 	}
 	return nil
+}
+
+func containsPath(paths []string, want string) bool {
+	for _, path := range paths {
+		if path == want {
+			return true
+		}
+	}
+	return false
 }
 
 func writeTestFile(t *testing.T, root string, rel string, content string) {

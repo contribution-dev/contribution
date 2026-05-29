@@ -39,6 +39,7 @@ type PullRequest struct {
 	CheckRuns        int
 	FailedChecks     int
 	SuccessfulChecks int
+	MergeCommitSHA   string
 }
 
 var (
@@ -116,6 +117,7 @@ func FetchMergedPRs(ctx context.Context, owner, repo, token string, maxPRs int) 
 		Title    string     `json:"title"`
 		HTMLURL  string     `json:"html_url"`
 		MergedAt *time.Time `json:"merged_at"`
+		MergeSHA string     `json:"merge_commit_sha"`
 	}
 	if err := json.NewDecoder(resp.Body).Decode(&raw); err != nil {
 		return Metadata{}, fmt.Errorf("decode GitHub pull requests: %w", err)
@@ -133,9 +135,13 @@ func FetchMergedPRs(ctx context.Context, owner, repo, token string, maxPRs int) 
 			pr.Title = item.Title
 			pr.URL = item.HTMLURL
 			pr.MergedAt = *item.MergedAt
+			pr.MergeCommitSHA = item.MergeSHA
 		}
 		if pr.MergedAt.IsZero() {
 			pr.MergedAt = *item.MergedAt
+		}
+		if pr.MergeCommitSHA == "" {
+			pr.MergeCommitSHA = item.MergeSHA
 		}
 		files, err := fetchPRFiles(ctx, owner, repo, token, item.Number)
 		if err != nil {
@@ -222,6 +228,7 @@ func fetchPRDetails(ctx context.Context, owner, repo, token string, number int) 
 		Comments       int        `json:"comments"`
 		ReviewComments int        `json:"review_comments"`
 		MergedAt       *time.Time `json:"merged_at"`
+		MergeCommitSHA string     `json:"merge_commit_sha"`
 		Head           struct {
 			SHA string `json:"sha"`
 		} `json:"head"`
@@ -241,6 +248,7 @@ func fetchPRDetails(ctx context.Context, owner, repo, token string, number int) 
 			Commits:        raw.Commits,
 			IssueComments:  raw.Comments,
 			ReviewComments: raw.ReviewComments,
+			MergeCommitSHA: raw.MergeCommitSHA,
 		},
 		headSHA: raw.Head.SHA,
 	}, nil

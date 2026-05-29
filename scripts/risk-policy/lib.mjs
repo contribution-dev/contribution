@@ -37,6 +37,7 @@ function globToRegex(pattern) {
     output += escapeRegex(char);
   }
 
+  // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- policy globs are normalized and regex metacharacters are escaped above.
   return new RegExp(`^${output}$`);
 }
 

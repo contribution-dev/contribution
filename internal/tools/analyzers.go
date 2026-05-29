@@ -28,9 +28,9 @@ func RunAnalyzers(parent context.Context, repoPath string, repoID string, toolin
 		parse func([]byte) []signals.AnalyzerFinding
 	}{
 		{name: "semgrep", args: []string{"--config", "auto", "--json", "--quiet", "."}, parse: parseSemgrepFindings},
-		{name: "gitleaks", args: []string{"detect", "--source", ".", "--no-git", "--redact", "--report-format", "json", "--exit-code", "0"}, parse: parseGitleaksFindings},
+		{name: "gitleaks", args: []string{"git", "--redact", "--report-format", "json", "--exit-code", "0", "--no-banner", "--log-level", "error", "."}, parse: parseGitleaksFindings},
 		{name: "osv-scanner", args: []string{"--format", "json", "."}, parse: parseOSVFindings},
-		{name: "trivy", args: []string{"fs", "--format", "json", "--quiet", "--scanners", "vuln,secret,misconfig", "."}, parse: parseTrivyFindings},
+		{name: "trivy", args: []string{"fs", "--format", "json", "--quiet", "--scanners", "vuln,secret,misconfig", "--skip-dirs", ".git", "--skip-dirs", ".tools", "--skip-dirs", "node_modules", "--skip-dirs", "dist", "."}, parse: parseTrivyFindings},
 	}
 
 	var findings []signals.AnalyzerFinding
@@ -71,6 +71,7 @@ func runAnalyzer(parent context.Context, repoPath string, name string, args []st
 	ctx, cancel := context.WithTimeout(parent, analyzerTimeout)
 	defer cancel()
 	// #nosec G204 -- path comes from exec.LookPath for fixed optional analyzer names.
+	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command -- analyzer names come from the fixed definitions above, not user input.
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Dir = repoPath
 	out, err := cmd.CombinedOutput()
@@ -270,7 +271,8 @@ func severityFromString(value string) signals.Severity {
 func osvSeverity(values []struct {
 	Type  string `json:"type"`
 	Score string `json:"score"`
-}) string {
+},
+) string {
 	if len(values) == 0 {
 		return "medium"
 	}

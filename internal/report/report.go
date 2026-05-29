@@ -410,6 +410,12 @@ func PreflightMarkdown(preflight signals.PreflightReport) string {
 			}
 		}
 	}
+	if len(preflight.AnalyzerFindings) > 0 {
+		fmt.Fprintln(&buf)
+		fmt.Fprintln(&buf, "## Safety Analyzer Findings")
+		fmt.Fprintln(&buf)
+		writeAnalyzerFindings(&buf, preflight.AnalyzerFindings)
+	}
 	if len(preflight.Rubric) > 0 {
 		fmt.Fprintln(&buf)
 		fmt.Fprintln(&buf, "## Rubric")

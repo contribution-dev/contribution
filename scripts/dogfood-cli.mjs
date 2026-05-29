@@ -245,9 +245,19 @@ function runCli(binary, args, options = {}) {
 
 function assertReferencedPathsExist(result, tempRoot) {
   const text = `${result.stdout}\n${result.stderr}`;
-  const escapedRoot = tempRoot.replaceAll("/", "\\/");
-  const pathPattern = new RegExp(`${escapedRoot}[^\\s)'",]+`, "gu");
-  for (const raw of text.match(pathPattern) ?? []) {
+  const referencedPaths = [];
+  let cursor = 0;
+  while (cursor < text.length) {
+    const start = text.indexOf(tempRoot, cursor);
+    if (start === -1) break;
+    let end = start;
+    while (end < text.length && !/[\s)'",]/u.test(text[end])) {
+      end += 1;
+    }
+    referencedPaths.push(text.slice(start, end));
+    cursor = end;
+  }
+  for (const raw of referencedPaths) {
     const candidate = raw.replace(/[.,:;]+$/u, "");
     assert(
       existsSync(candidate),
@@ -1009,6 +1019,14 @@ function runSmoke(binary, tempRoot, options = {}) {
   assert(
     preflightJSON.rubric?.some((item) => item.id === "changed_line_coverage"),
     "preflight missing changed-line coverage rubric",
+  );
+  assert(
+    Array.isArray(preflightJSON.analyzer_findings),
+    "preflight missing analyzer findings array",
+  );
+  assert(
+    preflightJSON.rubric?.some((item) => item.id === "analyzer_findings"),
+    "preflight missing analyzer findings rubric",
   );
   assert(
     preflightJSON.personal_context?.artifacts_analyzed > 0,

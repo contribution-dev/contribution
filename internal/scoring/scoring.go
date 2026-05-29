@@ -49,7 +49,7 @@ func Build(input Input) Output {
 	trends := buildTrendComparison(input)
 	deepDives := buildDeepDives(input, cards)
 	profile := buildProfile(input, weaknessMap, trends, len(cards))
-	return Output{Cards: cards, WeaknessMap: weaknessMap, Trends: trends, DeepDives: deepDives, Profile: profile}
+	return Output{Cards: cards, WeaknessMap: weaknessMap, Trends: trends, DeepDives: deepDives, Profile: profile, Limitations: buildLimitations(input, cards)}
 }
 
 func buildCards(input Input) []signals.PRQualityCard {
@@ -58,8 +58,18 @@ func buildCards(input Input) []signals.PRQualityCard {
 	}
 	if input.GitHub.Available && len(input.GitHub.PRs) > 0 {
 		cards := make([]signals.PRQualityCard, 0, min(len(input.GitHub.PRs), input.MaxCards))
+		associatedCommits := associatedPRCommitSHAs(input.GitHub.PRs)
 		for _, pr := range input.GitHub.PRs {
 			cards = append(cards, cardFromPR(pr, input.History))
+			if len(cards) >= input.MaxCards {
+				break
+			}
+		}
+		for _, commit := range input.History.Commits {
+			if associatedCommits[normalizeSHA(commit.SHA)] {
+				continue
+			}
+			cards = append(cards, cardFromCommit(commit))
 			if len(cards) >= input.MaxCards {
 				break
 			}
@@ -74,6 +84,36 @@ func buildCards(input Input) []signals.PRQualityCard {
 		}
 	}
 	return cards
+}
+
+func associatedPRCommitSHAs(prs []github.PullRequest) map[string]bool {
+	out := map[string]bool{}
+	for _, pr := range prs {
+		if sha := normalizeSHA(pr.MergeCommitSHA); sha != "" {
+			out[sha] = true
+		}
+	}
+	return out
+}
+
+func buildLimitations(input Input, cards []signals.PRQualityCard) []string {
+	var limitations []string
+	if input.GitHub.Available && len(input.GitHub.PRs) > 0 {
+		var localCards int
+		for _, card := range cards {
+			if card.PRNumber == 0 {
+				localCards++
+			}
+		}
+		if localCards > 0 {
+			limitations = append(limitations, fmt.Sprintf("%d local commit card(s) were included because they did not match imported GitHub PR merge commits. This covers direct merges and sparse PR metadata, but squash or rebase workflows can still duplicate work when merge SHAs are unavailable.", localCards))
+		}
+	}
+	return limitations
+}
+
+func normalizeSHA(value string) string {
+	return strings.ToLower(strings.TrimSpace(value))
 }
 
 func cardFromPR(pr github.PullRequest, history gitrepo.History) signals.PRQualityCard {

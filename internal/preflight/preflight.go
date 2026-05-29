@@ -22,9 +22,15 @@ func Build(repo signals.RepoMetadata, base string, head string, diff gitrepo.Dif
 
 // BuildWithPersonal creates a V2 preflight report with recent single-player patterns.
 func BuildWithPersonal(repo signals.RepoMetadata, base string, head string, diff gitrepo.DiffSummary, coverage signals.PreflightCoverage, policy config.PreflightConfig, personal signals.PersonalPreflightContext, tooling signals.ToolingReport, limitations []string, now time.Time) signals.PreflightReport {
+	return BuildWithPersonalAndAnalyzers(repo, base, head, diff, coverage, policy, personal, nil, tooling, limitations, now)
+}
+
+// BuildWithPersonalAndAnalyzers creates a V2 preflight report with recent patterns and optional analyzer findings.
+func BuildWithPersonalAndAnalyzers(repo signals.RepoMetadata, base string, head string, diff gitrepo.DiffSummary, coverage signals.PreflightCoverage, policy config.PreflightConfig, personal signals.PersonalPreflightContext, analyzerFindings []signals.AnalyzerFinding, tooling signals.ToolingReport, limitations []string, now time.Time) signals.PreflightReport {
 	summary := diff.FileSummary
 	changed := changedFiles(diff.Files, policy.RiskyPaths)
 	summary.RiskyFiles = riskyFileCount(changed)
+	analyzerFindings = nonNilAnalyzerFindings(analyzerFindings)
 	totalLines := gitrepo.TotalChangedLines(diff.Files)
 	risk := "low"
 	var why []string
@@ -138,6 +144,18 @@ func BuildWithPersonal(repo signals.RepoMetadata, base string, head string, diff
 		risk = maxRisk(risk, "medium")
 		why = append(why, coverageItem.Evidence)
 	}
+	analyzerItem := analyzerRubric(analyzerFindings)
+	rubric = append(rubric, analyzerItem)
+	switch analyzerItem.Status {
+	case "fail":
+		risk = maxRisk(risk, "high")
+		why = append(why, analyzerItem.Evidence)
+		focus = append(focus, "static, secret, dependency, or vulnerability analyzer findings")
+	case "warn":
+		risk = maxRisk(risk, "medium")
+		why = append(why, analyzerItem.Evidence)
+		focus = append(focus, "static, secret, dependency, or vulnerability analyzer findings")
+	}
 	personalItems, personalWhy, personalFocus := personalRubric(changed, summary, totalLines, personal)
 	for _, item := range personalItems {
 		rubric = append(rubric, item)
@@ -162,7 +180,7 @@ func BuildWithPersonal(repo signals.RepoMetadata, base string, head string, diff
 	} else if coverage.Reason != "" {
 		testEvidence += " " + coverage.Reason
 	}
-	limitations = append(limitations, "Secret and static scan findings are limited to optional tool availability in preflight.")
+	limitations = append(limitations, "Optional analyzer findings depend on installed external tools and bounded scan time.")
 	return signals.PreflightReport{
 		Version:           2,
 		GeneratedAt:       now,
@@ -175,6 +193,7 @@ func BuildWithPersonal(repo signals.RepoMetadata, base string, head string, diff
 		FileSummary:       summary,
 		TotalChangedLines: totalLines,
 		Coverage:          coverage,
+		AnalyzerFindings:  analyzerFindings,
 		Rubric:            rubric,
 		TestEvidence:      testEvidence,
 		Tooling:           tooling,
@@ -187,6 +206,38 @@ func BuildWithPersonal(repo signals.RepoMetadata, base string, head string, diff
 			RawDiffsIncluded: false,
 		},
 	}
+}
+
+// AnalyzerFindingsForChangedFiles keeps preflight focused on findings tied to the current diff.
+func AnalyzerFindingsForChangedFiles(findings []signals.AnalyzerFinding, files []gitrepo.ChangedFile) ([]signals.AnalyzerFinding, int) {
+	changed := map[string]bool{}
+	for _, file := range files {
+		path := normalizedRelPath(file.Path)
+		if path != "" {
+			changed[path] = true
+		}
+	}
+	var out []signals.AnalyzerFinding
+	var omitted int
+	for _, finding := range findings {
+		filePath := normalizedRelPath(finding.FilePath)
+		if filePath != "" && !changed[filePath] {
+			omitted++
+			continue
+		}
+		item := finding
+		item.FilePath = filePath
+		if filePath != "" {
+			item.Scope = "changed_file"
+		} else if item.Scope == "" {
+			item.Scope = "repo_existing_or_unknown"
+		}
+		out = append(out, item)
+	}
+	if out == nil {
+		out = []signals.AnalyzerFinding{}
+	}
+	return out, omitted
 }
 
 // PersonalContextFromHistory summarizes recent local patterns for current-diff checks.
@@ -318,6 +369,63 @@ func coverageRubric(coverage signals.PreflightCoverage, policy config.PreflightC
 	return item
 }
 
+func analyzerRubric(findings []signals.AnalyzerFinding) signals.PreflightRubricItem {
+	item := signals.PreflightRubricItem{
+		ID:       "analyzer_findings",
+		Label:    "Analyzer findings",
+		Status:   "unknown",
+		Severity: "info",
+		Evidence: "No optional analyzer finding was imported for changed files.",
+	}
+	if len(findings) == 0 {
+		return item
+	}
+	counts := analyzerSeverityCounts(findings)
+	item.Status = "warn"
+	item.Severity = "medium"
+	if counts["critical"]+counts["high"] > 0 {
+		item.Status = "fail"
+		item.Severity = "high"
+	} else if counts["medium"] == 0 {
+		item.Severity = "low"
+	}
+	item.Evidence = fmt.Sprintf("%d optional analyzer finding(s) matched changed files or repo-level checks%s.", len(findings), analyzerCountSummary(counts))
+	item.Recommendation = "Triage analyzer findings before review; note false positives explicitly."
+	return item
+}
+
+func analyzerSeverityCounts(findings []signals.AnalyzerFinding) map[string]int {
+	counts := map[string]int{}
+	for _, finding := range findings {
+		severity := strings.TrimSpace(string(finding.Severity))
+		if severity == "" {
+			severity = "low"
+		}
+		counts[severity]++
+	}
+	return counts
+}
+
+func analyzerCountSummary(counts map[string]int) string {
+	parts := []string{}
+	for _, severity := range []string{"critical", "high", "medium", "low", "info"} {
+		if counts[severity] > 0 {
+			parts = append(parts, fmt.Sprintf("%d %s", counts[severity], severity))
+		}
+	}
+	if len(parts) == 0 {
+		return ""
+	}
+	return " (" + strings.Join(parts, ", ") + ")"
+}
+
+func nonNilAnalyzerFindings(findings []signals.AnalyzerFinding) []signals.AnalyzerFinding {
+	if findings == nil {
+		return []signals.AnalyzerFinding{}
+	}
+	return findings
+}
+
 func personalRubric(files []signals.PreflightChangedFile, summary signals.FileSummary, totalLines int, personal signals.PersonalPreflightContext) ([]signals.PreflightRubricItem, []string, []string) {
 	if personal.ArtifactsAnalyzed == 0 {
 		return nil, nil, nil
@@ -401,6 +509,18 @@ func nonEmptyPersonalContext(personal signals.PersonalPreflightContext) *signals
 		return nil
 	}
 	return &personal
+}
+
+func normalizedRelPath(value string) string {
+	value = strings.TrimSpace(value)
+	if value == "" {
+		return ""
+	}
+	value = filepath.ToSlash(filepath.Clean(value))
+	if value == "." || strings.HasPrefix(value, "../") || filepath.IsAbs(value) {
+		return ""
+	}
+	return value
 }
 
 func median(values []int) int {

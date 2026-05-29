@@ -8,6 +8,14 @@ All notable changes to this project will be documented in this file.
   checks staged, unstaged, and untracked local changes; `analyze` and
   `preflight` auto-import an existing configured coverage artifact; and public
   profile exports omit risky selected artifacts by default.
+- Import bounded optional analyzer findings into `preflight` reports for
+  changed files, with `--no-external-tools` available for deterministic fast
+  preflight runs.
+- Preserve unmatched local commit cards when GitHub PR metadata is imported,
+  using merge commit SHAs to avoid duplicates and surfacing limitations for
+  direct, squash, or rebase merge workflows.
+- Prioritize behavior and risky files over docs-only noise in high-churn
+  evidence while still retaining docs churn when it is significant.
 - Add recent-vs-prior trend comparison to `analysis.json` and private
   `report.md`, covering test-evidence rate, large-change rate, fix/revert-like
   churn, risky untested changes, and high-churn concentration without turning
@@ -17,6 +25,9 @@ All notable changes to this project will be documented in this file.
   normalized to repo-relative files with lowest-coverage file summaries,
   optional analyzers can run and import normalized findings, and generated
   config includes coverage/risky-path setup guidance.
+- Exclude default `.contribution/reports` output artifacts from Git-visible
+  repository inventory so repeated default analyses do not count prior reports
+  as source files.
 - Add single-player dogfooding improvements: private report ledger
   explainability, high-churn and no-test deep dives, analyze-time Go/LCOV
   coverage import, concrete confidence setup actions, GitHub CLI token support,

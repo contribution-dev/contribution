@@ -107,6 +107,85 @@ func TestBuildPreflightUsesPersonalPatterns(t *testing.T) {
 	}
 }
 
+func TestBuildPreflightUsesAnalyzerFindings(t *testing.T) {
+	diff := gitrepo.DiffSummary{
+		Files: []gitrepo.ChangedFile{{
+			Path:      "internal/auth/session.go",
+			Additions: 5,
+		}},
+		FileSummary: signals.FileSummary{
+			TotalFiles:  1,
+			ByClass:     map[string]int{"source": 1},
+			ByLanguage:  map[string]int{"Go": 1},
+			SourceFiles: 1,
+		},
+	}
+
+	got := BuildWithPersonalAndAnalyzers(
+		signals.RepoMetadata{ID: "local:test"},
+		"main",
+		"HEAD",
+		diff,
+		signals.PreflightCoverage{Status: "unknown", Reason: "No coverage report was imported."},
+		config.PreflightConfig{MaxFiles: 20, MaxLines: 800},
+		signals.PersonalPreflightContext{},
+		[]signals.AnalyzerFinding{{
+			Tool:       "semgrep",
+			RuleID:     "go.rule",
+			Severity:   signals.SeverityHigh,
+			FilePath:   "internal/auth/session.go",
+			Scope:      "changed_file",
+			Message:    "avoid this pattern",
+			Confidence: signals.ConfidenceMedium,
+		}},
+		signals.ToolingReport{},
+		nil,
+		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	)
+
+	if got.RiskLevel != "high" {
+		t.Fatalf("RiskLevel = %q, want high", got.RiskLevel)
+	}
+	if len(got.AnalyzerFindings) != 1 {
+		t.Fatalf("AnalyzerFindings = %+v, want one finding", got.AnalyzerFindings)
+	}
+	if !hasRubricStatus(got.Rubric, "analyzer_findings", "fail") {
+		t.Fatalf("analyzer rubric did not fail: %+v", got.Rubric)
+	}
+}
+
+func TestAnalyzerFindingsForChangedFilesFiltersUnrelatedFindings(t *testing.T) {
+	got, omitted := AnalyzerFindingsForChangedFiles(
+		[]signals.AnalyzerFinding{{
+			Tool:       "semgrep",
+			FilePath:   "internal/app.go",
+			Scope:      "repo_existing_or_unknown",
+			Message:    "changed finding",
+			Confidence: signals.ConfidenceMedium,
+		}, {
+			Tool:       "semgrep",
+			FilePath:   "internal/old.go",
+			Message:    "unrelated finding",
+			Confidence: signals.ConfidenceMedium,
+		}, {
+			Tool:       "osv-scanner",
+			Message:    "repo-level finding",
+			Confidence: signals.ConfidenceMedium,
+		}},
+		[]gitrepo.ChangedFile{{Path: "internal/app.go"}},
+	)
+
+	if omitted != 1 {
+		t.Fatalf("omitted = %d, want 1", omitted)
+	}
+	if len(got) != 2 {
+		t.Fatalf("findings = %+v, want changed and repo-level findings", got)
+	}
+	if got[0].Scope != "changed_file" {
+		t.Fatalf("changed finding scope = %q, want changed_file", got[0].Scope)
+	}
+}
+
 func TestPersonalContextFromHistory(t *testing.T) {
 	history := gitrepo.History{
 		Commits: []gitrepo.Commit{{
@@ -167,6 +246,7 @@ func TestPreflightReportJSONContract(t *testing.T) {
 		"file_summary",
 		"total_changed_lines",
 		"coverage",
+		"analyzer_findings",
 		"rubric",
 		"test_evidence",
 		"tooling",

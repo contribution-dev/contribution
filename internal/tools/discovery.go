@@ -91,6 +91,7 @@ func checkTool(parent context.Context, name string, args []string, required bool
 	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
 	defer cancel()
 	// #nosec G204 -- path comes from exec.LookPath for a fixed tool name in the local definition list.
+	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command -- tool names come from the fixed definitions above, not user input.
 	cmd := exec.CommandContext(ctx, path, args...)
 	out, err := cmd.CombinedOutput()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {

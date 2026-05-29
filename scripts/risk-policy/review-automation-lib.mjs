@@ -11,9 +11,11 @@ export const REVIEW_STATUS = {
 
 export function toRegex(pattern) {
   try {
+    // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- review check patterns are repo-owned policy configuration.
     return new RegExp(pattern, "i");
   } catch {
     const escaped = pattern.replace(/[|\\{}()[\]^$+?.]/g, "\\$&");
+    // nosemgrep: javascript.lang.security.audit.detect-non-literal-regexp.detect-non-literal-regexp -- invalid policy patterns are escaped before fallback matching.
     return new RegExp(escaped, "i");
   }
 }

@@ -58,8 +58,9 @@ Core product commands:
   recent-vs-prior trend comparison for solo dogfooding.
 - `contribution preflight` writes V2 current-diff readiness artifacts with
   changed-line ranges, optional Go/LCOV coverage from flags or configured
-  artifacts, policy rubric evidence, recent personal pattern checks, and a
-  `--worktree` mode for staged, unstaged, and untracked local changes.
+  artifacts, bounded optional analyzer findings for changed files, policy
+  rubric evidence, recent personal pattern checks, and a `--worktree` mode for
+  staged, unstaged, and untracked local changes.
 - `contribution packet` writes a public-safe V2 friend-review packet.
 - `contribution import-feedback` imports public-safe friend feedback exports.
 - `contribution export-profile` writes only public-safe web profile artifacts.

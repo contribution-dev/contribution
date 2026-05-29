@@ -421,6 +421,7 @@ type PreflightReport struct {
 	FileSummary       FileSummary               `json:"file_summary"`
 	TotalChangedLines int                       `json:"total_changed_lines"`
 	Coverage          PreflightCoverage         `json:"coverage"`
+	AnalyzerFindings  []AnalyzerFinding         `json:"analyzer_findings"`
 	Rubric            []PreflightRubricItem     `json:"rubric"`
 	TestEvidence      string                    `json:"test_evidence"`
 	Tooling           ToolingReport             `json:"tooling"`

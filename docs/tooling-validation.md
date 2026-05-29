@@ -8,6 +8,9 @@ This repo uses Go for product code and Node/pnpm for repository automation.
 - Repository automation runs on Node.js 24 LTS with pnpm 11.4.0.
   `pnpm tools:preflight` enforces Node.js `>=24.16.0 <25`, pnpm `>=11.4.0`,
   and Go `>=1.26.3`.
+- `scripts/with-tools` sources `scripts/codex-env.sh`, which uses `.nvmrc`
+  through `fnm` when `fnm` is installed. Prefer `scripts/with-tools pnpm ...`
+  in shells that are not already on the repo's Node version.
 
 ## Default local workflow
 
@@ -64,6 +67,12 @@ Use `pnpm ci:local` when you want the CI-style fast gate without the final
 validation install and vulnerability-scan steps. Do not use `pnpm ci`; that is a
 pnpm built-in command, not a repo script.
 
+## Benchmarks
+
+Use `pnpm bench` to run the repository benchmark suite. Benchmarks currently
+cover Git inventory, scoring, report bundle generation, and preflight report
+construction.
+
 ## Changed-aware commands
 
 - `pnpm agents:check`
@@ -79,7 +88,7 @@ changes.
 
 - `pnpm dogfood:smoke` builds the real CLI and exercises it against temporary
   Git repos under `/tmp/contribution-*`, including V2 preflight coverage,
-  analyze-time coverage import, analyzer-finding schema coverage,
+  analyze-time coverage import, preflight analyzer-finding schema coverage,
   recent-vs-prior trend comparison schema coverage, packet, feedback-import
   flows, personal preflight context, and public-safe report quality checks.
 - `pnpm dogfood:real` builds the real CLI, analyzes this repository into

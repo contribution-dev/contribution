@@ -36,8 +36,12 @@ check_required_tool() {
 extract_semver() {
   local raw="$1"
   local version=""
-  version="$(printf '%s\n' "$raw" | sed -E 's/.*go([0-9]+(\.[0-9]+){1,2}).*/\1/;t;s/.*v?([0-9]+(\.[0-9]+){1,2}).*/\1/;t;s/.*/ /')"
-  printf '%s\n' "${version//[[:space:]]/}"
+  if [[ "$raw" =~ go([0-9]+(\.[0-9]+){1,2}) ]]; then
+    version="${BASH_REMATCH[1]}"
+  elif [[ "$raw" =~ v?([0-9]+(\.[0-9]+){1,2}) ]]; then
+    version="${BASH_REMATCH[1]}"
+  fi
+  printf '%s\n' "$version"
 }
 
 semver_at_least() {

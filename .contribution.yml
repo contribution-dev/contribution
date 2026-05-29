@@ -1,0 +1,28 @@
+version: 1
+project:
+  name: contribution
+  default_branch: main
+analysis:
+  since_days: 90
+  max_prs: 20
+preflight:
+  max_files: 20
+  max_lines: 800
+  require_tests_for_source: false
+  changed_line_coverage_min: 0
+  risky_paths:
+    - internal/auth/
+    - internal/security/
+    - internal/billing/
+    - internal/payments/
+    - app/api/auth/
+    - apps/app/app/api/auth/
+coverage:
+  command: go test ./... -coverprofile=coverage.out
+  path: coverage.out
+  format: go
+ai_usage:
+  self_reported_tools: []
+  self_reported_modes: []
+reports:
+  output_dir: .contribution/reports

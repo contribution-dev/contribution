@@ -181,8 +181,8 @@ func TestBuildUsesGitHubDurabilityEvidence(t *testing.T) {
 		MaxCards:  20,
 	})
 
-	if len(out.Cards) != 1 {
-		t.Fatalf("cards = %d, want 1", len(out.Cards))
+	if len(out.Cards) == 0 {
+		t.Fatal("cards = 0, want PR card")
 	}
 	card := out.Cards[0]
 	if card.Label != "risky" || !strings.Contains(card.Durability, "later fix/revert-like") {
@@ -190,6 +190,51 @@ func TestBuildUsesGitHubDurabilityEvidence(t *testing.T) {
 	}
 	if !hasWeakness(out.WeaknessMap.Weaknesses, "Some PRs needed post-merge follow-up") {
 		t.Fatalf("weaknesses = %+v, want post-merge follow-up weakness", out.WeaknessMap.Weaknesses)
+	}
+}
+
+func TestBuildIncludesUnmatchedLocalCommitsWithGitHubMetadata(t *testing.T) {
+	history := gitrepo.History{
+		Commits: []gitrepo.Commit{{
+			SHA:           "merge1234567890",
+			Subject:       "merge PR",
+			Files:         []gitrepo.ChangedFile{{Path: "internal/app.go", Additions: 2}},
+			SourceTouched: true,
+			TestsTouched:  true,
+		}, {
+			SHA:           "direct1234567890",
+			Subject:       "direct hotfix",
+			Files:         []gitrepo.ChangedFile{{Path: "internal/auth/session.go", Additions: 3}},
+			SourceTouched: true,
+			RiskyTouched:  true,
+		}},
+		FileTouchCount: map[string]int{"internal/app.go": 1, "internal/auth/session.go": 1},
+	}
+
+	out := Build(Input{
+		Repo:    signals.RepoMetadata{DefaultBranch: "main"},
+		History: history,
+		GitHub: github.Metadata{Available: true, PRs: []github.PullRequest{{
+			Number:         12,
+			Title:          "Merge app change",
+			ChangedFiles:   1,
+			Additions:      2,
+			Files:          []string{"internal/app.go"},
+			MergeCommitSHA: "merge1234567890",
+		}}},
+		Inventory: signals.FileSummary{TotalFiles: 2, SourceFiles: 2},
+		SinceDays: 90,
+		MaxCards:  20,
+	})
+
+	if len(out.Cards) != 2 {
+		t.Fatalf("cards = %+v, want PR card plus unmatched local commit card", out.Cards)
+	}
+	if out.Cards[0].PRNumber != 12 || out.Cards[1].PRNumber != 0 {
+		t.Fatalf("cards = %+v, want PR then local commit card", out.Cards)
+	}
+	if len(out.Limitations) == 0 || !strings.Contains(out.Limitations[0], "direct merges") {
+		t.Fatalf("limitations = %+v, want direct-merge limitation", out.Limitations)
 	}
 }
 

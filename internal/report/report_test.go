@@ -107,6 +107,38 @@ func TestProfileExportOmitsRiskyArtifactsByDefault(t *testing.T) {
 	}
 }
 
+func TestPreflightMarkdownIncludesAnalyzerFindings(t *testing.T) {
+	preflight := signals.PreflightReport{
+		Version:   2,
+		RiskLevel: "high",
+		Why:       []string{"Optional analyzers reported risk."},
+		FileSummary: signals.FileSummary{
+			TotalFiles:  1,
+			SourceFiles: 1,
+			ByClass:     map[string]int{"source": 1},
+			ByLanguage:  map[string]int{"Go": 1},
+		},
+		AnalyzerFindings: []signals.AnalyzerFinding{{
+			Tool:       "semgrep",
+			RuleID:     "go.rule",
+			Severity:   signals.SeverityHigh,
+			FilePath:   "internal/app.go",
+			Scope:      "changed_file",
+			Message:    "avoid this pattern",
+			Confidence: signals.ConfidenceMedium,
+		}},
+		ReviewerFocus: []string{"analyzer findings"},
+		Limitations:   []string{"Optional analyzer findings depend on installed external tools."},
+	}
+
+	got := PreflightMarkdown(preflight)
+	for _, want := range []string{"## Safety Analyzer Findings", "semgrep go.rule in internal/app.go [changed_file]"} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("preflight markdown missing %q:\n%s", want, got)
+		}
+	}
+}
+
 func TestPublicSafeAnalysisRedactsPrivateMetadata(t *testing.T) {
 	secret := "token=dogfood-secret-value"
 	privateRoot := "/private/tmp/contribution-secret-repo"

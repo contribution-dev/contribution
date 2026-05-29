@@ -57,12 +57,19 @@ export function defaultGitExec(args, repoRoot) {
 
 export function isReviewProcessRunningForSha(sha, processListText) {
   if (!sha) return false;
-  const escapedSha = sha.replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
-  const withShaPattern = new RegExp(
-    `codex-review-commit[^\\n]*--sha\\s+${escapedSha}|--sha\\s+${escapedSha}[^\\n]*codex-review-commit`,
-    "i",
-  );
-  return withShaPattern.test(String(processListText ?? ""));
+  const expectedSha = String(sha).trim();
+  for (const line of String(processListText ?? "").split(/\r?\n/u)) {
+    const tokens = line.trim().split(/\s+/u);
+    if (!tokens.some((token) => token.includes("codex-review-commit"))) {
+      continue;
+    }
+    for (let index = 0; index < tokens.length - 1; index += 1) {
+      if (tokens[index] === "--sha" && tokens[index + 1] === expectedSha) {
+        return true;
+      }
+    }
+  }
+  return false;
 }
 
 function parseProcessTable(processTableText) {

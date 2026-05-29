@@ -2,10 +2,10 @@
   "name": "contribution-tooling",
   "private": true,
   "type": "module",
-  "packageManager": "pnpm@10.20.0",
+  "packageManager": "pnpm@11.4.0",
   "engines": {
-    "node": ">=22.22.2 <23",
-    "pnpm": ">=10.20.0"
+    "node": ">=24.16.0 <25",
+    "pnpm": ">=11.4.0"
   },
   "scripts": {
     "build": "scripts/with-tools go build -trimpath -o bin/contribution ./cmd/contribution",

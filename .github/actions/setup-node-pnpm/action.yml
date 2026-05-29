@@ -6,7 +6,7 @@ inputs:
   node-version:
     description: Node.js version to install
     required: false
-    default: "22.22.2"
+    default: "24.16.0"
   run-install:
     description: Whether to run pnpm install with retries
     required: false
@@ -23,7 +23,7 @@ runs:
       with:
         node-version: ${{ inputs.node-version }}
 
-    - uses: pnpm/action-setup@6e7bdbda5fe05107efc88b23b7ed00aa05f84ca0
+    - uses: pnpm/action-setup@0e279bb959325dab635dd2c09392533439d90093
       with:
         run_install: false
 

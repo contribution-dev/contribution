@@ -2,6 +2,13 @@
 
 This repo uses Go for product code and Node/pnpm for repository automation.
 
+## Toolchain baseline
+
+- Product code builds with Go 1.26.3.
+- Repository automation runs on Node.js 24 LTS with pnpm 11.4.0.
+  `pnpm tools:preflight` enforces Node.js `>=24.16.0 <25`, pnpm `>=11.4.0`,
+  and Go `>=1.26.3`.
+
 ## Default local workflow
 
 - For code changes, use the smallest changed-aware command that covers the

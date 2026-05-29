@@ -33,6 +33,86 @@ check_required_tool() {
   fi
 }
 
+extract_semver() {
+  local raw="$1"
+  local version=""
+  version="$(printf '%s\n' "$raw" | sed -E 's/.*go([0-9]+(\.[0-9]+){1,2}).*/\1/;t;s/.*v?([0-9]+(\.[0-9]+){1,2}).*/\1/;t;s/.*/ /')"
+  printf '%s\n' "${version//[[:space:]]/}"
+}
+
+semver_at_least() {
+  local current="$1"
+  local required="$2"
+  local current_major current_minor current_patch
+  local required_major required_minor required_patch
+
+  IFS=. read -r current_major current_minor current_patch _ <<<"$current"
+  IFS=. read -r required_major required_minor required_patch _ <<<"$required"
+  current_patch="${current_patch:-0}"
+  required_patch="${required_patch:-0}"
+
+  [[ "$current_major" =~ ^[0-9]+$ && "$current_minor" =~ ^[0-9]+$ && "$current_patch" =~ ^[0-9]+$ ]] || return 1
+  [[ "$required_major" =~ ^[0-9]+$ && "$required_minor" =~ ^[0-9]+$ && "$required_patch" =~ ^[0-9]+$ ]] || return 1
+
+  if ((current_major != required_major)); then
+    ((current_major > required_major))
+    return
+  fi
+  if ((current_minor != required_minor)); then
+    ((current_minor > required_minor))
+    return
+  fi
+  ((current_patch >= required_patch))
+}
+
+semver_major_below() {
+  local current="$1"
+  local max_major="$2"
+  local current_major
+
+  IFS=. read -r current_major _ <<<"$current"
+  [[ "$current_major" =~ ^[0-9]+$ && "$max_major" =~ ^[0-9]+$ ]] || return 1
+  ((current_major < max_major))
+}
+
+check_required_version() {
+  local tool_name="$1"
+  local install_hint="$2"
+  local min_version="$3"
+  local max_major="$4"
+  shift 4
+
+  if ! command -v "$tool_name" >/dev/null 2>&1; then
+    fail "$tool_name is missing. $install_hint"
+    return
+  fi
+
+  local output first_line version range
+  if ! output="$("$@" 2>&1)"; then
+    fail "$tool_name version check failed. $install_hint"
+    return
+  fi
+
+  first_line="${output%%$'\n'*}"
+  version="$(extract_semver "$first_line")"
+  range=">= $min_version"
+  if [ -n "$max_major" ]; then
+    range="$range < $max_major"
+  fi
+
+  if [ -z "$version" ] || ! semver_at_least "$version" "$min_version"; then
+    fail "$tool_name $version does not satisfy $range. $install_hint"
+    return
+  fi
+
+  if [ -n "$max_major" ] && ! semver_major_below "$version" "$max_major"; then
+    fail "$tool_name $version does not satisfy $range. $install_hint"
+    return
+  fi
+
+  pass "$tool_name $version satisfies $range"
+}
+
 check_optional_command() {
   local label="$1"
   local hint="$2"
@@ -98,9 +178,9 @@ check_durable_review_workers() {
 echo "Preflight: checking local agent tooling in $REPO_ROOT"
 echo
 
-check_required_tool "node" "Install Node.js 22.x."
-check_required_tool "pnpm" "Install pnpm >= 10.20.0."
-check_required_tool "go" "Install Go 1.26.3."
+check_required_version "node" "Install Node.js 24.16.0." "24.16.0" "25" node --version
+check_required_version "pnpm" "Install pnpm >= 11.4.0." "11.4.0" "" pnpm --version
+check_required_version "go" "Install Go 1.26.3." "1.26.3" "" go version
 check_required_tool "git" "Install Git."
 check_optional_command "golangci-lint" "Install golangci-lint for local lint parity." golangci-lint --version
 check_optional_command "govulncheck" "Install govulncheck with 'go install golang.org/x/vuln/cmd/govulncheck@latest'." govulncheck -version

@@ -51,8 +51,9 @@ Core product commands:
 - `contribution doctor` reports required and optional tool availability.
 - `contribution analyze` writes `analysis.json`, `report.md`,
   `profile.export.json`, `share-card.json`, and `tooling.json`, with optional
-  Go/LCOV coverage import, GitHub durability enrichment, and optional analyzer
-  findings when tools are installed.
+  Go/LCOV coverage import, GitHub durability enrichment, optional analyzer
+  findings when tools are installed, and recent-vs-prior trend comparison for
+  solo dogfooding.
 - `contribution preflight` writes V2 current-diff readiness artifacts with
   changed-line ranges, optional Go/LCOV coverage, policy rubric evidence, and
   recent personal pattern checks.

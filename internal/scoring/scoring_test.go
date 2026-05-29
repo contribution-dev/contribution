@@ -214,6 +214,91 @@ func TestBuildAddsAnalyzerWeakness(t *testing.T) {
 	}
 }
 
+func TestBuildComparesRecentAndPriorWindows(t *testing.T) {
+	out := Build(Input{
+		Repo: signals.RepoMetadata{DefaultBranch: "main"},
+		History: gitrepo.History{Commits: []gitrepo.Commit{{
+			SHA:           "recent-tested",
+			Files:         []gitrepo.ChangedFile{{Path: "internal/app.go"}, {Path: "internal/app_test.go"}},
+			SourceTouched: true,
+			TestsTouched:  true,
+		}, {
+			SHA:           "recent-docs",
+			Files:         []gitrepo.ChangedFile{{Path: "README.md"}},
+			DocsTouched:   true,
+			SourceTouched: false,
+		}}, FileTouchCount: map[string]int{"internal/app.go": 1}},
+		PriorHistory: gitrepo.History{Commits: []gitrepo.Commit{{
+			SHA:           "prior-untested",
+			Files:         []gitrepo.ChangedFile{{Path: "internal/app.go"}},
+			SourceTouched: true,
+		}, {
+			SHA:           "prior-large",
+			Files:         repeatedChangedFiles(13),
+			SourceTouched: true,
+		}}, FileTouchCount: map[string]int{"internal/app.go": 2}},
+		Inventory: signals.FileSummary{TotalFiles: 2, SourceFiles: 1, TestFiles: 1},
+		SinceDays: 90,
+		MaxCards:  20,
+	})
+
+	if out.Trends.Status != "available" {
+		t.Fatalf("trend status = %q, want available", out.Trends.Status)
+	}
+	if !hasTrendDirection(out.Trends.Metrics, "source_test_evidence_rate", "improved") {
+		t.Fatalf("metrics = %+v, want improved source test evidence", out.Trends.Metrics)
+	}
+	if !hasTrendFinding(out.Trends.Findings, "Test evidence improved") {
+		t.Fatalf("trend findings = %+v, want test evidence improvement", out.Trends.Findings)
+	}
+	if !hasTrendFinding(out.Profile.ImprovementTrends, "Test evidence improved") {
+		t.Fatalf("profile trends = %+v, want trend improvement", out.Profile.ImprovementTrends)
+	}
+}
+
+func TestBuildReportsTrendBaselineWhenPriorWindowIsEmpty(t *testing.T) {
+	out := Build(Input{
+		Repo: signals.RepoMetadata{DefaultBranch: "main"},
+		History: gitrepo.History{Commits: []gitrepo.Commit{{
+			SHA:           "recent",
+			Files:         []gitrepo.ChangedFile{{Path: "internal/app.go"}},
+			SourceTouched: true,
+		}}, FileTouchCount: map[string]int{"internal/app.go": 1}},
+		PriorHistory: gitrepo.History{FileTouchCount: map[string]int{}},
+		Inventory:    signals.FileSummary{TotalFiles: 1, SourceFiles: 1},
+		SinceDays:    90,
+		MaxCards:     20,
+	})
+
+	if out.Trends.Status != "baseline" || !hasTrendFinding(out.Trends.Findings, "Trend baseline established") {
+		t.Fatalf("trends = %+v, want baseline finding", out.Trends)
+	}
+}
+
+func TestBuildTreatsHigherChurnCountsAsRegression(t *testing.T) {
+	out := Build(Input{
+		Repo: signals.RepoMetadata{DefaultBranch: "main"},
+		History: gitrepo.History{
+			Commits:        []gitrepo.Commit{{SHA: "recent", Files: []gitrepo.ChangedFile{{Path: "internal/app.go"}}}},
+			FileTouchCount: map[string]int{"internal/app.go": 3},
+			HighChurnFiles: []string{"internal/app.go"},
+		},
+		PriorHistory: gitrepo.History{
+			Commits:        []gitrepo.Commit{{SHA: "prior", Files: []gitrepo.ChangedFile{{Path: "internal/old.go"}}}},
+			FileTouchCount: map[string]int{"internal/old.go": 1},
+		},
+		Inventory: signals.FileSummary{TotalFiles: 2, SourceFiles: 2},
+		SinceDays: 90,
+		MaxCards:  20,
+	})
+	if !hasTrendDirection(out.Trends.Metrics, "high_churn_files", "regressed") {
+		t.Fatalf("metrics = %+v, want high churn regression", out.Trends.Metrics)
+	}
+	if !hasTrendFinding(out.Trends.Findings, "Churn concentration increased") {
+		t.Fatalf("trend findings = %+v, want churn regression finding", out.Trends.Findings)
+	}
+}
+
 func hasWeakness(findings []signals.Finding, label string) bool {
 	for _, finding := range findings {
 		if finding.Label == label {
@@ -221,4 +306,30 @@ func hasWeakness(findings []signals.Finding, label string) bool {
 		}
 	}
 	return false
+}
+
+func hasTrendFinding(findings []signals.Finding, label string) bool {
+	for _, finding := range findings {
+		if finding.Label == label {
+			return true
+		}
+	}
+	return false
+}
+
+func hasTrendDirection(metrics []signals.TrendMetric, id string, direction string) bool {
+	for _, metric := range metrics {
+		if metric.ID == id && metric.Direction == direction {
+			return true
+		}
+	}
+	return false
+}
+
+func repeatedChangedFiles(count int) []gitrepo.ChangedFile {
+	files := make([]gitrepo.ChangedFile, 0, count)
+	for i := 0; i < count; i++ {
+		files = append(files, gitrepo.ChangedFile{Path: "internal/file.go"})
+	}
+	return files
 }

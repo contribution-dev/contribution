@@ -133,6 +133,7 @@ func PublicSafeAnalysis(analysis signals.AnalysisReport) signals.AnalysisReport 
 	analysis.Privacy.AuthorEmailsIncluded = false
 	analysis.PRCards = publicCards(analysis.PRCards, len(analysis.PRCards), pathReplacements)
 	analysis.WeaknessMap = publicSafeWeaknessMap(analysis.WeaknessMap, pathReplacements)
+	analysis.Trends = publicSafeTrends(analysis.Trends, pathReplacements)
 	analysis.Coverage = publicSafeCoverage(analysis.Coverage, pathReplacements)
 	analysis.AnalyzerFindings = publicSafeAnalyzerFindings(analysis.AnalyzerFindings, pathReplacements)
 	analysis.DeepDives = publicSafeDeepDives(analysis.DeepDives, pathReplacements)
@@ -201,6 +202,10 @@ func Markdown(analysis signals.AnalysisReport) string {
 		fmt.Fprintln(&buf)
 		writeFindings(&buf, analysis.WeaknessMap.WatchItems)
 	}
+	fmt.Fprintln(&buf)
+	fmt.Fprintln(&buf, "## Trend Comparison")
+	fmt.Fprintln(&buf)
+	writeTrendComparison(&buf, analysis.Trends)
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "## PR Quality Ledger")
 	fmt.Fprintln(&buf)
@@ -552,6 +557,45 @@ func writeNumberedFindings(buf *bytes.Buffer, findings []signals.Finding) {
 	}
 }
 
+func writeTrendComparison(buf *bytes.Buffer, trends signals.TrendComparison) {
+	if trends.Status == "" {
+		fmt.Fprintln(buf, "No trend comparison was computed.")
+		return
+	}
+	fmt.Fprintf(buf, "Recent window: %d commit artifact(s). Prior window: %d commit artifact(s). Status: %s. Confidence: %s.\n", trends.CurrentWindow.Commits, trends.PriorWindow.Commits, trends.Status, trends.Confidence)
+	if trends.Reason != "" {
+		fmt.Fprintf(buf, "\n%s\n", trends.Reason)
+	}
+	if len(trends.Findings) > 0 {
+		fmt.Fprintln(buf)
+		for _, finding := range trends.Findings {
+			fmt.Fprintf(buf, "- %s: %s (%s confidence)", finding.Label, finding.Evidence, finding.Confidence)
+			if finding.NextAction != "" {
+				fmt.Fprintf(buf, " Next: %s", finding.NextAction)
+			}
+			fmt.Fprintln(buf)
+		}
+	}
+	if len(trends.Metrics) == 0 {
+		return
+	}
+	fmt.Fprintln(buf)
+	fmt.Fprintln(buf, "| Metric | Direction | Recent | Prior | Delta | Next |")
+	fmt.Fprintln(buf, "| --- | --- | ---: | ---: | ---: | --- |")
+	for _, metric := range trends.Metrics {
+		fmt.Fprintf(
+			buf,
+			"| %s | %s | %s | %s | %s | %s |\n",
+			escapeTable(metric.Label),
+			escapeTable(metric.Direction),
+			escapeTable(formatTrendMetricValue(metric.CurrentValue, metric.Unit)),
+			escapeTable(formatTrendMetricValue(metric.PriorValue, metric.Unit)),
+			escapeTable(formatTrendMetricValue(metric.Delta, metric.Unit)),
+			escapeTable(metric.NextAction),
+		)
+	}
+}
+
 func publicFindings(findings []signals.Finding, limit int, replacements ...[]pathReplacement) []signals.Finding {
 	if len(findings) < limit {
 		limit = len(findings)
@@ -610,6 +654,18 @@ func publicSafeWeaknessMap(value signals.WeaknessMap, replacements ...[]pathRepl
 	value.Weaknesses = redactFindings(value.Weaknesses, replacements...)
 	value.WatchItems = redactFindings(value.WatchItems, replacements...)
 	value.NextActions = redactStrings(value.NextActions, replacements...)
+	return value
+}
+
+func publicSafeTrends(value signals.TrendComparison, replacements ...[]pathReplacement) signals.TrendComparison {
+	value.Findings = redactFindings(value.Findings, replacements...)
+	value.Reason = redactCommitLikeText(redactText(value.Reason, replacements...))
+	for i := range value.Metrics {
+		value.Metrics[i].Label = redactCommitLikeText(redactText(value.Metrics[i].Label, replacements...))
+		value.Metrics[i].Evidence = redactCommitLikeText(redactText(value.Metrics[i].Evidence, replacements...))
+		value.Metrics[i].WhyItMatters = redactCommitLikeText(redactText(value.Metrics[i].WhyItMatters, replacements...))
+		value.Metrics[i].NextAction = redactCommitLikeText(redactText(value.Metrics[i].NextAction, replacements...))
+	}
 	return value
 }
 
@@ -801,6 +857,15 @@ func publicSafePathReplacements(analysis signals.AnalysisReport) []pathReplaceme
 		addFindingText(add, finding)
 	}
 	add(analysis.WeaknessMap.NextActions...)
+	add(analysis.Trends.Status, analysis.Trends.Reason)
+	addTrendWindowText(add, analysis.Trends.CurrentWindow)
+	addTrendWindowText(add, analysis.Trends.PriorWindow)
+	for _, metric := range analysis.Trends.Metrics {
+		add(metric.ID, metric.Label, metric.Direction, metric.Evidence, metric.WhyItMatters, metric.NextAction)
+	}
+	for _, finding := range analysis.Trends.Findings {
+		addFindingText(add, finding)
+	}
 	add(analysis.Profile.DisplayName, analysis.Profile.Headline)
 	for _, finding := range analysis.Profile.Strengths {
 		addFindingText(add, finding)
@@ -838,6 +903,10 @@ func addFindingText(add func(...string), finding signals.Finding) {
 
 func addDeepDiveArtifactText(add func(...string), artifact signals.DeepDiveArtifact) {
 	add(artifact.ID, artifact.Label, artifact.Title, artifact.Scope, artifact.TestEvidence, artifact.MainRisk, artifact.NextAction)
+}
+
+func addTrendWindowText(add func(...string), window signals.TrendWindow) {
+	add(window.Label)
 }
 
 func addPathReplacementsFromText(replacements *[]pathReplacement, seen map[string]bool, value string) {
@@ -895,6 +964,13 @@ func escapeTable(value string) string {
 	value = strings.ReplaceAll(value, "\n", " ")
 	value = strings.ReplaceAll(value, "|", "\\|")
 	return value
+}
+
+func formatTrendMetricValue(value float64, unit string) string {
+	if unit == "percent" {
+		return fmt.Sprintf("%.1f%%", value)
+	}
+	return fmt.Sprintf("%.0f", value)
 }
 
 func titleRisk(value string) string {

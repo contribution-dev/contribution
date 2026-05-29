@@ -477,6 +477,38 @@ function analysisFixture(privateRoot) {
       next_actions: [],
       confidence: "medium",
     },
+    trends: {
+      status: "baseline",
+      current_window: {
+        label: "recent",
+        since: "2026-02-28T00:00:00Z",
+        until: "2026-05-28T00:00:00Z",
+        commits: 1,
+        source_commits: 1,
+        test_touched_commits: 1,
+        source_without_tests_commits: 0,
+        large_commits: 0,
+        risky_without_tests_commits: 0,
+        fix_like_commits: 0,
+        high_churn_files: 0,
+      },
+      prior_window: {
+        label: "prior",
+        since: "2025-11-30T00:00:00Z",
+        until: "2026-02-28T00:00:00Z",
+        commits: 0,
+        source_commits: 0,
+        test_touched_commits: 0,
+        source_without_tests_commits: 0,
+        large_commits: 0,
+        risky_without_tests_commits: 0,
+        fix_like_commits: 0,
+        high_churn_files: 0,
+      },
+      metrics: [],
+      findings: [],
+      confidence: "medium",
+    },
     profile: {
       headline: "AI-native contribution profile",
       analyzed_prs: 1,
@@ -706,6 +738,10 @@ function runSmoke(binary, tempRoot, options = {}) {
   assert(
     Array.isArray(analysis.analyzer_findings),
     "analysis missing analyzer findings array",
+  );
+  assert(
+    analysis.trends?.current_window && Array.isArray(analysis.trends.metrics),
+    "analysis missing trend comparison evidence",
   );
   assert(
     Array.isArray(analysis.setup_actions) && analysis.setup_actions.length > 0,
@@ -1233,6 +1269,10 @@ function runRealRepoDogfood(binary, tempRoot) {
   assert(
     analysis.profile?.confidence !== "high",
     "local-only profile confidence was high",
+  );
+  assert(
+    analysis.trends?.status,
+    "real repo analysis missing trend comparison status",
   );
   assertPublicSafeFiles(collectFiles(runDir), ROOT);
   assertPublicSafeReportQuality(path.join(runDir, "report.md"));

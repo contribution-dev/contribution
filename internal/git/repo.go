@@ -351,13 +351,23 @@ type History struct {
 
 // CollectHistory collects recent commit and churn signals.
 func CollectHistory(ctx context.Context, repoPath, repoID string, since time.Time, maxCommits int, createdAt time.Time) (History, []signals.Signal, []string, error) {
+	return CollectHistoryWindow(ctx, repoPath, repoID, since, time.Time{}, maxCommits, createdAt)
+}
+
+// CollectHistoryWindow collects commit and churn signals within an explicit window.
+func CollectHistoryWindow(ctx context.Context, repoPath, repoID string, since time.Time, until time.Time, maxCommits int, createdAt time.Time) (History, []signals.Signal, []string, error) {
 	args := []string{
 		"log",
 		"--since=" + since.Format(time.RFC3339),
+	}
+	if !until.IsZero() {
+		args = append(args, "--until="+until.Format(time.RFC3339))
+	}
+	args = append(args,
 		"--date=iso-strict",
 		"--pretty=format:@@@%H%x09%aI%x09%s",
 		"--numstat",
-	}
+	)
 	out, err := gitOutput(ctx, repoPath, args...)
 	if err != nil {
 		return History{}, nil, nil, fmt.Errorf("collect git history: %w", err)

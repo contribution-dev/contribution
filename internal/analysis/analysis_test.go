@@ -74,6 +74,9 @@ func TestRunWritesJsonArtifactsAndLocalOnlyFallback(t *testing.T) {
 	if analysis.Coverage.Status != "unknown" {
 		t.Fatalf("coverage status = %q, want unknown without coverage input", analysis.Coverage.Status)
 	}
+	if analysis.Trends.Status == "" || analysis.Trends.CurrentWindow.Commits == 0 {
+		t.Fatalf("trend comparison missing current-window evidence: %+v", analysis.Trends)
+	}
 	if len(analysis.DeepDives.NoTestArtifacts) != 0 {
 		t.Fatalf("unexpected no-test deep dives: %+v", analysis.DeepDives.NoTestArtifacts)
 	}

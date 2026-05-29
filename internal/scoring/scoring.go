@@ -4,6 +4,7 @@ package scoring
 import (
 	"fmt"
 	"strings"
+	"time"
 
 	gitrepo "github.com/contribution-dev/contribution/internal/git"
 	"github.com/contribution-dev/contribution/internal/github"
@@ -12,24 +13,30 @@ import (
 
 // Input is the deterministic evidence available to V1 scoring.
 type Input struct {
-	Repo             signals.RepoMetadata
-	History          gitrepo.History
-	GitHub           github.Metadata
-	Inventory        signals.FileSummary
-	Coverage         signals.CoverageSummary
-	AnalyzerFindings []signals.AnalyzerFinding
-	Signals          []signals.Signal
-	SinceDays        int
-	MaxCards         int
-	DisplayName      string
-	AITools          []string
-	AIModes          []string
+	Repo               signals.RepoMetadata
+	History            gitrepo.History
+	PriorHistory       gitrepo.History
+	GitHub             github.Metadata
+	Inventory          signals.FileSummary
+	Coverage           signals.CoverageSummary
+	AnalyzerFindings   []signals.AnalyzerFinding
+	Signals            []signals.Signal
+	CurrentWindowStart time.Time
+	CurrentWindowEnd   time.Time
+	PriorWindowStart   time.Time
+	PriorWindowEnd     time.Time
+	SinceDays          int
+	MaxCards           int
+	DisplayName        string
+	AITools            []string
+	AIModes            []string
 }
 
 // Output is the labeled report state.
 type Output struct {
 	Cards       []signals.PRQualityCard
 	WeaknessMap signals.WeaknessMap
+	Trends      signals.TrendComparison
 	DeepDives   signals.AnalysisDeepDives
 	Profile     signals.ProfileSummary
 	Limitations []string
@@ -39,9 +46,10 @@ type Output struct {
 func Build(input Input) Output {
 	cards := buildCards(input)
 	weaknessMap := buildWeaknessMap(input, cards)
+	trends := buildTrendComparison(input)
 	deepDives := buildDeepDives(input, cards)
-	profile := buildProfile(input, weaknessMap, len(cards))
-	return Output{Cards: cards, WeaknessMap: weaknessMap, DeepDives: deepDives, Profile: profile}
+	profile := buildProfile(input, weaknessMap, trends, len(cards))
+	return Output{Cards: cards, WeaknessMap: weaknessMap, Trends: trends, DeepDives: deepDives, Profile: profile}
 }
 
 func buildCards(input Input) []signals.PRQualityCard {
@@ -593,7 +601,7 @@ func buildDeepDives(input Input, cards []signals.PRQualityCard) signals.Analysis
 	return dives
 }
 
-func buildProfile(input Input, weaknessMap signals.WeaknessMap, analyzed int) signals.ProfileSummary {
+func buildProfile(input Input, weaknessMap signals.WeaknessMap, comparison signals.TrendComparison, analyzed int) signals.ProfileSummary {
 	strengths := publicFindings(weaknessMap.Strengths, 3)
 	trends := []signals.Finding{}
 	for _, strength := range strengths {
@@ -603,6 +611,18 @@ func buildProfile(input Input, weaknessMap signals.WeaknessMap, analyzed int) si
 				Evidence:   strength.Evidence,
 				Confidence: strength.Confidence,
 			})
+			break
+		}
+	}
+	for _, finding := range comparison.Findings {
+		if isPositiveTrendFinding(finding) {
+			trends = append(trends, signals.Finding{
+				Label:      finding.Label,
+				Evidence:   finding.Evidence,
+				Confidence: finding.Confidence,
+			})
+		}
+		if len(trends) >= 2 {
 			break
 		}
 	}
@@ -634,6 +654,11 @@ func buildProfile(input Input, weaknessMap signals.WeaknessMap, analyzed int) si
 		ImprovementTrends:  trends,
 		BadgeCandidates:    badges,
 	}
+}
+
+func isPositiveTrendFinding(finding signals.Finding) bool {
+	text := strings.ToLower(finding.Label + " " + finding.Evidence)
+	return strings.Contains(text, "improv") || strings.Contains(text, "stronger") || strings.Contains(text, "down")
 }
 
 func prTestEvidence(pr github.PullRequest, sourceFiles int, testFiles int) string {

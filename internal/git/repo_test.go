@@ -92,6 +92,17 @@ func runGit(t *testing.T, dir string, args ...string) {
 	}
 }
 
+func runGitEnv(t *testing.T, dir string, env []string, args ...string) {
+	t.Helper()
+	// #nosec G204 -- tests execute the fixed git binary with test-controlled args.
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	cmd.Env = append(os.Environ(), env...)
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, out)
+	}
+}
+
 func TestClassifyPath(t *testing.T) {
 	tests := []struct {
 		path       string
@@ -208,6 +219,44 @@ func TestParseHistoryUsesNumstat(t *testing.T) {
 	}
 	if !history.Commits[0].SourceTouched || !history.Commits[0].TestsTouched {
 		t.Fatalf("classification flags were not populated: %+v", history.Commits[0])
+	}
+}
+
+func TestCollectHistoryWindowHonorsUntilBoundary(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repoPath := t.TempDir()
+	runGit(t, repoPath, "init", "-b", "main")
+	runGit(t, repoPath, "config", "user.email", "dogfood@example.test")
+	runGit(t, repoPath, "config", "user.name", "Dogfood User")
+	writeTestFile(t, repoPath, "internal/app.go", "package app\n")
+	runGit(t, repoPath, "add", ".")
+	runGitEnv(t, repoPath, []string{
+		"GIT_AUTHOR_DATE=2026-01-05T12:00:00Z",
+		"GIT_COMMITTER_DATE=2026-01-05T12:00:00Z",
+	}, "commit", "-m", "prior source")
+	writeTestFile(t, repoPath, "internal/app.go", "package app\n\nfunc value() int { return 1 }\n")
+	runGit(t, repoPath, "add", ".")
+	runGitEnv(t, repoPath, []string{
+		"GIT_AUTHOR_DATE=2026-02-05T12:00:00Z",
+		"GIT_COMMITTER_DATE=2026-02-05T12:00:00Z",
+	}, "commit", "-m", "recent source")
+
+	history, _, _, err := CollectHistoryWindow(
+		context.Background(),
+		repoPath,
+		"local:test",
+		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		time.Date(2026, 2, 1, 0, 0, 0, 0, time.UTC),
+		10,
+		time.Date(2026, 2, 10, 0, 0, 0, 0, time.UTC),
+	)
+	if err != nil {
+		t.Fatalf("CollectHistoryWindow() error = %v", err)
+	}
+	if len(history.Commits) != 1 || history.Commits[0].Subject != "prior source" {
+		t.Fatalf("window history = %+v, want only prior commit", history.Commits)
 	}
 }
 

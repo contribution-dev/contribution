@@ -88,7 +88,14 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	history, historySignals, historyLimitations, err := gitrepo.CollectHistory(ctx, repo.Path, repo.ID, start.AddDate(0, 0, -sinceDays), maxPRs, start)
+	currentWindowStart := start.AddDate(0, 0, -sinceDays)
+	priorWindowStart := start.AddDate(0, 0, -sinceDays*2)
+	priorWindowEnd := currentWindowStart
+	history, historySignals, historyLimitations, err := gitrepo.CollectHistoryWindow(ctx, repo.Path, repo.ID, currentWindowStart, time.Time{}, maxPRs, start)
+	if err != nil {
+		return "", err
+	}
+	priorHistory, _, _, err := gitrepo.CollectHistoryWindow(ctx, repo.Path, repo.ID, priorWindowStart, priorWindowEnd, maxPRs, start)
 	if err != nil {
 		return "", err
 	}
@@ -140,18 +147,23 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 	}
 
 	score := scoring.Build(scoring.Input{
-		Repo:             repo.Metadata(opts.PublicSafe),
-		History:          history,
-		GitHub:           metadata,
-		Inventory:        inventory,
-		Coverage:         coverageSummary,
-		AnalyzerFindings: analyzerFindings,
-		Signals:          allSignals,
-		SinceDays:        sinceDays,
-		MaxCards:         maxPRs,
-		DisplayName:      cfg.Project.Name,
-		AITools:          cfg.AIUsage.SelfReportedTools,
-		AIModes:          cfg.AIUsage.SelfReportedModes,
+		Repo:               repo.Metadata(opts.PublicSafe),
+		History:            history,
+		PriorHistory:       priorHistory,
+		GitHub:             metadata,
+		Inventory:          inventory,
+		Coverage:           coverageSummary,
+		AnalyzerFindings:   analyzerFindings,
+		Signals:            allSignals,
+		CurrentWindowStart: currentWindowStart,
+		CurrentWindowEnd:   start,
+		PriorWindowStart:   priorWindowStart,
+		PriorWindowEnd:     priorWindowEnd,
+		SinceDays:          sinceDays,
+		MaxCards:           maxPRs,
+		DisplayName:        cfg.Project.Name,
+		AITools:            cfg.AIUsage.SelfReportedTools,
+		AIModes:            cfg.AIUsage.SelfReportedModes,
 	})
 	limitations = append(limitations, score.Limitations...)
 	analysis := signals.AnalysisReport{
@@ -175,6 +187,7 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 		Signals:          allSignals,
 		PRCards:          score.Cards,
 		WeaknessMap:      score.WeaknessMap,
+		Trends:           score.Trends,
 		DeepDives:        score.DeepDives,
 		Profile:          score.Profile,
 		SetupActions:     buildSetupActions(repo, cfgWarnings, metadata, coverageSummary, cfg.Coverage, tooling, tokenAvailable, !opts.NoExternalTools),

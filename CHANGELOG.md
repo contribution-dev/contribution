@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Add recent-vs-prior trend comparison to `analysis.json` and private
+  `report.md`, covering test-evidence rate, large-change rate, fix/revert-like
+  churn, risky untested changes, and high-churn concentration without turning
+  the receipt into a score.
 - Add the next single-player evidence pass: PR durability now ties imported
   GitHub PRs to later fix/revert-like same-file churn, Go coverage paths are
   normalized to repo-relative files with lowest-coverage file summaries,

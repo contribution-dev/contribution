@@ -179,6 +179,47 @@ type WeaknessMap struct {
 	Confidence  Confidence `json:"confidence"`
 }
 
+// TrendWindow summarizes one local history window for before/after comparison.
+type TrendWindow struct {
+	Label                     string    `json:"label"`
+	Since                     time.Time `json:"since"`
+	Until                     time.Time `json:"until"`
+	Commits                   int       `json:"commits"`
+	SourceCommits             int       `json:"source_commits"`
+	TestTouchedCommits        int       `json:"test_touched_commits"`
+	SourceWithoutTestsCommits int       `json:"source_without_tests_commits"`
+	LargeCommits              int       `json:"large_commits"`
+	RiskyWithoutTestsCommits  int       `json:"risky_without_tests_commits"`
+	FixLikeCommits            int       `json:"fix_like_commits"`
+	HighChurnFiles            int       `json:"high_churn_files"`
+}
+
+// TrendMetric compares one receipt-style quality signal across two windows.
+type TrendMetric struct {
+	ID           string     `json:"id"`
+	Label        string     `json:"label"`
+	CurrentValue float64    `json:"current_value"`
+	PriorValue   float64    `json:"prior_value"`
+	Delta        float64    `json:"delta"`
+	Unit         string     `json:"unit"`
+	Direction    string     `json:"direction"`
+	Evidence     string     `json:"evidence"`
+	Confidence   Confidence `json:"confidence"`
+	WhyItMatters string     `json:"why_it_matters,omitempty"`
+	NextAction   string     `json:"next_action,omitempty"`
+}
+
+// TrendComparison compares recent work with the immediately prior window.
+type TrendComparison struct {
+	Status        string        `json:"status"`
+	CurrentWindow TrendWindow   `json:"current_window"`
+	PriorWindow   TrendWindow   `json:"prior_window"`
+	Metrics       []TrendMetric `json:"metrics"`
+	Findings      []Finding     `json:"findings"`
+	Confidence    Confidence    `json:"confidence"`
+	Reason        string        `json:"reason,omitempty"`
+}
+
 // DeepDiveArtifact is a private-first reference to the artifact behind a pattern.
 type DeepDiveArtifact struct {
 	ID           string     `json:"id,omitempty"`
@@ -294,6 +335,7 @@ type AnalysisReport struct {
 	Signals          []Signal               `json:"signals"`
 	PRCards          []PRQualityCard        `json:"pr_quality_cards"`
 	WeaknessMap      WeaknessMap            `json:"weakness_map"`
+	Trends           TrendComparison        `json:"trends"`
 	DeepDives        AnalysisDeepDives      `json:"deep_dives"`
 	Profile          ProfileSummary         `json:"profile"`
 	SetupActions     []SetupAction          `json:"setup_actions"`

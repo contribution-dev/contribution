@@ -46,6 +46,52 @@ func ValidateFormat(format string) error {
 	}
 }
 
+// ResolveInputs returns explicit coverage paths or, when none were passed,
+// an existing repo-relative configured coverage artifact.
+func ResolveInputs(explicitPaths []string, format string, repoRoot string, configuredPath string, configuredFormat string) ([]string, string, []string) {
+	format = strings.TrimSpace(format)
+	if format == "" {
+		format = string(FormatAuto)
+	}
+	paths := nonEmptyPaths(explicitPaths)
+	if len(paths) > 0 {
+		return paths, format, nil
+	}
+	configuredPath = strings.TrimSpace(configuredPath)
+	if configuredPath == "" {
+		return nil, format, nil
+	}
+	resolved := configuredPath
+	if !filepath.IsAbs(resolved) {
+		resolved = filepath.Join(repoRoot, configuredPath)
+	}
+	info, err := os.Stat(resolved)
+	if err != nil {
+		if os.IsNotExist(err) {
+			return nil, format, []string{fmt.Sprintf("Configured coverage path %s was not found; coverage was not imported.", configuredPath)}
+		}
+		return nil, format, []string{fmt.Sprintf("Configured coverage path %s could not be checked: %v", configuredPath, err)}
+	}
+	if info.IsDir() {
+		return nil, format, []string{fmt.Sprintf("Configured coverage path %s is a directory; coverage was not imported.", configuredPath)}
+	}
+	if format == string(FormatAuto) && strings.TrimSpace(configuredFormat) != "" {
+		format = strings.TrimSpace(configuredFormat)
+	}
+	return []string{resolved}, format, nil
+}
+
+func nonEmptyPaths(paths []string) []string {
+	out := make([]string, 0, len(paths))
+	for _, path := range paths {
+		path = strings.TrimSpace(path)
+		if path != "" {
+			out = append(out, path)
+		}
+	}
+	return out
+}
+
 // ParseFiles imports coverage files. Unsupported or outside-repo entries are
 // ignored; unreadable explicit coverage files return an error.
 func ParseFiles(paths []string, format Format, repoRoot string) (Report, error) {

@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Add single-player preflight and coverage polish: `preflight --worktree` now
+  checks staged, unstaged, and untracked local changes; `analyze` and
+  `preflight` auto-import an existing configured coverage artifact; and public
+  profile exports omit risky selected artifacts by default.
 - Add recent-vs-prior trend comparison to `analysis.json` and private
   `report.md`, covering test-evidence rate, large-change rate, fix/revert-like
   churn, risky untested changes, and high-churn concentration without turning

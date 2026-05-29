@@ -312,6 +312,50 @@ func TestDiffRejectsOptionLikeRefs(t *testing.T) {
 	}
 }
 
+func TestDiffWorktreeIncludesTrackedAndUntrackedChanges(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repoPath := t.TempDir()
+	runGit(t, repoPath, "init", "-b", "main")
+	runGit(t, repoPath, "config", "user.email", "dogfood@example.test")
+	runGit(t, repoPath, "config", "user.name", "Dogfood User")
+	writeTestFile(t, repoPath, "internal/app.go", "package app\n\nfunc Value() int { return 1 }\n")
+	runGit(t, repoPath, "add", ".")
+	runGit(t, repoPath, "commit", "-m", "initial fixture")
+
+	writeTestFile(t, repoPath, "internal/app.go", "package app\n\nfunc Value() int { return 2 }\n")
+	writeTestFile(t, repoPath, "internal/new.go", "package app\n\nfunc NewValue() int { return 3 }\n")
+
+	diff, err := DiffWorktree(context.Background(), repoPath, "HEAD")
+	if err != nil {
+		t.Fatalf("DiffWorktree() error = %v", err)
+	}
+	if len(diff.Files) != 2 {
+		t.Fatalf("files = %+v, want tracked and untracked changes", diff.Files)
+	}
+	tracked := changedFileByPath(diff.Files, "internal/app.go")
+	if tracked == nil || tracked.Additions == 0 || len(tracked.LineRanges) == 0 {
+		t.Fatalf("tracked worktree change missing line evidence: %+v", diff.Files)
+	}
+	untracked := changedFileByPath(diff.Files, "internal/new.go")
+	if untracked == nil || untracked.Additions != 3 || len(untracked.LineRanges) != 1 || untracked.LineRanges[0].End != 3 {
+		t.Fatalf("untracked file = %+v, want full-file addition line range", untracked)
+	}
+	if diff.FileSummary.SourceFiles != 2 {
+		t.Fatalf("source files = %d, want 2", diff.FileSummary.SourceFiles)
+	}
+}
+
+func changedFileByPath(files []ChangedFile, path string) *ChangedFile {
+	for i := range files {
+		if files[i].Path == path {
+			return &files[i]
+		}
+	}
+	return nil
+}
+
 func writeTestFile(t *testing.T, root string, rel string, content string) {
 	t.Helper()
 	target := filepath.Join(root, rel)

@@ -2,6 +2,7 @@
 package git
 
 import (
+	"bytes"
 	"context"
 	"crypto/sha256"
 	"encoding/hex"
@@ -427,6 +428,40 @@ func Diff(ctx context.Context, repoPath, base, head string) (DiffSummary, error)
 	return DiffSummary{Files: files, FileSummary: summary}, nil
 }
 
+// DiffWorktree computes changed files between base and the current worktree.
+// It includes tracked staged/unstaged changes plus untracked non-ignored files.
+func DiffWorktree(ctx context.Context, repoPath, base string) (DiffSummary, error) {
+	if base == "" {
+		base = "main"
+	}
+	resolvedBase, err := ResolveCommit(ctx, repoPath, base)
+	if err != nil {
+		return DiffSummary{}, err
+	}
+	out, err := gitOutput(ctx, repoPath, "diff", "--numstat", resolvedBase, "--")
+	if err != nil {
+		return DiffSummary{}, fmt.Errorf("git diff %s: %w", resolvedBase, err)
+	}
+	files := parseNumstat(out)
+	patch, patchErr := gitOutput(ctx, repoPath, "diff", "--unified=0", "--no-color", resolvedBase, "--")
+	if patchErr == nil {
+		ranges := parseUnifiedChangedLineRanges(patch)
+		for i := range files {
+			files[i].LineRanges = ranges[files[i].Path]
+		}
+	}
+	untracked, err := untrackedChangedFiles(ctx, repoPath)
+	if err != nil {
+		return DiffSummary{}, err
+	}
+	files = append(files, untracked...)
+	summary := newFileSummary()
+	for _, file := range files {
+		addFileSummary(&summary, file.Path)
+	}
+	return DiffSummary{Files: files, FileSummary: summary}, nil
+}
+
 // ResolveCommit resolves a user-provided ref to a commit SHA for diff commands.
 func ResolveCommit(ctx context.Context, repoPath string, ref string) (string, error) {
 	ref = strings.TrimSpace(ref)
@@ -438,6 +473,67 @@ func ResolveCommit(ctx context.Context, repoPath string, ref string) (string, er
 		return "", fmt.Errorf("invalid git ref %q: %w", ref, err)
 	}
 	return strings.TrimSpace(out), nil
+}
+
+func untrackedChangedFiles(ctx context.Context, repoPath string) ([]ChangedFile, error) {
+	out, err := gitOutput(ctx, repoPath, "ls-files", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, fmt.Errorf("collect untracked files: %w", err)
+	}
+	var files []ChangedFile
+	for _, rel := range strings.Split(out, "\x00") {
+		if rel == "" {
+			continue
+		}
+		rel = filepath.ToSlash(filepath.Clean(rel))
+		if rel == "." || strings.HasPrefix(rel, "../") || filepath.IsAbs(rel) {
+			continue
+		}
+		file, ok, err := untrackedChangedFile(repoPath, rel)
+		if err != nil {
+			return nil, err
+		}
+		if ok {
+			files = append(files, file)
+		}
+	}
+	return files, nil
+}
+
+func untrackedChangedFile(repoPath string, rel string) (ChangedFile, bool, error) {
+	path := filepath.Join(repoPath, filepath.FromSlash(rel))
+	info, err := os.Stat(path)
+	if err != nil {
+		if errors.Is(err, os.ErrNotExist) {
+			return ChangedFile{}, false, nil
+		}
+		return ChangedFile{}, false, fmt.Errorf("stat untracked path %s: %w", rel, err)
+	}
+	if info.IsDir() {
+		return ChangedFile{}, false, nil
+	}
+	// #nosec G304 -- path comes from git ls-files output constrained to repo-relative paths.
+	data, err := os.ReadFile(path)
+	if err != nil {
+		return ChangedFile{}, false, fmt.Errorf("read untracked path %s: %w", rel, err)
+	}
+	lines := countTextLines(data)
+	file := ChangedFile{Path: rel, Additions: lines}
+	if lines > 0 {
+		file.LineRanges = []signals.LineRange{{Start: 1, End: lines}}
+	}
+	return file, true, nil
+}
+
+func countTextLines(data []byte) int {
+	if len(data) == 0 {
+		return 0
+	}
+	lines := bytes.Count(data, []byte{'\n'})
+	if data[len(data)-1] != '\n' {
+		lines++
+	}
+	return lines
 }
 
 func parseHistory(out string, maxCommits int) History {

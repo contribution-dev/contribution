@@ -643,7 +643,12 @@ function runSmoke(binary, tempRoot, options = {}) {
   writeRepoFile(
     analysisRepo,
     ".gitignore",
-    ".contribution/\n.pnpm-store/\n.code-reviews/\n.tools/\nbin/\nnode_modules/\ndocs-shared/\n",
+    ".contribution/\n.pnpm-store/\n.code-reviews/\n.tools/\nbin/\nnode_modules/\ndocs-shared/\ncoverage.out\n",
+  );
+  writeRepoFile(
+    analysisRepo,
+    ".contribution.yml",
+    "version: 1\ncoverage:\n  path: coverage.out\n  format: go\n",
   );
   writeRepoFile(
     analysisRepo,
@@ -662,10 +667,10 @@ function runSmoke(binary, tempRoot, options = {}) {
   writeRepoFile(analysisRepo, "internal/untracked.go", "package app\n");
   writeIgnoredArtifacts(analysisRepo);
   const analysisRepoVisibleFiles = gitVisibleExistingFiles(analysisRepo);
-  const analysisCoverage = path.join(tempRoot, "analysis-coverage.out");
+  const analysisCoverage = path.join(analysisRepo, "coverage.out");
   writeRepoFile(
-    tempRoot,
-    "analysis-coverage.out",
+    analysisRepo,
+    "coverage.out",
     "mode: set\ninternal/app.go:3.1,3.30 1 1\n",
   );
 
@@ -709,10 +714,6 @@ function runSmoke(binary, tempRoot, options = {}) {
       "json",
       "--public-safe",
       "--no-external-tools",
-      "--coverage",
-      analysisCoverage,
-      "--coverage-format",
-      "go",
     ],
     { cwd: analysisRepo, env, byName: options.byName },
   );
@@ -732,7 +733,7 @@ function runSmoke(binary, tempRoot, options = {}) {
   assert(analysis.version === 1, "analysis.json version mismatch");
   assert(
     analysis.coverage?.status === "available",
-    "analyze did not import coverage",
+    `analyze did not import configured coverage from ${analysisCoverage}`,
   );
   assert(analysis.deep_dives, "analysis missing deep_dive evidence object");
   assert(
@@ -938,12 +939,25 @@ function runSmoke(binary, tempRoot, options = {}) {
   assertPublicSafeReportQuality(path.join(privateReportRoot, "report.md"));
 
   const preflightRepoInfo = createGitRepo(tempRoot, "preflight-repo");
+  writeRepoFile(preflightRepoInfo.repo, ".gitignore", "coverage.out\n");
+  writeRepoFile(
+    preflightRepoInfo.repo,
+    ".contribution.yml",
+    "version: 1\ncoverage:\n  path: coverage.out\n  format: go\n",
+  );
+  commitAll(preflightRepoInfo.repo, "configure contribution");
+  writeRepoFile(
+    preflightRepoInfo.repo,
+    "internal/auth/previous.go",
+    "package auth\n\nfunc PreviousSessionCheck() bool { return true }\n",
+  );
+  commitAll(preflightRepoInfo.repo, "change auth without tests");
+  const preflightBase = currentHeadSHA(preflightRepoInfo.repo);
   writeRepoFile(
     preflightRepoInfo.repo,
     "internal/auth/session.go",
     "package auth\n\nfunc ValidateSession() bool { return true }\n",
   );
-  commitAll(preflightRepoInfo.repo, "change auth session");
   const preflightCoverage = path.join(preflightRepoInfo.repo, "coverage.out");
   writeRepoFile(
     preflightRepoInfo.repo,
@@ -956,17 +970,12 @@ function runSmoke(binary, tempRoot, options = {}) {
     [
       "preflight",
       "--base",
-      preflightRepoInfo.sha,
-      "--head",
-      "HEAD",
+      preflightBase,
+      "--worktree",
       "--output",
       preflightRoot,
       "--format",
       "json",
-      "--coverage",
-      preflightCoverage,
-      "--coverage-format",
-      "go",
     ],
     { cwd: preflightRepoInfo.repo, env, byName: options.byName },
   );
@@ -995,7 +1004,7 @@ function runSmoke(binary, tempRoot, options = {}) {
   );
   assert(
     preflightJSON.coverage?.status === "available",
-    "preflight did not import changed-line coverage",
+    `preflight did not import configured changed-line coverage from ${preflightCoverage}`,
   );
   assert(
     preflightJSON.rubric?.some((item) => item.id === "changed_line_coverage"),

@@ -292,7 +292,7 @@ func ProfileExport(analysis signals.AnalysisReport) signals.ProfileExport {
 	export.Strengths = publicFindings(analysis.Profile.Strengths, 3, pathReplacements)
 	export.ImprovementTrends = publicFindings(analysis.Profile.ImprovementTrends, 2, pathReplacements)
 	export.BadgeCandidates = analysis.Profile.BadgeCandidates
-	export.SelectedArtifacts = publicCards(analysis.PRCards, 3, pathReplacements)
+	export.SelectedArtifacts = publicProfileCards(analysis.PRCards, 3, pathReplacements)
 	export.Redaction.PublicSafe = true
 	export.Redaction.RawCodeIncluded = false
 	export.Redaction.RawDiffsIncluded = false
@@ -619,6 +619,22 @@ func publicCards(cards []signals.PRQualityCard, limit int, replacements ...[]pat
 	out := make([]signals.PRQualityCard, 0, limit)
 	for i := 0; i < limit; i++ {
 		out = append(out, publicCard(cards[i], i+1, replacements...))
+	}
+	return out
+}
+
+func publicProfileCards(cards []signals.PRQualityCard, limit int, replacements ...[]pathReplacement) []signals.PRQualityCard {
+	out := make([]signals.PRQualityCard, 0, min(limit, len(cards)))
+	for _, label := range []string{"strong", "mixed"} {
+		for _, card := range cards {
+			if card.Label != label {
+				continue
+			}
+			out = append(out, publicCard(card, len(out)+1, replacements...))
+			if len(out) >= limit {
+				return out
+			}
+		}
 	}
 	return out
 }

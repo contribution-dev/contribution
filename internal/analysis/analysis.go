@@ -128,7 +128,8 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 	allSignals = append(allSignals, historySignals...)
 	allSignals = append(allSignals, tools.Signals(repo.ID, tooling, start)...)
 	allSignals = append(allSignals, analyzerSignals...)
-	coverageSummary, coverageSignals, coverageLimitations, err := analyzeCoverage(opts.CoveragePaths, opts.CoverageFormat, repo.Path, repo.ID, start)
+	coveragePaths, coverageFormat, coverageInputLimitations := coveragepkg.ResolveInputs(opts.CoveragePaths, opts.CoverageFormat, repo.Path, cfg.Coverage.Path, cfg.Coverage.Format)
+	coverageSummary, coverageSignals, coverageLimitations, err := analyzeCoverage(coveragePaths, coverageFormat, repo.Path, repo.ID, start)
 	if err != nil {
 		return "", err
 	}
@@ -137,6 +138,7 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 	limitations = append(limitations, historyLimitations...)
 	limitations = append(limitations, tooling.Limitations...)
 	limitations = append(limitations, analyzerLimitations...)
+	limitations = append(limitations, coverageInputLimitations...)
 	limitations = append(limitations, coverageLimitations...)
 	if metadata.Reason != "" {
 		limitations = append(limitations, metadata.Reason)

@@ -34,10 +34,12 @@ Run the CLI locally:
 ```bash
 scripts/with-tools go run ./cmd/contribution analyze --repo . --output /tmp/contribution-report --format all --no-external-tools
 scripts/with-tools go run ./cmd/contribution preflight --base main --head HEAD --output /tmp/contribution-preflight --format all
+scripts/with-tools go run ./cmd/contribution preflight --base main --worktree --output /tmp/contribution-preflight --format all
 ```
 
 For higher-confidence personal dogfooding, import coverage and GitHub metadata
-when available:
+when available. If `.contribution.yml` has coverage guidance and the configured
+coverage artifact exists, `analyze` and `preflight` import it automatically:
 
 ```bash
 go test ./... -coverprofile=coverage.out
@@ -51,12 +53,13 @@ Core product commands:
 - `contribution doctor` reports required and optional tool availability.
 - `contribution analyze` writes `analysis.json`, `report.md`,
   `profile.export.json`, `share-card.json`, and `tooling.json`, with optional
-  Go/LCOV coverage import, GitHub durability enrichment, optional analyzer
-  findings when tools are installed, and recent-vs-prior trend comparison for
-  solo dogfooding.
+  Go/LCOV coverage import from flags or configured artifacts, GitHub durability
+  enrichment, optional analyzer findings when tools are installed, and
+  recent-vs-prior trend comparison for solo dogfooding.
 - `contribution preflight` writes V2 current-diff readiness artifacts with
-  changed-line ranges, optional Go/LCOV coverage, policy rubric evidence, and
-  recent personal pattern checks.
+  changed-line ranges, optional Go/LCOV coverage from flags or configured
+  artifacts, policy rubric evidence, recent personal pattern checks, and a
+  `--worktree` mode for staged, unstaged, and untracked local changes.
 - `contribution packet` writes a public-safe V2 friend-review packet.
 - `contribution import-feedback` imports public-safe friend feedback exports.
 - `contribution export-profile` writes only public-safe web profile artifacts.

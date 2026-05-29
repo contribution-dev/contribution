@@ -8,6 +8,7 @@ import (
 	"time"
 
 	"github.com/contribution-dev/contribution/internal/config"
+	coveragepkg "github.com/contribution-dev/contribution/internal/coverage"
 	gitrepo "github.com/contribution-dev/contribution/internal/git"
 	preflightpkg "github.com/contribution-dev/contribution/internal/preflight"
 	"github.com/contribution-dev/contribution/internal/report"
@@ -24,6 +25,7 @@ func newPreflightCommand(out io.Writer) *cobra.Command {
 	var coveragePaths []string
 	var coverageFormat string
 	var failOnRisk string
+	var worktree bool
 	cmd := &cobra.Command{
 		Use:   "preflight",
 		Short: "Analyze the current diff before review.",
@@ -58,16 +60,24 @@ func newPreflightCommand(out io.Writer) *cobra.Command {
 				head = "HEAD"
 			}
 			start := time.Now().UTC()
-			diff, err := gitrepo.Diff(ctx, repo.Path, base, head)
+			var diff gitrepo.DiffSummary
+			if worktree {
+				diff, err = gitrepo.DiffWorktree(ctx, repo.Path, base)
+				head = "WORKTREE"
+			} else {
+				diff, err = gitrepo.Diff(ctx, repo.Path, base, head)
+			}
 			if err != nil {
 				return err
 			}
-			coverage, err := preflightpkg.Coverage(coveragePaths, coverageFormat, repo.Path, diff.Files)
+			effectiveCoveragePaths, effectiveCoverageFormat, coverageInputLimitations := coveragepkg.ResolveInputs(coveragePaths, coverageFormat, repo.Path, cfg.Coverage.Path, cfg.Coverage.Format)
+			coverage, err := preflightpkg.Coverage(effectiveCoveragePaths, effectiveCoverageFormat, repo.Path, diff.Files)
 			if err != nil {
 				return err
 			}
 			tooling := tools.Discover(ctx, true, start)
 			limitations := append([]string{}, cfgWarnings...)
+			limitations = append(limitations, coverageInputLimitations...)
 			limitations = append(limitations, tooling.Limitations...)
 			personal := signals.PersonalPreflightContext{}
 			history, _, historyLimitations, historyErr := gitrepo.CollectHistory(ctx, repo.Path, repo.ID, start.AddDate(0, 0, -cfg.Analysis.SinceDays), cfg.Analysis.MaxPRs, start)
@@ -99,5 +109,6 @@ func newPreflightCommand(out io.Writer) *cobra.Command {
 	cmd.Flags().StringArrayVar(&coveragePaths, "coverage", nil, "Coverage artifact path. May be repeated.")
 	cmd.Flags().StringVar(&coverageFormat, "coverage-format", "auto", "Coverage format: auto, go, or lcov.")
 	cmd.Flags().StringVar(&failOnRisk, "fail-on-risk", "never", "Exit nonzero for risk: never, medium, or high.")
+	cmd.Flags().BoolVar(&worktree, "worktree", false, "Compare base against current tracked and untracked worktree changes.")
 	return cmd
 }

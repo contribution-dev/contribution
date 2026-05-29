@@ -3,6 +3,7 @@ package coverage
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 
 	"github.com/contribution-dev/contribution/internal/signals"
@@ -44,6 +45,38 @@ github.com/example/repo/internal/app/extra.go:5.1,5.8 1 1
 	}
 	if _, ok := report.Files["internal/app/extra.go"]; !ok {
 		t.Fatalf("module-path coverage was not normalized: %+v", report.Files)
+	}
+}
+
+func TestResolveInputsUsesExistingConfiguredCoverage(t *testing.T) {
+	repo := t.TempDir()
+	cover := filepath.Join(repo, "coverage.out")
+	if err := os.WriteFile(cover, []byte("mode: set\n"), 0o600); err != nil {
+		t.Fatalf("write coverage: %v", err)
+	}
+
+	paths, format, warnings := ResolveInputs(nil, "auto", repo, "coverage.out", "go")
+	if len(paths) != 1 || paths[0] != cover {
+		t.Fatalf("paths = %#v, want configured coverage path", paths)
+	}
+	if format != "go" {
+		t.Fatalf("format = %q, want configured format", format)
+	}
+	if len(warnings) != 0 {
+		t.Fatalf("warnings = %v, want none", warnings)
+	}
+}
+
+func TestResolveInputsWarnsWhenConfiguredCoverageMissing(t *testing.T) {
+	paths, format, warnings := ResolveInputs(nil, "auto", t.TempDir(), "coverage.out", "go")
+	if len(paths) != 0 {
+		t.Fatalf("paths = %#v, want none", paths)
+	}
+	if format != "auto" {
+		t.Fatalf("format = %q, want original auto without imported path", format)
+	}
+	if len(warnings) != 1 || !strings.Contains(warnings[0], "Configured coverage path coverage.out was not found") {
+		t.Fatalf("warnings = %v, want missing configured coverage warning", warnings)
 	}
 }
 

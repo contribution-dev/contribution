@@ -71,6 +71,42 @@ func TestProfileExportIsPublicSafe(t *testing.T) {
 	}
 }
 
+func TestProfileExportOmitsRiskyArtifactsByDefault(t *testing.T) {
+	analysis := signals.AnalysisReport{
+		GeneratedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Profile: signals.ProfileSummary{
+			Headline:           "AI-native contribution profile",
+			AnalyzedPRs:        3,
+			AnalysisWindowDays: 90,
+			Confidence:         signals.ConfidenceMedium,
+		},
+		PRCards: []signals.PRQualityCard{{
+			Title:      "Risky artifact",
+			Label:      "risky",
+			Confidence: signals.ConfidenceMedium,
+			MainRisk:   "private risk",
+		}, {
+			Title:      "Strong artifact",
+			Label:      "strong",
+			Confidence: signals.ConfidenceMedium,
+		}, {
+			Title:      "Mixed artifact",
+			Label:      "mixed",
+			Confidence: signals.ConfidenceMedium,
+		}},
+	}
+
+	export := ProfileExport(analysis)
+	if len(export.SelectedArtifacts) != 2 {
+		t.Fatalf("selected artifacts = %+v, want strong and mixed only", export.SelectedArtifacts)
+	}
+	for _, artifact := range export.SelectedArtifacts {
+		if artifact.Label == "risky" || artifact.MainRisk != "" {
+			t.Fatalf("public profile retained risky artifact details: %+v", export.SelectedArtifacts)
+		}
+	}
+}
+
 func TestPublicSafeAnalysisRedactsPrivateMetadata(t *testing.T) {
 	secret := "token=dogfood-secret-value"
 	privateRoot := "/private/tmp/contribution-secret-repo"

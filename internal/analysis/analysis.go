@@ -12,6 +12,7 @@ import (
 	"time"
 
 	"github.com/contribution-dev/contribution/internal/config"
+	coveragepkg "github.com/contribution-dev/contribution/internal/coverage"
 	gitrepo "github.com/contribution-dev/contribution/internal/git"
 	"github.com/contribution-dev/contribution/internal/github"
 	"github.com/contribution-dev/contribution/internal/report"
@@ -35,6 +36,8 @@ type Options struct {
 	Format          string
 	PublicSafe      bool
 	NoExternalTools bool
+	CoveragePaths   []string
+	CoverageFormat  string
 }
 
 // Run analyzes a repository and writes the configured report artifacts.
@@ -44,6 +47,9 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 		opts.Format = "all"
 	}
 	if err := report.ValidateFormat(opts.Format, true); err != nil {
+		return "", err
+	}
+	if err := coveragepkg.ValidateFormat(opts.CoverageFormat); err != nil {
 		return "", err
 	}
 	if err := writeLine(out, "Analyzing repo..."); err != nil {
@@ -109,13 +115,19 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 	allSignals := append([]signals.Signal{}, inventorySignals...)
 	allSignals = append(allSignals, historySignals...)
 	allSignals = append(allSignals, tools.Signals(repo.ID, tooling, start)...)
+	coverageSummary, coverageSignals, coverageLimitations, err := analyzeCoverage(opts.CoveragePaths, opts.CoverageFormat, repo.Path, repo.ID, start)
+	if err != nil {
+		return "", err
+	}
+	allSignals = append(allSignals, coverageSignals...)
 	limitations := append([]string{}, cfgWarnings...)
 	limitations = append(limitations, historyLimitations...)
 	limitations = append(limitations, tooling.Limitations...)
+	limitations = append(limitations, coverageLimitations...)
 	if metadata.Reason != "" {
 		limitations = append(limitations, metadata.Reason)
 	}
-	limitations = append(limitations, "No coverage report was imported, so test conclusions use file-touch evidence only.")
+	limitations = append(limitations, metadata.Limitations...)
 	if !metadata.Available {
 		limitations = append(limitations, "Review burden is unavailable without imported PR review metadata.")
 	}
@@ -125,6 +137,7 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 		History:     history,
 		GitHub:      metadata,
 		Inventory:   inventory,
+		Coverage:    coverageSummary,
 		Signals:     allSignals,
 		SinceDays:   sinceDays,
 		MaxCards:    maxPRs,
@@ -147,13 +160,16 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 			OutputDirectory:          outputDir,
 			GitHubMetadataConfigured: tokenAvailable,
 		},
-		Tooling:     tooling,
-		Inventory:   inventory,
-		Signals:     allSignals,
-		PRCards:     score.Cards,
-		WeaknessMap: score.WeaknessMap,
-		Profile:     score.Profile,
-		Limitations: uniqueStrings(limitations),
+		Tooling:      tooling,
+		Inventory:    inventory,
+		Coverage:     coverageSummary,
+		Signals:      allSignals,
+		PRCards:      score.Cards,
+		WeaknessMap:  score.WeaknessMap,
+		DeepDives:    score.DeepDives,
+		Profile:      score.Profile,
+		SetupActions: buildSetupActions(repo, cfgWarnings, metadata, coverageSummary, tooling, tokenAvailable, !opts.NoExternalTools),
+		Limitations:  uniqueStrings(limitations),
 		Privacy: signals.PrivacySummary{
 			PublicSafe:                         opts.PublicSafe,
 			RawCodeIncluded:                    false,
@@ -186,6 +202,89 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 		}
 	}
 	return outputDir, nil
+}
+
+func analyzeCoverage(paths []string, format string, repoPath string, repoID string, createdAt time.Time) (signals.CoverageSummary, []signals.Signal, []string, error) {
+	if len(paths) == 0 {
+		summary := signals.CoverageSummary{Status: "unknown", Reason: "No coverage report was imported."}
+		return summary, nil, []string{"No coverage report was imported, so test conclusions use file-touch evidence only."}, nil
+	}
+	report, err := coveragepkg.ParseFiles(paths, coveragepkg.Format(format), repoPath)
+	if err != nil {
+		return signals.CoverageSummary{}, nil, nil, err
+	}
+	summary := coveragepkg.Summarize(report)
+	if summary.Status != "available" {
+		return summary, nil, []string{summary.Reason}, nil
+	}
+	sig := signals.New(repoID, "coverage", "coverage_line_percent", "repo", repoID, signals.SeverityInfo, signals.DirectionPositive, signals.ConfidenceMedium, summary.Percent, "percent", fmt.Sprintf("Imported coverage covers %.1f%% of executable lines in provided reports.", summary.Percent), true, createdAt)
+	return summary, []signals.Signal{sig}, nil, nil
+}
+
+func buildSetupActions(repo gitrepo.Repo, cfgWarnings []string, metadata github.Metadata, coverage signals.CoverageSummary, tooling signals.ToolingReport, tokenAvailable bool, allowExternalToolChecks bool) []signals.SetupAction {
+	var actions []signals.SetupAction
+	for _, warning := range cfgWarnings {
+		if strings.Contains(warning, "No .contribution.yml") {
+			actions = append(actions, signals.SetupAction{
+				ID:               "add_config",
+				Label:            "Add repo-local configuration",
+				Command:          "contribution init",
+				Why:              "A config file lets the report use your default branch, analysis window, preflight limits, risky paths, and self-reported AI workflow context.",
+				ConfidenceImpact: "medium",
+			})
+			break
+		}
+	}
+	if !tokenAvailable && repo.GitHubOwner != "" && repo.GitHubRepo != "" {
+		command := "contribution analyze --repo . --github-token env:GITHUB_TOKEN --format all"
+		if allowExternalToolChecks && github.GHTokenAvailable() {
+			command = "contribution analyze --repo . --github-token gh --format all"
+		}
+		actions = append(actions, signals.SetupAction{
+			ID:               "enable_github_metadata",
+			Label:            "Enable PR review metadata",
+			Command:          command,
+			Why:              "GitHub metadata adds PR file lists, review burden, requested changes, and check-run evidence. That raises confidence beyond local commit heuristics.",
+			ConfidenceImpact: "high",
+		})
+	} else if tokenAvailable && !metadata.Available && repo.GitHubOwner != "" && repo.GitHubRepo != "" {
+		actions = append(actions, signals.SetupAction{
+			ID:               "fix_github_metadata",
+			Label:            "Fix GitHub metadata access",
+			Command:          "contribution doctor",
+			Why:              "A token was configured, but metadata was not available. Checking token scope and repo access would restore review-burden evidence.",
+			ConfidenceImpact: "high",
+		})
+	}
+	if coverage.Status != "available" {
+		actions = append(actions, signals.SetupAction{
+			ID:               "import_coverage",
+			Label:            "Import coverage evidence",
+			Command:          "go test ./... -coverprofile=coverage.out && contribution analyze --repo . --coverage coverage.out --coverage-format go --format all",
+			Why:              "Coverage import lets the report distinguish test-file presence from actual executable-line coverage.",
+			ConfidenceImpact: "medium",
+		})
+	}
+	if missingOptionalTools(tooling) > 0 {
+		actions = append(actions, signals.SetupAction{
+			ID:               "install_optional_tools",
+			Label:            "Install optional analyzers",
+			Command:          "contribution doctor",
+			Why:              "Optional static, secret, dependency, and vulnerability tools add safety evidence without becoming hard requirements.",
+			ConfidenceImpact: "medium",
+		})
+	}
+	return actions
+}
+
+func missingOptionalTools(tooling signals.ToolingReport) int {
+	var total int
+	for _, tool := range tooling.Tools {
+		if !tool.Required && !tool.Available {
+			total++
+		}
+	}
+	return total
 }
 
 func writeLine(out io.Writer, args ...any) error {

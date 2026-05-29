@@ -41,6 +41,27 @@ github.com/example/repo/internal/app/extra.go:5.1,5.8 1 1
 	}
 }
 
+func TestSummarizeCoverageReport(t *testing.T) {
+	report := Report{
+		Sources: []string{"coverage.out"},
+		Files: map[string]File{
+			"internal/app.go": {Lines: map[int]bool{1: true, 2: false, 3: true}},
+			"internal/api.go": {Lines: map[int]bool{10: false}},
+		},
+	}
+
+	got := Summarize(report)
+	if got.Status != "available" {
+		t.Fatalf("Status = %q, want available", got.Status)
+	}
+	if got.CoveredLines != 2 || got.TotalLines != 4 || got.Percent != 50 {
+		t.Fatalf("coverage = %d/%d %.1f, want 2/4 50", got.CoveredLines, got.TotalLines, got.Percent)
+	}
+	if len(got.Files) != 2 || got.Files[0].Path != "internal/api.go" || got.Files[1].Path != "internal/app.go" {
+		t.Fatalf("files not sorted/stable: %+v", got.Files)
+	}
+}
+
 func TestParseLCOVNormalizesAbsolutePaths(t *testing.T) {
 	repo := t.TempDir()
 	source := filepath.Join(repo, "src", "index.ts")

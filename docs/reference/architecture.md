@@ -10,10 +10,10 @@ tooling layer for repository automation.
   tests. It should delegate product behavior to narrow internal packages.
 - `internal/analysis` owns the analyze workflow orchestration.
 - `internal/preflight` owns changed-file policy, risk classification, coverage,
-  and fail-on-risk decisions.
+  personal pattern checks, and fail-on-risk decisions.
 - `internal/friend` owns friend-review packet creation and feedback import.
-- `internal/report` owns report rendering, public-safe exports, and shared
-  output format validation.
+- `internal/report` owns report rendering, private report explainability,
+  public-safe exports, and shared output format validation.
 - `internal/privacy` owns redaction primitives. Callers should not create
   parallel public-safe sanitizers.
 - Public Go packages should not be added until the project has a stable library
@@ -49,10 +49,16 @@ Both reuse the same redaction engine as `analyze --public-safe` and
 `report --public-safe`.
 
 V2 workflow artifacts stay CLI-owned. `preflight.json` carries current-diff
-readiness, changed-line coverage, and rubric evidence; `friend-review-packet.json`
-and `friend-feedback.export.json` bridge public-safe human feedback. The root
-GitHub Action is a wrapper around local CLI preflight only: it produces files
-and action outputs, but does not upload, comment, host, or persist state.
+readiness, changed-line coverage, recent personal pattern evidence, and rubric
+evidence; `friend-review-packet.json` and `friend-feedback.export.json` bridge
+public-safe human feedback. The root GitHub Action is a wrapper around local
+CLI preflight only: it produces files and action outputs, but does not upload,
+comment, host, or persist state.
+
+Single-player coaching stays local-first. Private `report.md` may explain
+artifact titles, high-churn files, no-test artifacts, coverage import, and
+confidence setup actions. Public-safe analysis/redaction must neutralize those
+details before profile, share-card, packet, or public-safe markdown output.
 
 The CLI should not contain hosted profile pages, OpenGraph rendering, X API
 integrations, Discord-specific sharing code, share buttons, social mention

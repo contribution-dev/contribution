@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"path"
 	"path/filepath"
+	"sort"
 	"strings"
 	"time"
 
@@ -16,6 +17,11 @@ import (
 
 // Build creates a V2 preflight report from a git diff, coverage, and policy.
 func Build(repo signals.RepoMetadata, base string, head string, diff gitrepo.DiffSummary, coverage signals.PreflightCoverage, policy config.PreflightConfig, tooling signals.ToolingReport, limitations []string, now time.Time) signals.PreflightReport {
+	return BuildWithPersonal(repo, base, head, diff, coverage, policy, signals.PersonalPreflightContext{}, tooling, limitations, now)
+}
+
+// BuildWithPersonal creates a V2 preflight report with recent single-player patterns.
+func BuildWithPersonal(repo signals.RepoMetadata, base string, head string, diff gitrepo.DiffSummary, coverage signals.PreflightCoverage, policy config.PreflightConfig, personal signals.PersonalPreflightContext, tooling signals.ToolingReport, limitations []string, now time.Time) signals.PreflightReport {
 	summary := diff.FileSummary
 	changed := changedFiles(diff.Files, policy.RiskyPaths)
 	summary.RiskyFiles = riskyFileCount(changed)
@@ -132,6 +138,15 @@ func Build(repo signals.RepoMetadata, base string, head string, diff gitrepo.Dif
 		risk = maxRisk(risk, "medium")
 		why = append(why, coverageItem.Evidence)
 	}
+	personalItems, personalWhy, personalFocus := personalRubric(changed, summary, totalLines, personal)
+	for _, item := range personalItems {
+		rubric = append(rubric, item)
+		if item.Status == "warn" || item.Status == "fail" {
+			risk = maxRisk(risk, "medium")
+		}
+	}
+	why = append(why, personalWhy...)
+	focus = append(focus, personalFocus...)
 	if len(why) == 0 {
 		why = append(why, "Diff is small and no risky path pattern was detected.")
 	}
@@ -164,6 +179,7 @@ func Build(repo signals.RepoMetadata, base string, head string, diff gitrepo.Dif
 		TestEvidence:      testEvidence,
 		Tooling:           tooling,
 		ReviewerFocus:     uniqueStrings(focus),
+		PersonalContext:   nonEmptyPersonalContext(personal),
 		Limitations:       uniqueStrings(limitations),
 		Privacy: signals.PrivacySummary{
 			PublicSafe:       false,
@@ -171,6 +187,29 @@ func Build(repo signals.RepoMetadata, base string, head string, diff gitrepo.Dif
 			RawDiffsIncluded: false,
 		},
 	}
+}
+
+// PersonalContextFromHistory summarizes recent local patterns for current-diff checks.
+func PersonalContextFromHistory(history gitrepo.History) signals.PersonalPreflightContext {
+	context := signals.PersonalPreflightContext{
+		HighChurnFiles:    append([]string{}, history.HighChurnFiles...),
+		ArtifactsAnalyzed: len(history.Commits),
+	}
+	var fileCounts []int
+	var lineCounts []int
+	for _, commit := range history.Commits {
+		if commit.SourceTouched && !commit.TestsTouched {
+			context.RecentSourceWithoutTests++
+		}
+		if len(commit.Files) == 0 {
+			continue
+		}
+		fileCounts = append(fileCounts, len(commit.Files))
+		lineCounts = append(lineCounts, gitrepo.TotalChangedLines(commit.Files))
+	}
+	context.TypicalFiles = median(fileCounts)
+	context.TypicalLines = median(lineCounts)
+	return context
 }
 
 // Coverage imports optional coverage reports and intersects them with changed lines.
@@ -279,6 +318,100 @@ func coverageRubric(coverage signals.PreflightCoverage, policy config.PreflightC
 	return item
 }
 
+func personalRubric(files []signals.PreflightChangedFile, summary signals.FileSummary, totalLines int, personal signals.PersonalPreflightContext) ([]signals.PreflightRubricItem, []string, []string) {
+	if personal.ArtifactsAnalyzed == 0 {
+		return nil, nil, nil
+	}
+	var items []signals.PreflightRubricItem
+	var why []string
+	var focus []string
+	if matches := changedHighChurnFiles(files, personal.HighChurnFiles); len(matches) > 0 {
+		evidence := fmt.Sprintf("Diff touches recently high-churn file(s): %s.", strings.Join(matches, ", "))
+		items = append(items, signals.PreflightRubricItem{
+			ID:             "personal_high_churn",
+			Label:          "Personal high-churn pattern",
+			Status:         "warn",
+			Severity:       "medium",
+			Evidence:       evidence,
+			Recommendation: "Add regression coverage and inspect recent edits before changing these files again.",
+		})
+		why = append(why, evidence)
+		focus = append(focus, "regression risk in recently high-churn files")
+	}
+	if personal.RecentSourceWithoutTests > 0 && summary.SourceFiles > 0 && summary.TestFiles == 0 {
+		evidence := fmt.Sprintf("This repeats a recent pattern: %d source-changing artifact(s) in the analysis window lacked test-file evidence.", personal.RecentSourceWithoutTests)
+		items = append(items, signals.PreflightRubricItem{
+			ID:             "personal_no_test_repeat",
+			Label:          "Personal no-test pattern",
+			Status:         "warn",
+			Severity:       "medium",
+			Evidence:       evidence,
+			Recommendation: "Add nearby tests or explicitly document why this source-only change is safe.",
+		})
+		why = append(why, evidence)
+		focus = append(focus, "avoiding another source-only change without test evidence")
+	}
+	if personal.ArtifactsAnalyzed >= 3 && exceedsPersonalScope(summary.TotalFiles, totalLines, personal) {
+		evidence := fmt.Sprintf("Diff changes %d file(s) and %d line(s), above your recent typical scope of %d file(s) and %d line(s).", summary.TotalFiles, totalLines, personal.TypicalFiles, personal.TypicalLines)
+		items = append(items, signals.PreflightRubricItem{
+			ID:             "personal_scope",
+			Label:          "Personal review scope",
+			Status:         "warn",
+			Severity:       "medium",
+			Evidence:       evidence,
+			Recommendation: "Split unrelated behavior or call out review boundaries before opening review.",
+		})
+		why = append(why, evidence)
+		focus = append(focus, "scope compared with your recent reviewable changes")
+	}
+	return items, why, focus
+}
+
+func changedHighChurnFiles(files []signals.PreflightChangedFile, highChurn []string) []string {
+	if len(files) == 0 || len(highChurn) == 0 {
+		return nil
+	}
+	high := map[string]bool{}
+	for _, file := range highChurn {
+		high[file] = true
+	}
+	var matches []string
+	for _, file := range files {
+		if high[file.Path] {
+			matches = append(matches, file.Path)
+		}
+	}
+	return matches
+}
+
+func exceedsPersonalScope(files int, lines int, personal signals.PersonalPreflightContext) bool {
+	fileThreshold := maxInt(8, personal.TypicalFiles*2)
+	lineThreshold := maxInt(300, personal.TypicalLines*2)
+	if personal.TypicalFiles == 0 {
+		fileThreshold = 8
+	}
+	if personal.TypicalLines == 0 {
+		lineThreshold = 300
+	}
+	return files > fileThreshold || lines > lineThreshold
+}
+
+func nonEmptyPersonalContext(personal signals.PersonalPreflightContext) *signals.PersonalPreflightContext {
+	if personal.ArtifactsAnalyzed == 0 && len(personal.HighChurnFiles) == 0 && personal.RecentSourceWithoutTests == 0 && personal.TypicalFiles == 0 && personal.TypicalLines == 0 {
+		return nil
+	}
+	return &personal
+}
+
+func median(values []int) int {
+	if len(values) == 0 {
+		return 0
+	}
+	sorted := append([]int{}, values...)
+	sort.Ints(sorted)
+	return sorted[len(sorted)/2]
+}
+
 func matchesAnyPathPattern(filePath string, patterns []string) bool {
 	filePath = filepath.ToSlash(filepath.Clean(filePath))
 	for _, pattern := range patterns {
@@ -304,12 +437,7 @@ func matchesAnyPathPattern(filePath string, patterns []string) bool {
 
 // ValidateCoverageFormat checks the supported coverage format names.
 func ValidateCoverageFormat(format string) error {
-	switch format {
-	case "", "auto", "go", "lcov":
-		return nil
-	default:
-		return fmt.Errorf("unsupported coverage format %q", format)
-	}
+	return coveragepkg.ValidateFormat(format)
 }
 
 // ValidateFailOnRisk checks the supported fail-on-risk threshold names.
@@ -335,6 +463,13 @@ func maxRisk(current string, next string) string {
 		return next
 	}
 	return current
+}
+
+func maxInt(a int, b int) int {
+	if a > b {
+		return a
+	}
+	return b
 }
 
 func riskRank(value string) int {

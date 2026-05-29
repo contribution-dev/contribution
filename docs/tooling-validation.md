@@ -72,7 +72,8 @@ changes.
 
 - `pnpm dogfood:smoke` builds the real CLI and exercises it against temporary
   Git repos under `/tmp/contribution-*`, including V2 preflight coverage,
-  packet, feedback-import flows, and public-safe report quality checks.
+  analyze-time coverage import, packet, feedback-import flows, personal
+  preflight context, and public-safe report quality checks.
 - `pnpm dogfood:real` builds the real CLI, analyzes this repository into
   `/tmp/contribution-*`, checks inventory against Git-visible files, confirms
   local-only confidence is not `high`, and asserts public-safe outputs do not

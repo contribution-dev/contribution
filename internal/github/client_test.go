@@ -4,6 +4,8 @@ import (
 	"context"
 	"net/http"
 	"net/http/httptest"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 )
@@ -35,20 +37,55 @@ func TestResolveToken(t *testing.T) {
 	}
 }
 
+func TestResolveTokenFromGitHubCLI(t *testing.T) {
+	dir := t.TempDir()
+	ghPath := filepath.Join(dir, "gh")
+	if err := os.WriteFile(ghPath, []byte("#!/bin/sh\nprintf 'gh-cli-token\\n'\n"), 0o700); err != nil {
+		t.Fatalf("write fake gh: %v", err)
+	}
+	t.Setenv("PATH", dir)
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
+
+	got, ok := ResolveToken("gh")
+	if !ok || got != "gh-cli-token" {
+		t.Fatalf("ResolveToken(\"gh\") = %q/%v, want gh-cli-token/true", got, ok)
+	}
+}
+
 func TestFetchMergedPRsFiltersMergedAndLimits(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if got := r.Header.Get("Authorization"); got != "Bearer token" {
 			t.Fatalf("Authorization = %q, want bearer token", got)
 		}
-		if !strings.Contains(r.URL.RawQuery, "per_page=2") {
-			t.Fatalf("query = %q, want per_page=2", r.URL.RawQuery)
-		}
 		w.Header().Set("Content-Type", "application/json")
-		_, _ = w.Write([]byte(`[
-			{"number":1,"title":"open","html_url":"https://example.test/1","merged_at":null,"changed_files":9,"additions":1,"deletions":1},
-			{"number":2,"title":"merged two","html_url":"https://example.test/2","merged_at":"2026-01-01T00:00:00Z","changed_files":2,"additions":10,"deletions":3},
-			{"number":3,"title":"merged three","html_url":"https://example.test/3","merged_at":"2026-01-02T00:00:00Z","changed_files":3,"additions":20,"deletions":4}
-		]`))
+		switch {
+		case r.URL.Path == "/repos/owner/repo/pulls":
+			if !strings.Contains(r.URL.RawQuery, "per_page=4") {
+				t.Fatalf("query = %q, want per_page=4", r.URL.RawQuery)
+			}
+			_, _ = w.Write([]byte(`[
+				{"number":1,"title":"open","html_url":"https://example.test/1","merged_at":null},
+				{"number":2,"title":"merged two","html_url":"https://example.test/2","merged_at":"2026-01-01T00:00:00Z"},
+				{"number":3,"title":"merged three","html_url":"https://example.test/3","merged_at":"2026-01-02T00:00:00Z"}
+			]`))
+		case r.URL.Path == "/repos/owner/repo/pulls/2":
+			_, _ = w.Write([]byte(`{"number":2,"title":"merged two","html_url":"https://example.test/2","changed_files":2,"additions":10,"deletions":3,"commits":2,"comments":4,"review_comments":5,"head":{"sha":"abcdef123456"}}`))
+		case r.URL.Path == "/repos/owner/repo/pulls/3":
+			_, _ = w.Write([]byte(`{"number":3,"title":"merged three","html_url":"https://example.test/3","changed_files":3,"additions":20,"deletions":4,"commits":1,"head":{"sha":"123456abcdef"}}`))
+		case r.URL.Path == "/repos/owner/repo/pulls/2/files":
+			_, _ = w.Write([]byte(`[{"filename":"internal/app.go"},{"filename":"internal/app_test.go"}]`))
+		case r.URL.Path == "/repos/owner/repo/pulls/3/files":
+			_, _ = w.Write([]byte(`[{"filename":"internal/auth/session.go"}]`))
+		case r.URL.Path == "/repos/owner/repo/pulls/2/reviews":
+			_, _ = w.Write([]byte(`[{"state":"APPROVED"},{"state":"CHANGES_REQUESTED"}]`))
+		case r.URL.Path == "/repos/owner/repo/pulls/3/reviews":
+			_, _ = w.Write([]byte(`[]`))
+		case strings.HasSuffix(r.URL.Path, "/check-runs"):
+			_, _ = w.Write([]byte(`{"check_runs":[{"conclusion":"success"},{"conclusion":"failure"}]}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
 	}))
 	defer server.Close()
 	restoreGitHubTestClient(server.URL)
@@ -63,6 +100,12 @@ func TestFetchMergedPRsFiltersMergedAndLimits(t *testing.T) {
 	}
 	if len(got.PRs) != 2 || got.PRs[0].Number != 2 || got.PRs[1].Number != 3 {
 		t.Fatalf("PRs = %+v, want merged PRs 2 and 3", got.PRs)
+	}
+	if len(got.PRs[0].Files) != 2 || got.PRs[0].ReviewCount != 2 || got.PRs[0].RequestedChanges != 1 || got.PRs[0].CheckRuns != 2 || got.PRs[0].FailedChecks != 1 {
+		t.Fatalf("PR enrichment missing: %+v", got.PRs[0])
+	}
+	if got.PRs[0].ChangedFiles != 2 || got.PRs[0].Additions != 10 || got.PRs[0].Deletions != 3 || got.PRs[0].IssueComments != 4 || got.PRs[0].ReviewComments != 5 {
+		t.Fatalf("PR detail counts missing: %+v", got.PRs[0])
 	}
 }
 

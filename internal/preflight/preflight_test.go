@@ -60,6 +60,74 @@ func TestBuildPreflightAppliesPolicyAndCoverage(t *testing.T) {
 	}
 }
 
+func TestBuildPreflightUsesPersonalPatterns(t *testing.T) {
+	diff := gitrepo.DiffSummary{
+		Files: []gitrepo.ChangedFile{{
+			Path:      "internal/report/report.go",
+			Additions: 50,
+			Deletions: 10,
+		}},
+		FileSummary: signals.FileSummary{
+			TotalFiles:  1,
+			ByClass:     map[string]int{"source": 1},
+			ByLanguage:  map[string]int{"Go": 1},
+			SourceFiles: 1,
+		},
+	}
+
+	got := BuildWithPersonal(
+		signals.RepoMetadata{ID: "local:test"},
+		"main",
+		"HEAD",
+		diff,
+		signals.PreflightCoverage{Status: "unknown", Reason: "No coverage report was imported."},
+		config.PreflightConfig{MaxFiles: 20, MaxLines: 800},
+		signals.PersonalPreflightContext{
+			HighChurnFiles:           []string{"internal/report/report.go"},
+			RecentSourceWithoutTests: 3,
+			TypicalFiles:             2,
+			TypicalLines:             50,
+			ArtifactsAnalyzed:        8,
+		},
+		signals.ToolingReport{},
+		nil,
+		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	)
+
+	if got.PersonalContext == nil {
+		t.Fatal("PersonalContext = nil, want populated context")
+	}
+	if got.RiskLevel != "medium" {
+		t.Fatalf("RiskLevel = %q, want medium", got.RiskLevel)
+	}
+	for _, id := range []string{"personal_high_churn", "personal_no_test_repeat"} {
+		if !hasRubricStatus(got.Rubric, id, "warn") {
+			t.Fatalf("missing personal rubric %q: %+v", id, got.Rubric)
+		}
+	}
+}
+
+func TestPersonalContextFromHistory(t *testing.T) {
+	history := gitrepo.History{
+		Commits: []gitrepo.Commit{{
+			SHA:           "a",
+			Files:         []gitrepo.ChangedFile{{Path: "internal/app.go", Additions: 10}},
+			SourceTouched: true,
+		}, {
+			SHA:           "b",
+			Files:         []gitrepo.ChangedFile{{Path: "internal/app.go", Additions: 2}, {Path: "internal/app_test.go", Additions: 3}},
+			SourceTouched: true,
+			TestsTouched:  true,
+		}},
+		HighChurnFiles: []string{"internal/app.go"},
+	}
+
+	got := PersonalContextFromHistory(history)
+	if got.ArtifactsAnalyzed != 2 || got.RecentSourceWithoutTests != 1 || got.TypicalFiles != 2 || got.TypicalLines != 10 {
+		t.Fatalf("PersonalContextFromHistory() = %+v", got)
+	}
+}
+
 func TestPreflightReportJSONContract(t *testing.T) {
 	diff := gitrepo.DiffSummary{
 		Files: []gitrepo.ChangedFile{{

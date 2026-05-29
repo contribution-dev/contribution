@@ -289,22 +289,123 @@ func TestPublicSafeReportArtifactsDoNotRetainPrivateIdentifiers(t *testing.T) {
 	}
 }
 
+func TestMarkdownIncludesPrivateExplainabilityDeepDivesAndSetup(t *testing.T) {
+	analysis := signals.AnalysisReport{
+		GeneratedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Inventory:   signals.FileSummary{SourceFiles: 2, TestFiles: 1},
+		Coverage:    signals.CoverageSummary{Status: "available", CoveredLines: 7, TotalLines: 10, Percent: 70, Files: []signals.PreflightFileCoverage{{Path: "internal/app.go", CoveredLines: 7, TotalLines: 10, Percent: 70}}},
+		PRCards: []signals.PRQualityCard{{
+			Title:        "Refactor checkout flow",
+			Label:        "risky",
+			Confidence:   signals.ConfidenceMedium,
+			Scope:        "4 files and 200 lines",
+			TestEvidence: "No test files touched",
+			ReviewBurden: "Unavailable without GitHub metadata.",
+			Durability:   "Fix-like message heuristic",
+			MainRisk:     "Source changes had limited test evidence.",
+			Risks:        []signals.Finding{{Evidence: "Commit abc12345 changed source files without test files."}},
+			NextAction:   "Add nearby checkout regression tests.",
+		}},
+		WeaknessMap: signals.WeaknessMap{
+			Strengths:   []signals.Finding{{Label: "Focused", Evidence: "Most changes are focused.", Confidence: signals.ConfidenceMedium}},
+			Weaknesses:  []signals.Finding{{Label: "No-test pattern", Evidence: "One source-changing artifact had no tests.", Confidence: signals.ConfidenceMedium}},
+			NextActions: []string{"Add nearby checkout regression tests."},
+			Confidence:  signals.ConfidenceMedium,
+		},
+		DeepDives: signals.AnalysisDeepDives{
+			HighChurn: []signals.HighChurnDeepDive{{
+				Path:       "internal/report/report.go",
+				Touches:    4,
+				Artifacts:  []signals.DeepDiveArtifact{{Label: "commit abc12345", Title: "Refactor checkout flow", Scope: "4 files and 200 lines", MainRisk: "Source changes had limited test evidence."}},
+				NextAction: "Add regression coverage before changing this file again.",
+				Confidence: signals.ConfidenceMedium,
+			}},
+			NoTestArtifacts: []signals.NoTestArtifactDeepDive{{
+				Artifact:           signals.DeepDiveArtifact{Label: "commit abc12345", Title: "Refactor checkout flow", Scope: "4 files and 200 lines"},
+				ChangedSourceFiles: []string{"internal/checkout/session.go"},
+				Risk:               "Source files changed without test-file evidence.",
+				NextAction:         "Add at least one nearby test.",
+				Confidence:         signals.ConfidenceMedium,
+			}},
+		},
+		Profile: signals.ProfileSummary{AnalyzedPRs: 1, AnalysisWindowDays: 90, Confidence: signals.ConfidenceMedium},
+		SetupActions: []signals.SetupAction{{
+			Label:            "Enable PR review metadata",
+			Command:          "contribution analyze --repo . --github-token gh --format all",
+			Why:              "GitHub metadata raises review-burden confidence.",
+			ConfidenceImpact: "high",
+		}},
+	}
+
+	text := Markdown(analysis)
+	for _, want := range []string{
+		"commit: Refactor checkout flow",
+		"## High-Churn Deep Dive",
+		"internal/report/report.go",
+		"## No-Test Deep Dive",
+		"internal/checkout/session.go",
+		"## Confidence Setup",
+		"contribution analyze --repo . --github-token gh --format all",
+		"Imported coverage covers 70.0%",
+	} {
+		if !strings.Contains(text, want) {
+			t.Fatalf("Markdown missing %q:\n%s", want, text)
+		}
+	}
+}
+
+func TestPublicSafeAnalysisRedactsDeepDivesAndCoverage(t *testing.T) {
+	privatePath := "internal/customer/acme/session.go"
+	commitSHA := "abcdef1234567890abcdef1234567890abcdef12"
+	analysis := PublicSafeAnalysis(signals.AnalysisReport{
+		Repo: signals.RepoMetadata{ID: "owner/private", Name: "private", HeadSHA: commitSHA},
+		Coverage: signals.CoverageSummary{
+			Status: "available",
+			Files:  []signals.PreflightFileCoverage{{Path: privatePath, CoveredLines: 1, TotalLines: 1, Percent: 100}},
+		},
+		DeepDives: signals.AnalysisDeepDives{
+			HighChurn: []signals.HighChurnDeepDive{{
+				Path:       privatePath,
+				Artifacts:  []signals.DeepDiveArtifact{{ID: commitSHA, Label: "commit " + commitSHA[:8], Title: "Fix " + privatePath, MainRisk: "Risk in " + privatePath}},
+				NextAction: "Add tests for " + privatePath,
+			}},
+			NoTestArtifacts: []signals.NoTestArtifactDeepDive{{
+				Artifact:           signals.DeepDiveArtifact{ID: commitSHA, Label: "commit " + commitSHA[:8], Title: "Fix " + privatePath},
+				ChangedSourceFiles: []string{privatePath},
+				Risk:               "Risk in " + privatePath,
+				NextAction:         "Add tests for " + privatePath,
+			}},
+		},
+		Profile: signals.ProfileSummary{Confidence: signals.ConfidenceMedium},
+	})
+	if containsText(analysis, privatePath) || containsText(analysis, commitSHA) || containsText(analysis, commitSHA[:8]) || containsText(analysis, "Fix "+privatePath) {
+		t.Fatalf("public-safe analysis retained private deep-dive details: %+v", analysis)
+	}
+	if !containsText(analysis, "session.go") {
+		t.Fatalf("public-safe deep-dive redaction did not preserve basename: %+v", analysis)
+	}
+}
+
 func assertLedgerHasNoEmptyRiskActions(t *testing.T, text string) {
 	t.Helper()
 	checked := 0
 	for _, line := range strings.Split(text, "\n") {
-		if !strings.HasPrefix(line, "| ") || strings.HasPrefix(line, "| PR ") || strings.HasPrefix(line, "| ---") {
+		if !strings.HasPrefix(line, "| ") || strings.HasPrefix(line, "| Artifact |") || strings.HasPrefix(line, "| PR |") || strings.HasPrefix(line, "| ---") {
 			continue
 		}
 		cells := strings.Split(line, "|")
-		if len(cells) < 10 {
-			continue
+		row := make([]string, 0, len(cells))
+		for _, cell := range cells[1 : len(cells)-1] {
+			row = append(row, strings.TrimSpace(cell))
+		}
+		if len(row) != 10 {
+			t.Fatalf("ledger row has %d cells, want 10: %s", len(row), line)
 		}
 		checked++
-		if strings.TrimSpace(cells[8]) == "" {
+		if row[7] == "" {
 			t.Fatalf("ledger row has empty main risk cell: %s", line)
 		}
-		if strings.TrimSpace(cells[9]) == "" {
+		if row[9] == "" {
 			t.Fatalf("ledger row has empty next action cell: %s", line)
 		}
 	}

@@ -30,5 +30,7 @@ func newAnalyzeCommand(out io.Writer, _ io.Writer) *cobra.Command {
 	cmd.Flags().StringVar(&opts.Format, "format", "all", "Output format: json, markdown, or all.")
 	cmd.Flags().BoolVar(&opts.PublicSafe, "public-safe", false, "Redact local repo metadata from analysis.json.")
 	cmd.Flags().BoolVar(&opts.NoExternalTools, "no-external-tools", false, "Skip optional external tool discovery.")
+	cmd.Flags().StringArrayVar(&opts.CoveragePaths, "coverage", nil, "Coverage artifact path. May be repeated.")
+	cmd.Flags().StringVar(&opts.CoverageFormat, "coverage-format", "auto", "Coverage format: auto, go, or lcov.")
 	return cmd
 }

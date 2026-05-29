@@ -104,8 +104,10 @@ func TestClassifyPath(t *testing.T) {
 	}{
 		{path: "internal/auth/session.go", class: "source", risky: true},
 		{path: "internal/auth/session_test.go", class: "test", risky: true, test: true},
+		{path: "scripts/codex-review-hooks.test.mjs", class: "test", test: true, language: "JavaScript"},
 		{path: "docs/vision.md", class: "docs"},
 		{path: "go.mod", class: "dependency", dependency: true},
+		{path: ".contribution.yml", class: "config", config: true, language: "YAML"},
 		{path: "LICENSE", class: "config", config: true, language: "Other"},
 		{path: "lint-staged.config.js", class: "config", config: true, language: "JavaScript"},
 		{path: "scripts/codex-review-worker", class: "source", language: "Shell"},

@@ -344,12 +344,12 @@ function assertPublicSafeReportQuality(file) {
       .split("|")
       .slice(1, -1)
       .map((cell) => cell.trim());
-    if (cells.length < 9) {
+    if (cells.length < 10) {
       continue;
     }
     checkedRows += 1;
     assert(cells[7], `${file} has empty ledger main risk cell: ${line}`);
-    assert(cells[8], `${file} has empty ledger next action cell: ${line}`);
+    assert(cells[9], `${file} has empty ledger next action cell: ${line}`);
   }
   assert(checkedRows > 0, `${file} has no PR quality ledger rows`);
 }
@@ -630,6 +630,12 @@ function runSmoke(binary, tempRoot, options = {}) {
   writeRepoFile(analysisRepo, "internal/untracked.go", "package app\n");
   writeIgnoredArtifacts(analysisRepo);
   const analysisRepoVisibleFiles = gitVisibleExistingFiles(analysisRepo);
+  const analysisCoverage = path.join(tempRoot, "analysis-coverage.out");
+  writeRepoFile(
+    tempRoot,
+    "analysis-coverage.out",
+    "mode: set\ninternal/app.go:3.1,3.30 1 1\n",
+  );
 
   const privateRemoteRoot = path.join(tempRoot, "analyze-private-remote");
   runCli(
@@ -671,6 +677,10 @@ function runSmoke(binary, tempRoot, options = {}) {
       "json",
       "--public-safe",
       "--no-external-tools",
+      "--coverage",
+      analysisCoverage,
+      "--coverage-format",
+      "go",
     ],
     { cwd: analysisRepo, env, byName: options.byName },
   );
@@ -688,6 +698,15 @@ function runSmoke(binary, tempRoot, options = {}) {
     analysisRepo,
   );
   assert(analysis.version === 1, "analysis.json version mismatch");
+  assert(
+    analysis.coverage?.status === "available",
+    "analyze did not import coverage",
+  );
+  assert(analysis.deep_dives, "analysis missing deep_dive evidence object");
+  assert(
+    Array.isArray(analysis.setup_actions) && analysis.setup_actions.length > 0,
+    "analysis missing confidence setup actions",
+  );
   assert(
     analysis.inventory?.total_files === analysisRepoVisibleFiles.length,
     `inventory counted ${analysis.inventory?.total_files} files, want ${analysisRepoVisibleFiles.length} Git-visible files`,
@@ -941,6 +960,14 @@ function runSmoke(binary, tempRoot, options = {}) {
   assert(
     preflightJSON.rubric?.some((item) => item.id === "changed_line_coverage"),
     "preflight missing changed-line coverage rubric",
+  );
+  assert(
+    preflightJSON.personal_context?.artifacts_analyzed > 0,
+    "preflight missing personal context",
+  );
+  assert(
+    preflightJSON.rubric?.some((item) => item.id === "personal_no_test_repeat"),
+    "preflight missing personal no-test rubric",
   );
 
   const packetRepo = createGitRepo(tempRoot, "packet-repo").repo;

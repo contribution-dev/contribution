@@ -40,6 +40,9 @@ func TestBuildFlagsSourceChangesWithoutTests(t *testing.T) {
 	if out.Profile.Headline == "" {
 		t.Fatal("expected profile headline")
 	}
+	if len(out.DeepDives.NoTestArtifacts) != 1 {
+		t.Fatalf("no-test deep dives = %+v, want one", out.DeepDives.NoTestArtifacts)
+	}
 }
 
 func TestLocalOnlyConfidenceCapsAtMedium(t *testing.T) {
@@ -113,5 +116,30 @@ func TestCommitCardsIncludeLineScope(t *testing.T) {
 	}
 	if out.Cards[0].Summary != "Commit-group card based on 1 file and 13 lines." {
 		t.Fatalf("summary = %q, want file and line count", out.Cards[0].Summary)
+	}
+}
+
+func TestBuildExplainsHighChurnArtifacts(t *testing.T) {
+	history := gitrepo.History{
+		Commits: []gitrepo.Commit{{
+			SHA:   "abcdef1234567890",
+			Date:  time.Now(),
+			Files: []gitrepo.ChangedFile{{Path: "internal/report/report.go", Additions: 10}},
+		}},
+		FileTouchCount: map[string]int{"internal/report/report.go": 3},
+		HighChurnFiles: []string{"internal/report/report.go"},
+	}
+	out := Build(Input{
+		Repo:      signals.RepoMetadata{DefaultBranch: "main"},
+		History:   history,
+		Inventory: signals.FileSummary{TotalFiles: 1, SourceFiles: 1},
+		SinceDays: 90,
+		MaxCards:  20,
+	})
+	if len(out.DeepDives.HighChurn) != 1 {
+		t.Fatalf("high churn deep dives = %+v, want one", out.DeepDives.HighChurn)
+	}
+	if got := out.DeepDives.HighChurn[0]; got.Path != "internal/report/report.go" || got.Touches != 3 || len(got.Artifacts) != 1 {
+		t.Fatalf("high churn detail = %+v", got)
 	}
 }

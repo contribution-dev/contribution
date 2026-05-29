@@ -47,9 +47,12 @@ func newDoctorCommand(out io.Writer) *cobra.Command {
 			fmt.Fprintln(&buf)
 			if token, ok := github.ResolveToken(""); ok && token != "" {
 				fmt.Fprintln(&buf, "GitHub token: available from environment")
+			} else if github.GHTokenAvailable() {
+				fmt.Fprintln(&buf, "GitHub token: available from gh auth; pass --github-token gh to import PR metadata")
 			} else {
 				fmt.Fprintln(&buf, "GitHub token: unavailable; PR review metadata will be skipped")
 			}
+			var nextSteps []string
 			repo, err := gitrepo.Resolve(ctx, ".")
 			if err != nil {
 				fmt.Fprintf(&buf, "Repo state: unavailable (%v)\n", err)
@@ -65,6 +68,7 @@ func newDoctorCommand(out io.Writer) *cobra.Command {
 					configPath := repo.Path + string(os.PathSeparator) + config.FileName
 					if _, statErr := os.Stat(configPath); os.IsNotExist(statErr) {
 						fmt.Fprintln(&buf, "Config: not found; safe defaults will be used")
+						nextSteps = append(nextSteps, "Run `contribution init` to record repo-local defaults and preflight policy.")
 					} else {
 						fmt.Fprintf(&buf, "Config: ok (since_days=%d, max_prs=%d)\n", cfg.Analysis.SinceDays, cfg.Analysis.MaxPRs)
 					}
@@ -80,8 +84,35 @@ func newDoctorCommand(out io.Writer) *cobra.Command {
 					fmt.Fprintf(&buf, "- %s\n", limitation)
 				}
 			}
+			if len(nextSteps) == 0 {
+				nextSteps = append(nextSteps, "Run `contribution analyze --repo . --format all` for the private contribution receipt.")
+			}
+			if github.GHTokenAvailable() {
+				nextSteps = append(nextSteps, "Run `contribution analyze --repo . --github-token gh --format all` to include GitHub PR metadata.")
+			} else {
+				nextSteps = append(nextSteps, "Set `GITHUB_TOKEN` or pass `--github-token gh` after `gh auth login` to include PR metadata.")
+			}
+			nextSteps = append(nextSteps, "Run `go test ./... -coverprofile=coverage.out` and pass `--coverage coverage.out --coverage-format go` to add coverage evidence.")
+			fmt.Fprintln(&buf)
+			fmt.Fprintln(&buf, "Next steps:")
+			for _, step := range uniqueDoctorSteps(nextSteps) {
+				fmt.Fprintf(&buf, "- %s\n", step)
+			}
 			_, err = out.Write(buf.Bytes())
 			return err
 		},
 	}
+}
+
+func uniqueDoctorSteps(values []string) []string {
+	seen := map[string]bool{}
+	var out []string
+	for _, value := range values {
+		if value == "" || seen[value] {
+			continue
+		}
+		seen[value] = true
+		out = append(out, value)
+	}
+	return out
 }

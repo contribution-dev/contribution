@@ -6,6 +6,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"sort"
 	"strconv"
 	"strings"
 
@@ -35,6 +36,16 @@ type File struct {
 	Lines map[int]bool
 }
 
+// ValidateFormat checks supported coverage format names.
+func ValidateFormat(format string) error {
+	switch format {
+	case "", string(FormatAuto), string(FormatGo), string(FormatLCOV):
+		return nil
+	default:
+		return fmt.Errorf("unsupported coverage format %q", format)
+	}
+}
+
 // ParseFiles imports coverage files. Unsupported or outside-repo entries are
 // ignored; unreadable explicit coverage files return an error.
 func ParseFiles(paths []string, format Format, repoRoot string) (Report, error) {
@@ -62,6 +73,53 @@ func ParseFiles(paths []string, format Format, repoRoot string) (Report, error) 
 		}
 	}
 	return report, nil
+}
+
+// Summarize turns imported coverage into whole-report coverage context.
+func Summarize(report Report) signals.CoverageSummary {
+	out := signals.CoverageSummary{
+		Status:  "unknown",
+		Sources: append([]string{}, report.Sources...),
+	}
+	if len(report.Files) == 0 {
+		out.Reason = "No coverage records were imported."
+		return out
+	}
+	paths := make([]string, 0, len(report.Files))
+	for path := range report.Files {
+		paths = append(paths, path)
+	}
+	sort.Strings(paths)
+	for _, path := range paths {
+		file := report.Files[path]
+		var covered int
+		var total int
+		for _, lineCovered := range file.Lines {
+			total++
+			if lineCovered {
+				covered++
+			}
+		}
+		if total == 0 {
+			continue
+		}
+		out.Files = append(out.Files, signals.PreflightFileCoverage{
+			Path:         path,
+			CoveredLines: covered,
+			TotalLines:   total,
+			Percent:      percent(covered, total),
+		})
+		out.CoveredLines += covered
+		out.TotalLines += total
+	}
+	if out.TotalLines == 0 {
+		out.Reason = "Coverage was imported, but no executable coverage records were found."
+		return out
+	}
+	out.Status = "available"
+	out.Percent = percent(out.CoveredLines, out.TotalLines)
+	out.Reason = ""
+	return out
 }
 
 // ComputeChangedLineCoverage intersects imported coverage with changed new-side lines.

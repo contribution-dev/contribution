@@ -798,6 +798,10 @@ func isTestPath(path string) bool {
 		strings.HasSuffix(base, ".spec.tsx") ||
 		strings.HasSuffix(base, ".test.js") ||
 		strings.HasSuffix(base, ".spec.js") ||
+		strings.HasSuffix(base, ".test.mjs") ||
+		strings.HasSuffix(base, ".spec.mjs") ||
+		strings.HasSuffix(base, ".test.cjs") ||
+		strings.HasSuffix(base, ".spec.cjs") ||
 		strings.HasPrefix(base, "test_") && strings.HasSuffix(base, ".py") ||
 		strings.HasSuffix(base, "_test.py") ||
 		strings.HasPrefix(path, "tests/") ||
@@ -827,7 +831,7 @@ func isConfigPath(path, base string) bool {
 	case ".editorconfig", ".gitignore", ".gitattributes", ".npmrc", ".nvmrc",
 		".prettierrc", ".prettierignore", ".eslintrc", ".golangci.yml", ".golangci.yaml",
 		".goreleaser.yml", ".goreleaser.yaml", ".dockerignore", "makefile", "justfile",
-		"lint-staged.config.js", "pnpm-workspace.yaml", "tsconfig.json", "jsconfig.json",
+		".contribution.yml", ".contribution.yaml", "lint-staged.config.js", "pnpm-workspace.yaml", "tsconfig.json", "jsconfig.json",
 		"license", "licence", "copying", "notice":
 		return true
 	}

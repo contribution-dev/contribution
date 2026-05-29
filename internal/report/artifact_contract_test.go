@@ -19,10 +19,13 @@ func TestAnalysisReportJSONContract(t *testing.T) {
 		"config",
 		"tooling",
 		"inventory",
+		"coverage",
 		"signals",
 		"pr_quality_cards",
 		"weakness_map",
+		"deep_dives",
 		"profile",
+		"setup_actions",
 		"limitations",
 		"privacy",
 	})
@@ -99,6 +102,10 @@ func reportContractAnalysisFixture() signals.AnalysisReport {
 			ByLanguage:  map[string]int{"Go": 1},
 			SourceFiles: 1,
 		},
+		Coverage: signals.CoverageSummary{
+			Status: "unknown",
+			Reason: "No coverage report was imported.",
+		},
 		Signals: []signals.Signal{{
 			ID:          "sig-1",
 			RepoID:      "local:test",
@@ -136,6 +143,10 @@ func reportContractAnalysisFixture() signals.AnalysisReport {
 			NextActions: []string{"Keep contracts covered."},
 			Confidence:  signals.ConfidenceMedium,
 		},
+		DeepDives: signals.AnalysisDeepDives{
+			HighChurn:       []signals.HighChurnDeepDive{},
+			NoTestArtifacts: []signals.NoTestArtifactDeepDive{},
+		},
 		Profile: signals.ProfileSummary{
 			DisplayName:        "Example Developer",
 			Headline:           "AI-native contribution profile",
@@ -146,6 +157,13 @@ func reportContractAnalysisFixture() signals.AnalysisReport {
 			ImprovementTrends:  []signals.Finding{{Label: "Contract coverage", Evidence: "Added focused tests.", Confidence: signals.ConfidenceMedium}},
 			BadgeCandidates:    []signals.BadgeCandidate{{ID: "focused", Label: "Focused contributor", Confidence: signals.ConfidenceMedium}},
 		},
+		SetupActions: []signals.SetupAction{{
+			ID:               "import_coverage",
+			Label:            "Import coverage evidence",
+			Command:          "go test ./... -coverprofile=coverage.out",
+			Why:              "Coverage raises confidence.",
+			ConfidenceImpact: "medium",
+		}},
 		Limitations: []string{"Local-only fixture."},
 		Privacy: signals.PrivacySummary{
 			PublicSafe:                         true,

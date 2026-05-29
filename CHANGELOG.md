@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Add single-player dogfooding improvements: private report ledger
+  explainability, high-churn and no-test deep dives, analyze-time Go/LCOV
+  coverage import, concrete confidence setup actions, GitHub CLI token support,
+  richer GitHub PR review/check/file metadata, and personal preflight pattern
+  checks.
 - Lock generated artifact JSON contract shapes, remove the placeholder
   `privacy.upload_enabled` field, and guard review automation lanes as
   Codex-only.

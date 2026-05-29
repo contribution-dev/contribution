@@ -167,6 +167,51 @@ type WeaknessMap struct {
 	Confidence  Confidence `json:"confidence"`
 }
 
+// DeepDiveArtifact is a private-first reference to the artifact behind a pattern.
+type DeepDiveArtifact struct {
+	ID           string     `json:"id,omitempty"`
+	Label        string     `json:"label"`
+	Title        string     `json:"title,omitempty"`
+	Scope        string     `json:"scope,omitempty"`
+	TestEvidence string     `json:"test_evidence,omitempty"`
+	MainRisk     string     `json:"main_risk,omitempty"`
+	NextAction   string     `json:"next_action,omitempty"`
+	Confidence   Confidence `json:"confidence,omitempty"`
+}
+
+// HighChurnDeepDive explains which artifacts are behind a high-churn file.
+type HighChurnDeepDive struct {
+	Path       string             `json:"path"`
+	Touches    int                `json:"touches"`
+	Artifacts  []DeepDiveArtifact `json:"artifacts"`
+	NextAction string             `json:"next_action"`
+	Confidence Confidence         `json:"confidence"`
+}
+
+// NoTestArtifactDeepDive explains behavior-changing artifacts without test files.
+type NoTestArtifactDeepDive struct {
+	Artifact           DeepDiveArtifact `json:"artifact"`
+	ChangedSourceFiles []string         `json:"changed_source_files,omitempty"`
+	Risk               string           `json:"risk"`
+	NextAction         string           `json:"next_action"`
+	Confidence         Confidence       `json:"confidence"`
+}
+
+// AnalysisDeepDives stores report-ready evidence for single-player coaching.
+type AnalysisDeepDives struct {
+	HighChurn       []HighChurnDeepDive      `json:"high_churn"`
+	NoTestArtifacts []NoTestArtifactDeepDive `json:"no_test_artifacts"`
+}
+
+// SetupAction is a concrete next command that would raise report confidence.
+type SetupAction struct {
+	ID               string `json:"id"`
+	Label            string `json:"label"`
+	Command          string `json:"command,omitempty"`
+	Why              string `json:"why"`
+	ConfidenceImpact string `json:"confidence_impact"`
+}
+
 // BadgeCandidate is a non-authoritative public profile badge suggestion.
 type BadgeCandidate struct {
 	ID         string     `json:"id"`
@@ -201,6 +246,17 @@ type FileSummary struct {
 	RiskyFiles      int            `json:"risky_files"`
 }
 
+// CoverageSummary summarizes optional whole-report coverage import.
+type CoverageSummary struct {
+	Status       string                  `json:"status"`
+	CoveredLines int                     `json:"covered_lines,omitempty"`
+	TotalLines   int                     `json:"total_lines,omitempty"`
+	Percent      float64                 `json:"percent,omitempty"`
+	Files        []PreflightFileCoverage `json:"files,omitempty"`
+	Sources      []string                `json:"sources,omitempty"`
+	Reason       string                  `json:"reason,omitempty"`
+}
+
 // PreflightChangedFile is structured current-diff evidence.
 type PreflightChangedFile struct {
 	Path       string      `json:"path"`
@@ -214,18 +270,21 @@ type PreflightChangedFile struct {
 
 // AnalysisReport is the canonical machine-readable V1 output.
 type AnalysisReport struct {
-	Version     int                    `json:"version"`
-	GeneratedAt time.Time              `json:"generated_at"`
-	Repo        RepoMetadata           `json:"repo"`
-	Config      AnalysisConfigSnapshot `json:"config"`
-	Tooling     ToolingReport          `json:"tooling"`
-	Inventory   FileSummary            `json:"inventory"`
-	Signals     []Signal               `json:"signals"`
-	PRCards     []PRQualityCard        `json:"pr_quality_cards"`
-	WeaknessMap WeaknessMap            `json:"weakness_map"`
-	Profile     ProfileSummary         `json:"profile"`
-	Limitations []string               `json:"limitations"`
-	Privacy     PrivacySummary         `json:"privacy"`
+	Version      int                    `json:"version"`
+	GeneratedAt  time.Time              `json:"generated_at"`
+	Repo         RepoMetadata           `json:"repo"`
+	Config       AnalysisConfigSnapshot `json:"config"`
+	Tooling      ToolingReport          `json:"tooling"`
+	Inventory    FileSummary            `json:"inventory"`
+	Coverage     CoverageSummary        `json:"coverage"`
+	Signals      []Signal               `json:"signals"`
+	PRCards      []PRQualityCard        `json:"pr_quality_cards"`
+	WeaknessMap  WeaknessMap            `json:"weakness_map"`
+	DeepDives    AnalysisDeepDives      `json:"deep_dives"`
+	Profile      ProfileSummary         `json:"profile"`
+	SetupActions []SetupAction          `json:"setup_actions"`
+	Limitations  []string               `json:"limitations"`
+	Privacy      PrivacySummary         `json:"privacy"`
 }
 
 // ProfileExport is the public-safe profile artifact consumed by a future web app.
@@ -295,23 +354,33 @@ type PreflightRubricItem struct {
 
 // PreflightReport summarizes current-diff review readiness.
 type PreflightReport struct {
-	Version           int                    `json:"version"`
-	GeneratedAt       time.Time              `json:"generated_at"`
-	Repo              RepoMetadata           `json:"repo"`
-	Base              string                 `json:"base"`
-	Head              string                 `json:"head"`
-	RiskLevel         string                 `json:"risk_level"`
-	Why               []string               `json:"why"`
-	ChangedFiles      []PreflightChangedFile `json:"changed_files,omitempty"`
-	FileSummary       FileSummary            `json:"file_summary"`
-	TotalChangedLines int                    `json:"total_changed_lines"`
-	Coverage          PreflightCoverage      `json:"coverage"`
-	Rubric            []PreflightRubricItem  `json:"rubric"`
-	TestEvidence      string                 `json:"test_evidence"`
-	Tooling           ToolingReport          `json:"tooling"`
-	ReviewerFocus     []string               `json:"reviewer_focus"`
-	Limitations       []string               `json:"limitations"`
-	Privacy           PrivacySummary         `json:"privacy"`
+	Version           int                       `json:"version"`
+	GeneratedAt       time.Time                 `json:"generated_at"`
+	Repo              RepoMetadata              `json:"repo"`
+	Base              string                    `json:"base"`
+	Head              string                    `json:"head"`
+	RiskLevel         string                    `json:"risk_level"`
+	Why               []string                  `json:"why"`
+	ChangedFiles      []PreflightChangedFile    `json:"changed_files,omitempty"`
+	FileSummary       FileSummary               `json:"file_summary"`
+	TotalChangedLines int                       `json:"total_changed_lines"`
+	Coverage          PreflightCoverage         `json:"coverage"`
+	Rubric            []PreflightRubricItem     `json:"rubric"`
+	TestEvidence      string                    `json:"test_evidence"`
+	Tooling           ToolingReport             `json:"tooling"`
+	ReviewerFocus     []string                  `json:"reviewer_focus"`
+	PersonalContext   *PersonalPreflightContext `json:"personal_context,omitempty"`
+	Limitations       []string                  `json:"limitations"`
+	Privacy           PrivacySummary            `json:"privacy"`
+}
+
+// PersonalPreflightContext stores recent single-player patterns used by preflight.
+type PersonalPreflightContext struct {
+	HighChurnFiles           []string `json:"high_churn_files,omitempty"`
+	RecentSourceWithoutTests int      `json:"recent_source_without_tests,omitempty"`
+	TypicalFiles             int      `json:"typical_files,omitempty"`
+	TypicalLines             int      `json:"typical_lines,omitempty"`
+	ArtifactsAnalyzed        int      `json:"artifacts_analyzed,omitempty"`
 }
 
 // ReviewRubricQuestion is a structured reviewer prompt in a friend packet.

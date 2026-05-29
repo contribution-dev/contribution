@@ -36,14 +36,24 @@ scripts/with-tools go run ./cmd/contribution analyze --repo . --output /tmp/cont
 scripts/with-tools go run ./cmd/contribution preflight --base main --head HEAD --output /tmp/contribution-preflight --format all
 ```
 
+For higher-confidence personal dogfooding, import coverage and GitHub metadata
+when available:
+
+```bash
+go test ./... -coverprofile=coverage.out
+scripts/with-tools go run ./cmd/contribution analyze --repo . --coverage coverage.out --coverage-format go --github-token gh --format all
+```
+
 Core product commands:
 
 - `contribution init` creates safe default `.contribution.yml` config.
 - `contribution doctor` reports required and optional tool availability.
 - `contribution analyze` writes `analysis.json`, `report.md`,
-  `profile.export.json`, `share-card.json`, and `tooling.json`.
+  `profile.export.json`, `share-card.json`, and `tooling.json`, with optional
+  Go/LCOV coverage import.
 - `contribution preflight` writes V2 current-diff readiness artifacts with
-  changed-line ranges, optional Go/LCOV coverage, and policy rubric evidence.
+  changed-line ranges, optional Go/LCOV coverage, policy rubric evidence, and
+  recent personal pattern checks.
 - `contribution packet` writes a public-safe V2 friend-review packet.
 - `contribution import-feedback` imports public-safe friend feedback exports.
 - `contribution export-profile` writes only public-safe web profile artifacts.

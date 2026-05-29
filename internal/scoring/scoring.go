@@ -16,6 +16,7 @@ type Input struct {
 	History     gitrepo.History
 	GitHub      github.Metadata
 	Inventory   signals.FileSummary
+	Coverage    signals.CoverageSummary
 	Signals     []signals.Signal
 	SinceDays   int
 	MaxCards    int
@@ -28,6 +29,7 @@ type Input struct {
 type Output struct {
 	Cards       []signals.PRQualityCard
 	WeaknessMap signals.WeaknessMap
+	DeepDives   signals.AnalysisDeepDives
 	Profile     signals.ProfileSummary
 	Limitations []string
 }
@@ -36,8 +38,9 @@ type Output struct {
 func Build(input Input) Output {
 	cards := buildCards(input)
 	weaknessMap := buildWeaknessMap(input, cards)
+	deepDives := buildDeepDives(input, cards)
 	profile := buildProfile(input, weaknessMap, len(cards))
-	return Output{Cards: cards, WeaknessMap: weaknessMap, Profile: profile}
+	return Output{Cards: cards, WeaknessMap: weaknessMap, DeepDives: deepDives, Profile: profile}
 }
 
 func buildCards(input Input) []signals.PRQualityCard {
@@ -72,6 +75,7 @@ func cardFromPR(pr github.PullRequest) signals.PRQualityCard {
 	nextAction := "Use preflight on the current diff to add file-level test and risk evidence before review."
 	var strengths []signals.Finding
 	var risks []signals.Finding
+	sourceFiles, testFiles, riskyFiles := classifyPaths(pr.Files)
 	if pr.ChangedFiles <= 5 && totalLines <= 300 {
 		label = "strong"
 		strengths = append(strengths, signals.Finding{
@@ -94,6 +98,28 @@ func cardFromPR(pr github.PullRequest) signals.PRQualityCard {
 		mainRisk = "Large review surface."
 		nextAction = "Split the next comparable change before opening review."
 	}
+	if sourceFiles > 0 && testFiles == 0 {
+		risks = append(risks, signals.Finding{
+			Label:        "No test files visible",
+			Evidence:     fmt.Sprintf("PR #%d changed %d source file(s), and imported file metadata showed no test file changes.", pr.Number, sourceFiles),
+			Confidence:   signals.ConfidenceMedium,
+			WhyItMatters: "Reviewers and future changes have less protection when behavior changes lack test evidence.",
+			NextAction:   "Add at least one nearby regression test before review when behavior changes.",
+		})
+		if label == "strong" {
+			label = "mixed"
+		}
+		mainRisk = "Source changes had no visible test-file evidence."
+		nextAction = "Add nearby tests for the changed behavior or document why tests are not practical."
+	}
+	if riskyFiles > 0 && testFiles == 0 {
+		label = "risky"
+		mainRisk = "Security-sensitive paths changed without visible test-file evidence."
+		nextAction = "Add targeted tests around authorization, billing, session, token, or permission edge cases."
+	}
+	testEvidence := prTestEvidence(pr, sourceFiles, testFiles)
+	reviewBurden := prReviewBurden(pr)
+	durability := prDurability(pr)
 	return signals.PRQualityCard{
 		PRNumber:     pr.Number,
 		Title:        pr.Title,
@@ -102,9 +128,9 @@ func cardFromPR(pr github.PullRequest) signals.PRQualityCard {
 		Confidence:   confidence,
 		Summary:      fmt.Sprintf("Merged PR touching %d files with %d additions and %d deletions.", pr.ChangedFiles, pr.Additions, pr.Deletions),
 		Scope:        scopeDescription(pr.ChangedFiles, totalLines),
-		TestEvidence: "Unavailable from imported PR list metadata.",
-		ReviewBurden: "GitHub PR metadata available; detailed review comments were not imported for this analysis.",
-		Durability:   "Post-merge churn requires file-level PR data and is not available for this card.",
+		TestEvidence: testEvidence,
+		ReviewBurden: reviewBurden,
+		Durability:   durability,
 		MainRisk:     mainRisk,
 		Strengths:    strengths,
 		Risks:        risks,
@@ -317,13 +343,24 @@ func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMa
 		})
 	}
 
-	watchItems := []signals.Finding{{
-		Label:        "Coverage is unavailable",
-		Evidence:     "No coverage report was imported for this analysis, so test conclusions use file-touch evidence only.",
-		Confidence:   signals.ConfidenceHigh,
-		WhyItMatters: "Test-file evidence is useful but cannot prove changed-line coverage.",
-		NextAction:   "Export coverage later if you want stronger verification evidence.",
-	}}
+	var watchItems []signals.Finding
+	if input.Coverage.Status == "available" {
+		watchItems = append(watchItems, signals.Finding{
+			Label:        "Coverage was imported",
+			Evidence:     fmt.Sprintf("Imported coverage covers %.1f%% of executable lines in %d file(s).", input.Coverage.Percent, len(input.Coverage.Files)),
+			Confidence:   signals.ConfidenceMedium,
+			WhyItMatters: "Coverage evidence strengthens test conclusions beyond file-touch heuristics.",
+			NextAction:   "Use changed-line coverage in preflight for the next behavior-changing PR.",
+		})
+	} else {
+		watchItems = append(watchItems, signals.Finding{
+			Label:        "Coverage is unavailable",
+			Evidence:     "No coverage report was imported for this analysis, so test conclusions use file-touch evidence only.",
+			Confidence:   signals.ConfidenceHigh,
+			WhyItMatters: "Test-file evidence is useful but cannot prove changed-line coverage.",
+			NextAction:   "Export coverage later if you want stronger verification evidence.",
+		})
+	}
 	if fixLike > 0 {
 		watchItems = append(watchItems, signals.Finding{
 			Label:        "Follow-up fix language appears in history",
@@ -370,6 +407,99 @@ func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMa
 	}
 }
 
+func buildDeepDives(input Input, cards []signals.PRQualityCard) signals.AnalysisDeepDives {
+	cardByCommit := map[string]signals.PRQualityCard{}
+	for _, card := range cards {
+		if len(card.Evidence) == 0 {
+			continue
+		}
+		for _, evidence := range card.Evidence {
+			if evidence.ID != "" {
+				cardByCommit[evidence.ID] = card
+			}
+		}
+	}
+	dives := signals.AnalysisDeepDives{
+		HighChurn:       []signals.HighChurnDeepDive{},
+		NoTestArtifacts: []signals.NoTestArtifactDeepDive{},
+	}
+	for _, file := range input.History.HighChurnFiles {
+		dive := signals.HighChurnDeepDive{
+			Path:       file,
+			Touches:    input.History.FileTouchCount[file],
+			NextAction: fmt.Sprintf("Before editing %s again, inspect the recent touches and add regression coverage around the behavior you are changing.", file),
+			Confidence: signals.ConfidenceMedium,
+		}
+		for _, commit := range input.History.Commits {
+			if !commitTouchesPath(commit, file) {
+				continue
+			}
+			card := cardByCommit[commit.SHA]
+			dive.Artifacts = append(dive.Artifacts, artifactFromCommit(commit, card))
+			if len(dive.Artifacts) >= 4 {
+				break
+			}
+		}
+		dives.HighChurn = append(dives.HighChurn, dive)
+	}
+	for _, commit := range input.History.Commits {
+		if !commit.SourceTouched || commit.TestsTouched {
+			continue
+		}
+		card := cardByCommit[commit.SHA]
+		risk := "Source files changed without test-file evidence."
+		nextAction := "Add at least one nearby test for the changed behavior before review."
+		if commit.RiskyTouched {
+			risk = "Security-sensitive source files changed without test-file evidence."
+			nextAction = "Add targeted tests around authorization, billing, session, token, or permission edge cases."
+		}
+		dives.NoTestArtifacts = append(dives.NoTestArtifacts, signals.NoTestArtifactDeepDive{
+			Artifact:           artifactFromCommit(commit, card),
+			ChangedSourceFiles: sourcePaths(commit.Files),
+			Risk:               risk,
+			NextAction:         nextAction,
+			Confidence:         signals.ConfidenceMedium,
+		})
+		if len(dives.NoTestArtifacts) >= 5 {
+			break
+		}
+	}
+	if input.GitHub.Available {
+		for _, pr := range input.GitHub.PRs {
+			sourceFiles, testFiles, riskyFiles := classifyPaths(pr.Files)
+			if sourceFiles == 0 || testFiles > 0 {
+				continue
+			}
+			risk := "Imported PR file metadata showed source changes without test-file changes."
+			nextAction := "Add nearby tests for the changed behavior or document why tests are not practical."
+			if riskyFiles > 0 {
+				risk = "Imported PR file metadata showed risky source changes without test-file changes."
+				nextAction = "Add targeted tests around security-sensitive edge cases before review."
+			}
+			dives.NoTestArtifacts = append(dives.NoTestArtifacts, signals.NoTestArtifactDeepDive{
+				Artifact: signals.DeepDiveArtifact{
+					ID:           fmt.Sprintf("pr-%d", pr.Number),
+					Label:        fmt.Sprintf("PR #%d", pr.Number),
+					Title:        pr.Title,
+					Scope:        scopeDescription(pr.ChangedFiles, pr.Additions+pr.Deletions),
+					TestEvidence: prTestEvidence(pr, sourceFiles, testFiles),
+					MainRisk:     risk,
+					NextAction:   nextAction,
+					Confidence:   signals.ConfidenceMedium,
+				},
+				ChangedSourceFiles: sourcePathStrings(pr.Files),
+				Risk:               risk,
+				NextAction:         nextAction,
+				Confidence:         signals.ConfidenceMedium,
+			})
+			if len(dives.NoTestArtifacts) >= 5 {
+				break
+			}
+		}
+	}
+	return dives
+}
+
 func buildProfile(input Input, weaknessMap signals.WeaknessMap, analyzed int) signals.ProfileSummary {
 	strengths := publicFindings(weaknessMap.Strengths, 3)
 	trends := []signals.Finding{}
@@ -411,6 +541,135 @@ func buildProfile(input Input, weaknessMap signals.WeaknessMap, analyzed int) si
 		ImprovementTrends:  trends,
 		BadgeCandidates:    badges,
 	}
+}
+
+func prTestEvidence(pr github.PullRequest, sourceFiles int, testFiles int) string {
+	switch {
+	case len(pr.Files) == 0:
+		return "Changed-file metadata was unavailable, so test-file evidence is unknown."
+	case sourceFiles > 0 && testFiles == 0:
+		return fmt.Sprintf("No test files visible across %d imported changed file(s).", len(pr.Files))
+	case testFiles > 0:
+		return fmt.Sprintf("%d test file(s) changed with %d source file(s).", testFiles, sourceFiles)
+	default:
+		return "No behavior-changing source files detected in imported file metadata."
+	}
+}
+
+func prReviewBurden(pr github.PullRequest) string {
+	parts := []string{}
+	if pr.ReviewCount > 0 {
+		parts = append(parts, fmt.Sprintf("%d reviews", pr.ReviewCount))
+	}
+	if pr.RequestedChanges > 0 {
+		parts = append(parts, fmt.Sprintf("%d requested-change reviews", pr.RequestedChanges))
+	}
+	if pr.ReviewComments > 0 {
+		parts = append(parts, fmt.Sprintf("%d review comments", pr.ReviewComments))
+	}
+	if pr.IssueComments > 0 {
+		parts = append(parts, fmt.Sprintf("%d issue comments", pr.IssueComments))
+	}
+	if len(parts) == 0 {
+		return "No detailed review burden metadata was imported for this PR."
+	}
+	return strings.Join(parts, ", ") + "."
+}
+
+func prDurability(pr github.PullRequest) string {
+	if pr.CheckRuns == 0 {
+		return "Post-merge churn is unavailable; check-run metadata was not imported."
+	}
+	if pr.FailedChecks > 0 {
+		return fmt.Sprintf("%d of %d imported check runs did not pass.", pr.FailedChecks, pr.CheckRuns)
+	}
+	return fmt.Sprintf("%d imported check runs passed or were neutral/skipped.", pr.CheckRuns)
+}
+
+func classifyPaths(paths []string) (sourceFiles int, testFiles int, riskyFiles int) {
+	for _, path := range paths {
+		class := gitrepo.ClassifyPath(path)
+		if class.IsSource {
+			sourceFiles++
+		}
+		if class.IsTest {
+			testFiles++
+		}
+		if class.IsSecurityRelated {
+			riskyFiles++
+		}
+	}
+	return sourceFiles, testFiles, riskyFiles
+}
+
+func commitTouchesPath(commit gitrepo.Commit, path string) bool {
+	for _, file := range commit.Files {
+		if file.Path == path {
+			return true
+		}
+	}
+	return false
+}
+
+func artifactFromCommit(commit gitrepo.Commit, card signals.PRQualityCard) signals.DeepDiveArtifact {
+	scope := scopeDescription(len(commit.Files), gitrepo.TotalChangedLines(commit.Files))
+	testEvidence := testEvidenceLabel(commit)
+	mainRisk := "No specific risk recorded."
+	nextAction := "Inspect this artifact before repeating the same pattern."
+	confidence := signals.ConfidenceMedium
+	if card.Scope != "" {
+		scope = card.Scope
+	}
+	if card.TestEvidence != "" {
+		testEvidence = card.TestEvidence
+	}
+	if card.MainRisk != "" {
+		mainRisk = card.MainRisk
+	}
+	if card.NextAction != "" {
+		nextAction = card.NextAction
+	}
+	if card.Confidence != "" {
+		confidence = card.Confidence
+	}
+	return signals.DeepDiveArtifact{
+		ID:           commit.SHA,
+		Label:        "commit " + gitrepo.ShortSHA(commit.SHA),
+		Title:        commitTitle(commit),
+		Scope:        scope,
+		TestEvidence: testEvidence,
+		MainRisk:     mainRisk,
+		NextAction:   nextAction,
+		Confidence:   confidence,
+	}
+}
+
+func sourcePaths(files []gitrepo.ChangedFile) []string {
+	paths := make([]string, 0, len(files))
+	for _, file := range files {
+		class := gitrepo.ClassifyPath(file.Path)
+		if class.IsSource {
+			paths = append(paths, file.Path)
+		}
+		if len(paths) >= 6 {
+			break
+		}
+	}
+	return paths
+}
+
+func sourcePathStrings(files []string) []string {
+	paths := make([]string, 0, len(files))
+	for _, file := range files {
+		class := gitrepo.ClassifyPath(file)
+		if class.IsSource {
+			paths = append(paths, file)
+		}
+		if len(paths) >= 6 {
+			break
+		}
+	}
+	return paths
 }
 
 func publicFindings(findings []signals.Finding, limit int) []signals.Finding {

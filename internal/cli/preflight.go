@@ -11,6 +11,7 @@ import (
 	gitrepo "github.com/contribution-dev/contribution/internal/git"
 	preflightpkg "github.com/contribution-dev/contribution/internal/preflight"
 	"github.com/contribution-dev/contribution/internal/report"
+	"github.com/contribution-dev/contribution/internal/signals"
 	"github.com/contribution-dev/contribution/internal/tools"
 	"github.com/spf13/cobra"
 )
@@ -66,7 +67,17 @@ func newPreflightCommand(out io.Writer) *cobra.Command {
 				return err
 			}
 			tooling := tools.Discover(ctx, true, start)
-			preflight := preflightpkg.Build(repo.Metadata(false), base, head, diff, coverage, cfg.Preflight, tooling, append(cfgWarnings, tooling.Limitations...), start)
+			limitations := append([]string{}, cfgWarnings...)
+			limitations = append(limitations, tooling.Limitations...)
+			personal := signals.PersonalPreflightContext{}
+			history, _, historyLimitations, historyErr := gitrepo.CollectHistory(ctx, repo.Path, repo.ID, start.AddDate(0, 0, -cfg.Analysis.SinceDays), cfg.Analysis.MaxPRs, start)
+			if historyErr != nil {
+				limitations = append(limitations, "Recent personal pattern checks were unavailable: "+historyErr.Error())
+			} else {
+				personal = preflightpkg.PersonalContextFromHistory(history)
+				limitations = append(limitations, historyLimitations...)
+			}
+			preflight := preflightpkg.BuildWithPersonal(repo.Metadata(false), base, head, diff, coverage, cfg.Preflight, personal, tooling, limitations, start)
 			root, err := outputRootForCurrent(output, repo, cfg)
 			if err != nil {
 				return err

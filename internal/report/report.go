@@ -133,10 +133,13 @@ func PublicSafeAnalysis(analysis signals.AnalysisReport) signals.AnalysisReport 
 	analysis.Privacy.AuthorEmailsIncluded = false
 	analysis.PRCards = publicCards(analysis.PRCards, len(analysis.PRCards), pathReplacements)
 	analysis.WeaknessMap = publicSafeWeaknessMap(analysis.WeaknessMap, pathReplacements)
+	analysis.Coverage = publicSafeCoverage(analysis.Coverage, pathReplacements)
+	analysis.DeepDives = publicSafeDeepDives(analysis.DeepDives, pathReplacements)
 	analysis.Profile.Strengths = publicFindings(analysis.Profile.Strengths, len(analysis.Profile.Strengths), pathReplacements)
 	analysis.Profile.ImprovementTrends = publicFindings(analysis.Profile.ImprovementTrends, len(analysis.Profile.ImprovementTrends), pathReplacements)
 	analysis.Profile.Headline = redactCommitLikeText(redactText(analysis.Profile.Headline, pathReplacements))
 	analysis.Profile.DisplayName = redactCommitLikeText(redactText(analysis.Profile.DisplayName, pathReplacements))
+	analysis.SetupActions = publicSafeSetupActions(analysis.SetupActions, pathReplacements)
 	analysis.Limitations = redactStrings(analysis.Limitations, pathReplacements)
 	for i := range analysis.Signals {
 		analysis.Signals[i] = publicSafeSignal(analysis.Signals[i], sourceRepoID, pathReplacements)
@@ -202,6 +205,14 @@ func Markdown(analysis signals.AnalysisReport) string {
 	fmt.Fprintln(&buf)
 	writeLedger(&buf, analysis.PRCards)
 	fmt.Fprintln(&buf)
+	fmt.Fprintln(&buf, "## High-Churn Deep Dive")
+	fmt.Fprintln(&buf)
+	writeHighChurnDeepDive(&buf, analysis.DeepDives.HighChurn)
+	fmt.Fprintln(&buf)
+	fmt.Fprintln(&buf, "## No-Test Deep Dive")
+	fmt.Fprintln(&buf)
+	writeNoTestDeepDive(&buf, analysis.DeepDives.NoTestArtifacts)
+	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "## Test Evidence")
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, testEvidence(analysis))
@@ -227,6 +238,10 @@ func Markdown(analysis signals.AnalysisReport) string {
 	for _, action := range firstStrings(analysis.WeaknessMap.NextActions, 3) {
 		fmt.Fprintf(&buf, "- %s\n", action)
 	}
+	fmt.Fprintln(&buf)
+	fmt.Fprintln(&buf, "## Confidence Setup")
+	fmt.Fprintln(&buf)
+	writeSetupActions(&buf, analysis.SetupActions)
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "## Public Profile Preview")
 	fmt.Fprintln(&buf)
@@ -389,6 +404,21 @@ func PreflightMarkdown(preflight signals.PreflightReport) string {
 		fmt.Fprintln(&buf)
 		for _, item := range preflight.Rubric {
 			fmt.Fprintf(&buf, "- %s: %s (%s). %s\n", item.Label, item.Status, item.Severity, item.Evidence)
+		}
+	}
+	if preflight.PersonalContext != nil {
+		fmt.Fprintln(&buf)
+		fmt.Fprintln(&buf, "## Personal Pattern Checks")
+		fmt.Fprintln(&buf)
+		fmt.Fprintf(&buf, "- Recent artifacts analyzed: %d\n", preflight.PersonalContext.ArtifactsAnalyzed)
+		if len(preflight.PersonalContext.HighChurnFiles) > 0 {
+			fmt.Fprintf(&buf, "- Recent high-churn files: %s\n", strings.Join(preflight.PersonalContext.HighChurnFiles, ", "))
+		}
+		if preflight.PersonalContext.RecentSourceWithoutTests > 0 {
+			fmt.Fprintf(&buf, "- Recent source-without-test artifacts: %d\n", preflight.PersonalContext.RecentSourceWithoutTests)
+		}
+		if preflight.PersonalContext.TypicalFiles > 0 || preflight.PersonalContext.TypicalLines > 0 {
+			fmt.Fprintf(&buf, "- Typical recent scope: %d file(s), %d line(s)\n", preflight.PersonalContext.TypicalFiles, preflight.PersonalContext.TypicalLines)
 		}
 	}
 	fmt.Fprintln(&buf)
@@ -572,6 +602,62 @@ func publicSafeWeaknessMap(value signals.WeaknessMap, replacements ...[]pathRepl
 	return value
 }
 
+func publicSafeCoverage(value signals.CoverageSummary, replacements ...[]pathReplacement) signals.CoverageSummary {
+	for i := range value.Files {
+		value.Files[i].Path = privacy.RedactPath(redactText(value.Files[i].Path, replacements...), false)
+	}
+	value.Sources = redactStrings(value.Sources, replacements...)
+	value.Reason = redactText(value.Reason, replacements...)
+	return value
+}
+
+func publicSafeDeepDives(value signals.AnalysisDeepDives, replacements ...[]pathReplacement) signals.AnalysisDeepDives {
+	ordinal := 1
+	for i := range value.HighChurn {
+		value.HighChurn[i].Path = privacy.RedactPath(redactText(value.HighChurn[i].Path, replacements...), false)
+		value.HighChurn[i].NextAction = redactCommitLikeText(redactText(value.HighChurn[i].NextAction, replacements...))
+		for j := range value.HighChurn[i].Artifacts {
+			value.HighChurn[i].Artifacts[j] = publicSafeDeepDiveArtifact(value.HighChurn[i].Artifacts[j], &ordinal, replacements...)
+		}
+	}
+	for i := range value.NoTestArtifacts {
+		value.NoTestArtifacts[i].Artifact = publicSafeDeepDiveArtifact(value.NoTestArtifacts[i].Artifact, &ordinal, replacements...)
+		value.NoTestArtifacts[i].Risk = redactCommitLikeText(redactText(value.NoTestArtifacts[i].Risk, replacements...))
+		value.NoTestArtifacts[i].NextAction = redactCommitLikeText(redactText(value.NoTestArtifacts[i].NextAction, replacements...))
+		for j := range value.NoTestArtifacts[i].ChangedSourceFiles {
+			value.NoTestArtifacts[i].ChangedSourceFiles[j] = privacy.RedactPath(redactText(value.NoTestArtifacts[i].ChangedSourceFiles[j], replacements...), false)
+		}
+	}
+	return value
+}
+
+func publicSafeDeepDiveArtifact(value signals.DeepDiveArtifact, ordinal *int, replacements ...[]pathReplacement) signals.DeepDiveArtifact {
+	label := value.Label
+	if !strings.HasPrefix(label, "PR #") {
+		label = fmt.Sprintf("Artifact %d", *ordinal)
+		*ordinal++
+	}
+	value.ID = ""
+	value.Label = label
+	value.Title = ""
+	value.Scope = redactText(value.Scope, replacements...)
+	value.TestEvidence = redactText(value.TestEvidence, replacements...)
+	value.MainRisk = ""
+	value.NextAction = redactCommitLikeText(redactText(value.NextAction, replacements...))
+	return value
+}
+
+func publicSafeSetupActions(actions []signals.SetupAction, replacements ...[]pathReplacement) []signals.SetupAction {
+	out := make([]signals.SetupAction, 0, len(actions))
+	for _, action := range actions {
+		action.Label = redactCommitLikeText(redactText(action.Label, replacements...))
+		action.Command = redactCommitLikeText(redactText(action.Command, replacements...))
+		action.Why = redactCommitLikeText(redactText(action.Why, replacements...))
+		out = append(out, action)
+	}
+	return out
+}
+
 func publicSafeSignal(sig signals.Signal, sourceRepoID string, replacements ...[]pathReplacement) signals.Signal {
 	privateSubjectID := sig.SubjectID
 	if sig.RepoID == sourceRepoID {
@@ -654,6 +740,11 @@ func publicSafePathReplacements(analysis signals.AnalysisReport) []pathReplaceme
 	for _, sig := range analysis.Signals {
 		add(sig.RepoID, sig.SubjectID, sig.FilePath, sig.Message, sig.Evidence.ToolVersion)
 	}
+	for _, file := range analysis.Coverage.Files {
+		add(file.Path)
+	}
+	add(analysis.Coverage.Sources...)
+	add(analysis.Coverage.Reason)
 	for _, card := range analysis.PRCards {
 		add(card.Title, card.URL, card.Summary, card.Scope, card.TestEvidence, card.ReviewBurden, card.Durability, card.MainRisk, card.NextAction)
 		for _, finding := range append(append([]signals.Finding{}, card.Strengths...), card.Risks...) {
@@ -683,6 +774,20 @@ func publicSafePathReplacements(analysis signals.AnalysisReport) []pathReplaceme
 	for _, badge := range analysis.Profile.BadgeCandidates {
 		add(badge.ID, badge.Label)
 	}
+	for _, dive := range analysis.DeepDives.HighChurn {
+		add(dive.Path, dive.NextAction)
+		for _, artifact := range dive.Artifacts {
+			addDeepDiveArtifactText(add, artifact)
+		}
+	}
+	for _, dive := range analysis.DeepDives.NoTestArtifacts {
+		addDeepDiveArtifactText(add, dive.Artifact)
+		add(dive.ChangedSourceFiles...)
+		add(dive.Risk, dive.NextAction)
+	}
+	for _, action := range analysis.SetupActions {
+		add(action.ID, action.Label, action.Command, action.Why, action.ConfidenceImpact)
+	}
 	add(analysis.Limitations...)
 	sort.Slice(replacements, func(i, j int) bool {
 		return len(replacements[i].private) > len(replacements[j].private)
@@ -692,6 +797,10 @@ func publicSafePathReplacements(analysis signals.AnalysisReport) []pathReplaceme
 
 func addFindingText(add func(...string), finding signals.Finding) {
 	add(finding.Label, finding.Evidence, finding.WhyItMatters, finding.NextAction)
+}
+
+func addDeepDiveArtifactText(add func(...string), artifact signals.DeepDiveArtifact) {
+	add(artifact.ID, artifact.Label, artifact.Title, artifact.Scope, artifact.TestEvidence, artifact.MainRisk, artifact.NextAction)
 }
 
 func addPathReplacementsFromText(replacements *[]pathReplacement, seen map[string]bool, value string) {

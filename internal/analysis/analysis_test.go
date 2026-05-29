@@ -13,6 +13,7 @@ import (
 
 	"github.com/contribution-dev/contribution/internal/github"
 	"github.com/contribution-dev/contribution/internal/report"
+	"github.com/contribution-dev/contribution/internal/signals"
 )
 
 func TestRunWritesJsonArtifactsAndLocalOnlyFallback(t *testing.T) {
@@ -69,9 +70,54 @@ func TestRunWritesJsonArtifactsAndLocalOnlyFallback(t *testing.T) {
 	if analysis.Config.GitHubMetadataConfigured {
 		t.Fatalf("GitHubMetadataConfigured = true, want false without token")
 	}
+	if analysis.Coverage.Status != "unknown" {
+		t.Fatalf("coverage status = %q, want unknown without coverage input", analysis.Coverage.Status)
+	}
+	if len(analysis.DeepDives.NoTestArtifacts) != 0 {
+		t.Fatalf("unexpected no-test deep dives: %+v", analysis.DeepDives.NoTestArtifacts)
+	}
+	if len(analysis.SetupActions) == 0 {
+		t.Fatal("expected confidence setup actions")
+	}
 	assertContains(t, analysis.Limitations, "GitHub metadata was not requested; continuing local-only.")
 	if !strings.Contains(stdout.String(), "GitHub metadata: unavailable, continuing local-only") {
 		t.Fatalf("stdout missing local-only fallback message:\n%s", stdout.String())
+	}
+}
+
+func TestRunImportsAnalyzeCoverage(t *testing.T) {
+	requireGit(t)
+	withFixedNow(t, time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC))
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
+
+	repoPath := newAnalysisRepo(t)
+	coveragePath := filepath.Join(t.TempDir(), "coverage.out")
+	if err := os.WriteFile(coveragePath, []byte("mode: set\ninternal/app.go:3.1,3.30 1 1\n"), 0o600); err != nil {
+		t.Fatalf("write coverage: %v", err)
+	}
+	outputRoot := t.TempDir()
+	var stdout bytes.Buffer
+	outputDir, err := Run(context.Background(), &stdout, Options{
+		Repo:            repoPath,
+		Output:          outputRoot,
+		Format:          "json",
+		NoExternalTools: true,
+		CoveragePaths:   []string{coveragePath},
+		CoverageFormat:  "go",
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	analysis, err := report.ReadAnalysis(filepath.Join(outputDir, "analysis.json"))
+	if err != nil {
+		t.Fatalf("ReadAnalysis() error = %v", err)
+	}
+	if analysis.Coverage.Status != "available" || analysis.Coverage.Percent != 100 {
+		t.Fatalf("coverage = %+v, want available 100%%", analysis.Coverage)
+	}
+	if !hasSignalType(analysis.Signals, "coverage_line_percent") {
+		t.Fatalf("coverage signal missing: %+v", analysis.Signals)
 	}
 }
 
@@ -195,4 +241,13 @@ func assertContains(t *testing.T, values []string, needle string) {
 		}
 	}
 	t.Fatalf("%q not found in %v", needle, values)
+}
+
+func hasSignalType(values []signals.Signal, signalType string) bool {
+	for _, value := range values {
+		if value.Type == signalType {
+			return true
+		}
+	}
+	return false
 }

@@ -90,6 +90,38 @@ func TestReportRequiresInput(t *testing.T) {
 	}
 }
 
+func TestExportProfileRequiresInput(t *testing.T) {
+	stdout, stderr, err := executeForTest([]string{"export-profile"}, BuildInfo{})
+	if err == nil {
+		t.Fatal("Execute() error = nil, want missing input")
+	}
+	if !strings.Contains(err.Error(), "--input is required") {
+		t.Fatalf("error = %v, want missing input", err)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty before process-level error handling", stderr)
+	}
+}
+
+func TestRedactRequiresOutput(t *testing.T) {
+	stdout, stderr, err := executeForTest([]string{"redact", "--input", "analysis.json"}, BuildInfo{})
+	if err == nil {
+		t.Fatal("Execute() error = nil, want missing output")
+	}
+	if !strings.Contains(err.Error(), "--output is required") {
+		t.Fatalf("error = %v, want missing output", err)
+	}
+	if stdout != "" {
+		t.Fatalf("stdout = %q, want empty", stdout)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty before process-level error handling", stderr)
+	}
+}
+
 func TestPacketRequiresPR(t *testing.T) {
 	stdout, stderr, err := executeForTest([]string{"packet"}, BuildInfo{})
 	if err == nil {

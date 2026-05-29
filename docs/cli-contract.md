@@ -11,7 +11,9 @@ lives in Go tests and `scripts/dogfood-cli.mjs`.
 - Errors return a non-zero exit code, write the error to stderr at process
   level, and do not create unrelated artifacts.
 - Public-safe outputs must omit raw code, raw diffs, author emails, secrets,
-  tokens, private repo roots, and private remotes.
+  tokens, private repo roots, private remotes, `head_sha`, commit SHAs, and raw
+  commit or PR titles. Artifact labels use neutral public text such as
+  `Artifact 1` or `PR #123`.
 - Missing optional tools or GitHub metadata should degrade reports, not fail
   local analysis.
 - The CLI may generate `profile.export.json` and `share-card.json`, but it must
@@ -20,16 +22,33 @@ lives in Go tests and `scripts/dogfood-cli.mjs`.
 
 ## Commands
 
-| Command     | Contract                                                                                                                                        | Required coverage                                       |
-| ----------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| root/help   | No args exits 0 and prints command help to stdout.                                                                                              | Go command test and dogfood smoke.                      |
-| `version`   | Exits 0 and prints version, commit, and date fields. Release artifacts must use linker-provided values.                                         | Go command test, dogfood smoke, release artifact smoke. |
-| `init`      | Creates `.contribution.yml` in the current Git repo, uses a detected default branch when available, and is idempotent.                          | Dogfood smoke.                                          |
-| `doctor`    | Exits 0 in a Git repo, reports required/optional tool status, and never prints token values. Missing optional tools are non-fatal.              | Dogfood smoke and release artifact smoke.               |
-| `analyze`   | Analyzes `--repo` or the current repo, respects `--format`, writes expected artifacts, and continues without optional tools or GitHub metadata. | Dogfood smoke and release artifact smoke.               |
-| `report`    | Requires `--input`, validates `--format`, regenerates report/profile/share artifacts, and honors `--public-safe`.                               | Go command test and dogfood smoke.                      |
-| `preflight` | Validates `--format`, compares `--base` and `--head`, writes preflight artifacts, and classifies source/test/risky/dependency evidence.         | Go command test and dogfood smoke.                      |
-| `packet`    | Requires `--pr`, reads the latest analysis under `--output`, writes friend-review packet artifacts, and redacts by default.                     | Go command test and dogfood smoke.                      |
+| Command          | Contract                                                                                                                                        | Required coverage                                       |
+| ---------------- | ----------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
+| root/help        | No args exits 0 and prints command help to stdout.                                                                                              | Go command test and dogfood smoke.                      |
+| `version`        | Exits 0 and prints version, commit, and date fields. Release artifacts must use linker-provided values.                                         | Go command test, dogfood smoke, release artifact smoke. |
+| `init`           | Creates `.contribution.yml` in the current Git repo, uses a detected default branch when available, and is idempotent.                          | Dogfood smoke.                                          |
+| `doctor`         | Exits 0 in a Git repo, reports required/optional tool status, and never prints token values. Missing optional tools are non-fatal.              | Dogfood smoke and release artifact smoke.               |
+| `analyze`        | Analyzes `--repo` or the current repo, respects `--format`, writes expected artifacts, and continues without optional tools or GitHub metadata. | Dogfood smoke, real-repo dogfood, release smoke.        |
+| `report`         | Requires `--input`, validates `--format`, regenerates report/profile/share artifacts, and honors `--public-safe`.                               | Go command test and dogfood smoke.                      |
+| `export-profile` | Requires `--input` and `--output`, writes only public-safe `profile.export.json` and `share-card.json`, and never writes report artifacts.      | Go command test and dogfood smoke.                      |
+| `redact`         | Requires `--input` and `--output`, validates `--format`, and writes public-safe JSON, markdown, profile, and share artifacts.                   | Go command test and dogfood smoke.                      |
+| `preflight`      | Validates `--format`, compares `--base` and `--head`, writes preflight artifacts, and classifies source/test/risky/dependency evidence.         | Go command test and dogfood smoke.                      |
+| `packet`         | Requires `--pr`, reads the latest analysis under `--output`, writes friend-review packet artifacts, and redacts by default.                     | Go command test and dogfood smoke.                      |
+
+## Signal and export schema
+
+- Repository inventory is based on Git's visible file set: tracked files plus
+  untracked non-ignored files from `git ls-files`. Ignored local artifacts are
+  excluded through Git ignore rules, and missing deleted paths are skipped.
+- `inventory.config_files` is additive and backward-compatible. Existing
+  consumers can continue to use `by_class`, `source_files`, `test_files`, and
+  related counts.
+- Local history cards use `git log --numstat` line counts for changed-file
+  scope. Local-only weakness-map and profile confidence is capped at `medium`;
+  `high` is reserved for enough direct evidence plus relevant enrichment.
+- `profile.export.json` and `share-card.json` are the stable public-safe export
+  contract for the separate website/app repo. The CLI does not upload or host
+  them.
 
 ## Updating the contract
 

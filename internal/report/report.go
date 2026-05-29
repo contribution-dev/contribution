@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"regexp"
 	"sort"
 	"strings"
 
@@ -18,6 +19,8 @@ type pathReplacement struct {
 	private string
 	public  string
 }
+
+var commitSHAPattern = regexp.MustCompile(`\b[0-9a-fA-F]{7,40}\b`)
 
 // WriteAnalysisBundle writes the V1 analysis artifacts.
 func WriteAnalysisBundle(outputDir string, analysis signals.AnalysisReport, format string) error {
@@ -86,6 +89,17 @@ func WriteReportOnly(outputDir string, analysis signals.AnalysisReport, format s
 	return writeJSON(filepath.Join(outputDir, "share-card.json"), ShareCard(analysis))
 }
 
+// WriteProfileArtifacts writes only the public profile export contract files.
+func WriteProfileArtifacts(outputDir string, analysis signals.AnalysisReport) error {
+	if err := os.MkdirAll(outputDir, 0o750); err != nil {
+		return fmt.Errorf("create output directory: %w", err)
+	}
+	if err := writeJSON(filepath.Join(outputDir, "profile.export.json"), ProfileExport(analysis)); err != nil {
+		return err
+	}
+	return writeJSON(filepath.Join(outputDir, "share-card.json"), ShareCard(analysis))
+}
+
 // PublicSafeAnalysis returns an analysis report suitable for public-safe output.
 func PublicSafeAnalysis(analysis signals.AnalysisReport) signals.AnalysisReport {
 	privateRepoID := analysis.Repo.ID
@@ -95,6 +109,7 @@ func PublicSafeAnalysis(analysis signals.AnalysisReport) signals.AnalysisReport 
 	analysis.Repo.Name = "private repository"
 	analysis.Repo.Root = ""
 	analysis.Repo.RemoteURL = ""
+	analysis.Repo.HeadSHA = ""
 	analysis.Repo.GitHubOwner = ""
 	analysis.Repo.GitHubRepo = ""
 	analysis.Config.PublicSafe = true
@@ -112,8 +127,8 @@ func PublicSafeAnalysis(analysis signals.AnalysisReport) signals.AnalysisReport 
 	analysis.WeaknessMap = publicSafeWeaknessMap(analysis.WeaknessMap, pathReplacements)
 	analysis.Profile.Strengths = publicFindings(analysis.Profile.Strengths, len(analysis.Profile.Strengths), pathReplacements)
 	analysis.Profile.ImprovementTrends = publicFindings(analysis.Profile.ImprovementTrends, len(analysis.Profile.ImprovementTrends), pathReplacements)
-	analysis.Profile.Headline = redactText(analysis.Profile.Headline, pathReplacements)
-	analysis.Profile.DisplayName = redactText(analysis.Profile.DisplayName, pathReplacements)
+	analysis.Profile.Headline = redactCommitLikeText(redactText(analysis.Profile.Headline, pathReplacements))
+	analysis.Profile.DisplayName = redactCommitLikeText(redactText(analysis.Profile.DisplayName, pathReplacements))
 	analysis.Limitations = redactStrings(analysis.Limitations, pathReplacements)
 	for i := range analysis.Signals {
 		analysis.Signals[i] = publicSafeSignal(analysis.Signals[i], privateRepoID, publicRepoID, pathReplacements)
@@ -221,7 +236,7 @@ func ProfileExport(analysis signals.AnalysisReport) signals.ProfileExport {
 	var export signals.ProfileExport
 	export.Version = 1
 	export.GeneratedAt = analysis.GeneratedAt
-	export.Profile.DisplayName = redactText(analysis.Profile.DisplayName, pathReplacements)
+	export.Profile.DisplayName = redactCommitLikeText(redactText(analysis.Profile.DisplayName, pathReplacements))
 	export.Profile.Headline = "AI-native contribution profile"
 	export.Profile.Visibility = "private_by_default"
 	export.Summary.AnalyzedPRs = analysis.Profile.AnalyzedPRs
@@ -245,7 +260,7 @@ func ShareCard(analysis signals.AnalysisReport) signals.ShareCard {
 		fmt.Sprintf("%d artifacts analyzed", analysis.Profile.AnalyzedPRs),
 	}
 	for _, strength := range analysis.Profile.Strengths {
-		highlights = append(highlights, redactText(strength.Label, pathReplacements))
+		highlights = append(highlights, redactCommitLikeText(redactText(strength.Label, pathReplacements)))
 		if len(highlights) == 3 {
 			break
 		}
@@ -255,7 +270,7 @@ func ShareCard(analysis signals.AnalysisReport) signals.ShareCard {
 	}
 	subtitle := "Improving contribution quality across recent work"
 	if len(analysis.Profile.ImprovementTrends) > 0 {
-		subtitle = redactText(analysis.Profile.ImprovementTrends[0].Label, pathReplacements)
+		subtitle = redactCommitLikeText(redactText(analysis.Profile.ImprovementTrends[0].Label, pathReplacements))
 	}
 	return signals.ShareCard{
 		Version:    1,
@@ -474,8 +489,8 @@ func publicFindings(findings []signals.Finding, limit int, replacements ...[]pat
 	out := make([]signals.Finding, 0, limit)
 	for i := 0; i < limit; i++ {
 		f := findings[i]
-		f.Label = redactText(f.Label, replacements...)
-		f.Evidence = redactText(f.Evidence, replacements...)
+		f.Label = redactCommitLikeText(redactText(f.Label, replacements...))
+		f.Evidence = redactCommitLikeText(redactText(f.Evidence, replacements...))
 		f.NextAction = ""
 		f.WhyItMatters = ""
 		out = append(out, f)
@@ -489,25 +504,35 @@ func publicCards(cards []signals.PRQualityCard, limit int, replacements ...[]pat
 	}
 	out := make([]signals.PRQualityCard, 0, limit)
 	for i := 0; i < limit; i++ {
-		out = append(out, publicCard(cards[i], replacements...))
+		out = append(out, publicCard(cards[i], i+1, replacements...))
 	}
 	return out
 }
 
-func publicCard(card signals.PRQualityCard, replacements ...[]pathReplacement) signals.PRQualityCard {
-	card.Title = redactText(card.Title, replacements...)
+func publicCard(card signals.PRQualityCard, ordinal int, replacements ...[]pathReplacement) signals.PRQualityCard {
+	card.Title = publicArtifactTitle(card, ordinal)
 	card.URL = ""
-	card.Summary = redactText(card.Summary, replacements...)
+	card.Summary = redactCommitLikeText(redactText(card.Summary, replacements...))
 	card.Scope = redactText(card.Scope, replacements...)
 	card.TestEvidence = redactText(card.TestEvidence, replacements...)
 	card.ReviewBurden = redactText(card.ReviewBurden, replacements...)
 	card.Durability = redactText(card.Durability, replacements...)
 	card.MainRisk = ""
-	card.Strengths = publicFindings(card.Strengths, len(card.Strengths), replacements...)
+	card.Strengths = nil
 	card.Risks = nil
 	card.Evidence = nil
 	card.NextAction = ""
 	return card
+}
+
+func publicArtifactTitle(card signals.PRQualityCard, ordinal int) string {
+	if card.PRNumber > 0 {
+		return fmt.Sprintf("PR #%d", card.PRNumber)
+	}
+	if ordinal <= 0 {
+		ordinal = 1
+	}
+	return fmt.Sprintf("Artifact %d", ordinal)
 }
 
 func publicSafeWeaknessMap(value signals.WeaknessMap, replacements ...[]pathReplacement) signals.WeaknessMap {
@@ -519,11 +544,15 @@ func publicSafeWeaknessMap(value signals.WeaknessMap, replacements ...[]pathRepl
 }
 
 func publicSafeSignal(sig signals.Signal, privateRepoID string, publicRepoID string, replacements ...[]pathReplacement) signals.Signal {
+	privateSubjectID := sig.SubjectID
 	if sig.RepoID == privateRepoID {
 		sig.RepoID = publicRepoID
 	}
 	if sig.SubjectID == privateRepoID {
 		sig.SubjectID = publicRepoID
+	}
+	if sig.SubjectType == "commit" {
+		sig.SubjectID = ""
 	}
 	if sig.SubjectType == "file" && sig.SubjectID != "" {
 		sig.SubjectID = privacy.RedactPath(sig.SubjectID, false)
@@ -531,8 +560,9 @@ func publicSafeSignal(sig signals.Signal, privateRepoID string, publicRepoID str
 	if sig.FilePath != "" {
 		sig.FilePath = privacy.RedactPath(sig.FilePath, false)
 	}
-	sig.Message = redactText(sig.Message, replacements...)
+	sig.Message = redactCommitLikeText(redactText(sig.Message, replacements...), privateSubjectID, sig.Evidence.CommitSHA)
 	sig.Evidence.URL = ""
+	sig.Evidence.CommitSHA = ""
 	sig.Evidence.ToolVersion = redactText(sig.Evidence.ToolVersion, replacements...)
 	return sig
 }
@@ -540,10 +570,10 @@ func publicSafeSignal(sig signals.Signal, privateRepoID string, publicRepoID str
 func redactFindings(findings []signals.Finding, replacements ...[]pathReplacement) []signals.Finding {
 	out := make([]signals.Finding, 0, len(findings))
 	for _, finding := range findings {
-		finding.Label = redactText(finding.Label, replacements...)
-		finding.Evidence = redactText(finding.Evidence, replacements...)
-		finding.WhyItMatters = redactText(finding.WhyItMatters, replacements...)
-		finding.NextAction = redactText(finding.NextAction, replacements...)
+		finding.Label = redactCommitLikeText(redactText(finding.Label, replacements...))
+		finding.Evidence = redactCommitLikeText(redactText(finding.Evidence, replacements...))
+		finding.WhyItMatters = redactCommitLikeText(redactText(finding.WhyItMatters, replacements...))
+		finding.NextAction = redactCommitLikeText(redactText(finding.NextAction, replacements...))
 		out = append(out, finding)
 	}
 	return out
@@ -552,7 +582,7 @@ func redactFindings(findings []signals.Finding, replacements ...[]pathReplacemen
 func redactStrings(values []string, replacements ...[]pathReplacement) []string {
 	out := make([]string, 0, len(values))
 	for _, value := range values {
-		out = append(out, redactText(value, replacements...))
+		out = append(out, redactCommitLikeText(redactText(value, replacements...)))
 	}
 	return out
 }
@@ -564,6 +594,20 @@ func redactText(value string, replacements ...[]pathReplacement) string {
 		}
 	}
 	return privacy.RedactSecretLikeText(value)
+}
+
+func redactCommitLikeText(value string, shas ...string) string {
+	for _, sha := range shas {
+		sha = strings.TrimSpace(sha)
+		if sha == "" {
+			continue
+		}
+		value = strings.ReplaceAll(value, sha, "commit")
+		if len(sha) > 8 {
+			value = strings.ReplaceAll(value, sha[:8], "commit")
+		}
+	}
+	return commitSHAPattern.ReplaceAllString(value, "commit")
 }
 
 func publicSafePathReplacements(sigs []signals.Signal) []pathReplacement {

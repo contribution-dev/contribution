@@ -7,6 +7,7 @@ import (
 	"path/filepath"
 	"strings"
 	"testing"
+	"time"
 )
 
 func TestParseGitHubRepo(t *testing.T) {
@@ -84,6 +85,7 @@ func TestResolveRedactsCloneFailureOutput(t *testing.T) {
 	bin := t.TempDir()
 	fakeGit := filepath.Join(bin, "git")
 	script := "#!/bin/sh\nprintf 'fatal: unable to access %s: authentication failed\\n' \"$5\" >&2\nexit 1\n"
+	// #nosec G306 -- this test writes an executable fake git binary.
 	if err := os.WriteFile(fakeGit, []byte(script), 0o700); err != nil {
 		t.Fatalf("write fake git: %v", err)
 	}
@@ -121,11 +123,16 @@ func TestClassifyPath(t *testing.T) {
 		risky      bool
 		test       bool
 		dependency bool
+		config     bool
+		language   string
 	}{
 		{path: "internal/auth/session.go", class: "source", risky: true},
 		{path: "internal/auth/session_test.go", class: "test", risky: true, test: true},
 		{path: "docs/vision.md", class: "docs"},
 		{path: "go.mod", class: "dependency", dependency: true},
+		{path: "LICENSE", class: "config", config: true, language: "Other"},
+		{path: "lint-staged.config.js", class: "config", config: true, language: "JavaScript"},
+		{path: "scripts/codex-review-worker", class: "source", language: "Shell"},
 		{path: "vendor/example/file.go", class: "vendor"},
 		{path: ".github/workflows/ci.yml", class: "infrastructure"},
 	}
@@ -143,5 +150,117 @@ func TestClassifyPath(t *testing.T) {
 		if got.IsDependency != tt.dependency {
 			t.Fatalf("ClassifyPath(%q).IsDependency = %v, want %v", tt.path, got.IsDependency, tt.dependency)
 		}
+		if got.IsConfig != tt.config {
+			t.Fatalf("ClassifyPath(%q).IsConfig = %v, want %v", tt.path, got.IsConfig, tt.config)
+		}
+		if tt.language != "" && got.Language != tt.language {
+			t.Fatalf("ClassifyPath(%q).Language = %q, want %q", tt.path, got.Language, tt.language)
+		}
 	}
+}
+
+func TestInventoryUsesGitVisibleFiles(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repoPath := t.TempDir()
+	runGit(t, repoPath, "init", "-b", "main")
+	runGit(t, repoPath, "config", "user.email", "dogfood@example.test")
+	runGit(t, repoPath, "config", "user.name", "Dogfood User")
+	writeTestFile(t, repoPath, ".gitignore", ".pnpm-store/\n.code-reviews/\n.tools/\nbin/\nnode_modules/\ndocs-shared/\n")
+	writeTestFile(t, repoPath, "README.md", "# fixture\n")
+	writeTestFile(t, repoPath, "internal/app.go", "package app\n")
+	writeTestFile(t, repoPath, "internal/app_test.go", "package app\n")
+	writeTestFile(t, repoPath, "lint-staged.config.js", "export default [];\n")
+	writeTestFile(t, repoPath, "scripts/codex-review-worker", "#!/bin/sh\n")
+	writeTestFile(t, repoPath, "deleted.txt", "deleted\n")
+	runGit(t, repoPath, "add", ".")
+	runGit(t, repoPath, "commit", "-m", "initial fixture")
+
+	writeTestFile(t, repoPath, "internal/untracked.go", "package app\n")
+	writeTestFile(t, repoPath, ".pnpm-store/store.json", "{}\n")
+	writeTestFile(t, repoPath, ".code-reviews/report.json", "{}\n")
+	writeTestFile(t, repoPath, ".tools/tool.json", "{}\n")
+	writeTestFile(t, repoPath, "bin/contribution", "binary\n")
+	writeTestFile(t, repoPath, "node_modules/pkg/index.js", "module.exports = {}\n")
+	writeTestFile(t, repoPath, "docs-shared/vision.md", "private\n")
+	if err := os.Remove(filepath.Join(repoPath, "deleted.txt")); err != nil {
+		t.Fatalf("remove deleted tracked file: %v", err)
+	}
+
+	summary, _, err := Inventory(context.Background(), repoPath, "local:test", time.Now())
+	if err != nil {
+		t.Fatalf("Inventory() error = %v", err)
+	}
+	want := len(gitVisibleExistingFiles(t, repoPath))
+	if summary.TotalFiles != want {
+		t.Fatalf("TotalFiles = %d, want git-visible existing files %d", summary.TotalFiles, want)
+	}
+	if summary.SourceFiles != 3 {
+		t.Fatalf("SourceFiles = %d, want 3", summary.SourceFiles)
+	}
+	if summary.TestFiles != 1 {
+		t.Fatalf("TestFiles = %d, want 1", summary.TestFiles)
+	}
+	if summary.ConfigFiles < 2 {
+		t.Fatalf("ConfigFiles = %d, want at least .gitignore and lint-staged config", summary.ConfigFiles)
+	}
+}
+
+func TestParseHistoryUsesNumstat(t *testing.T) {
+	out := strings.Join([]string{
+		"@@@abcdef1234567890\t2026-05-28T00:00:00Z\tadd app",
+		"10\t2\tinternal/app.go",
+		"1\t0\tinternal/app_test.go",
+		"-\t-\tassets/logo.png",
+	}, "\n")
+	history := parseHistory(out, 10)
+	if len(history.Commits) != 1 {
+		t.Fatalf("commits = %d, want 1", len(history.Commits))
+	}
+	files := history.Commits[0].Files
+	if len(files) != 3 {
+		t.Fatalf("files = %d, want 3", len(files))
+	}
+	if files[0].Path != "internal/app.go" || files[0].Additions != 10 || files[0].Deletions != 2 {
+		t.Fatalf("first numstat file = %+v", files[0])
+	}
+	if files[2].Additions != 0 || files[2].Deletions != 0 {
+		t.Fatalf("binary numstat counts = %+v, want zero counts", files[2])
+	}
+	if !history.Commits[0].SourceTouched || !history.Commits[0].TestsTouched {
+		t.Fatalf("classification flags were not populated: %+v", history.Commits[0])
+	}
+}
+
+func writeTestFile(t *testing.T, root string, rel string, content string) {
+	t.Helper()
+	target := filepath.Join(root, rel)
+	if err := os.MkdirAll(filepath.Dir(target), 0o750); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(target), err)
+	}
+	if err := os.WriteFile(target, []byte(content), 0o600); err != nil {
+		t.Fatalf("write %s: %v", rel, err)
+	}
+}
+
+func gitVisibleExistingFiles(t *testing.T, repoPath string) []string {
+	t.Helper()
+	// #nosec G204 -- tests execute the fixed git binary with test-controlled args.
+	cmd := exec.Command("git", "ls-files", "--cached", "--others", "--exclude-standard", "-z")
+	cmd.Dir = repoPath
+	out, err := cmd.Output()
+	if err != nil {
+		t.Fatalf("git ls-files: %v", err)
+	}
+	var files []string
+	for _, rel := range strings.Split(string(out), "\x00") {
+		if rel == "" {
+			continue
+		}
+		if _, err := os.Stat(filepath.Join(repoPath, filepath.FromSlash(rel))); err == nil {
+			files = append(files, rel)
+		}
+	}
+	return files
 }

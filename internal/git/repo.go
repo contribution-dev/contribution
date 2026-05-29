@@ -39,12 +39,16 @@ func (r Repo) Metadata(publicSafe bool) signals.RepoMetadata {
 	name := r.Name
 	root := r.Path
 	remote := r.RemoteURL
+	headSHA := r.HeadSHA
+	owner := r.GitHubOwner
+	repoName := r.GitHubRepo
 	if publicSafe {
 		root = ""
-		if r.GitHubOwner == "" || r.GitHubRepo == "" {
-			name = "private repository"
-			remote = ""
-		}
+		headSHA = ""
+		remote = ""
+		owner = ""
+		repoName = ""
+		name = "private repository"
 	}
 	return signals.RepoMetadata{
 		ID:            r.ID,
@@ -52,10 +56,10 @@ func (r Repo) Metadata(publicSafe bool) signals.RepoMetadata {
 		Root:          root,
 		RemoteURL:     remote,
 		DefaultBranch: r.DefaultBranch,
-		HeadSHA:       r.HeadSHA,
+		HeadSHA:       headSHA,
 		IsRemoteClone: r.IsRemoteClone,
-		GitHubOwner:   r.GitHubOwner,
-		GitHubRepo:    r.GitHubRepo,
+		GitHubOwner:   owner,
+		GitHubRepo:    repoName,
 	}
 }
 
@@ -221,6 +225,7 @@ type Classification struct {
 	IsDocs            bool
 	IsSource          bool
 	IsDependency      bool
+	IsConfig          bool
 	IsGenerated       bool
 	IsVendor          bool
 	IsInfrastructure  bool
@@ -249,10 +254,14 @@ func ClassifyPath(path string) Classification {
 		class = Classification{Class: "docs", Language: "Markdown", IsDocs: true}
 	case isDependencyFile(lower, base):
 		class = Classification{Class: "dependency", Language: languageForPath(lower), IsDependency: true}
+	case isConfigPath(lower, base):
+		class = Classification{Class: "config", Language: languageForPath(lower), IsConfig: true}
 	case isInfrastructurePath(lower, base):
 		class = Classification{Class: "infrastructure", Language: languageForPath(lower), IsInfrastructure: true}
 	case isMigrationPath(lower):
 		class = Classification{Class: "migration", Language: languageForPath(lower), IsMigration: true, IsSource: true}
+	case isExtensionlessScriptPath(lower, base):
+		class = Classification{Class: "source", Language: "Shell", IsSource: true}
 	case languageForPath(lower) == "Other":
 		class = Classification{Class: "unknown", Language: "Other"}
 	}
@@ -261,36 +270,25 @@ func ClassifyPath(path string) Classification {
 	return class
 }
 
-// Inventory walks the repo and emits repo-level inventory signals.
-func Inventory(repoPath, repoID string, createdAt time.Time) (signals.FileSummary, []signals.Signal, error) {
+// Inventory uses Git's visible file set and emits repo-level inventory signals.
+func Inventory(ctx context.Context, repoPath, repoID string, createdAt time.Time) (signals.FileSummary, []signals.Signal, error) {
 	summary := newFileSummary()
-	err := filepath.WalkDir(repoPath, func(path string, entry os.DirEntry, err error) error {
+	paths, err := gitInventoryPaths(ctx, repoPath)
+	if err != nil {
+		return summary, nil, err
+	}
+	for _, rel := range paths {
+		info, err := os.Stat(filepath.Join(repoPath, filepath.FromSlash(rel)))
 		if err != nil {
-			return err
-		}
-		if path == repoPath {
-			return nil
-		}
-		rel, err := filepath.Rel(repoPath, path)
-		if err != nil {
-			return err
-		}
-		rel = filepath.ToSlash(rel)
-		if entry.IsDir() {
-			switch rel {
-			case ".git", ".contribution", "node_modules", ".tools":
-				return filepath.SkipDir
+			if errors.Is(err, os.ErrNotExist) {
+				continue
 			}
-			if strings.HasPrefix(rel, ".git/") || strings.HasPrefix(rel, ".contribution/") {
-				return filepath.SkipDir
-			}
-			return nil
+			return summary, nil, fmt.Errorf("stat inventory path %s: %w", rel, err)
+		}
+		if info.IsDir() {
+			continue
 		}
 		addFileSummary(&summary, rel)
-		return nil
-	})
-	if err != nil {
-		return summary, nil, fmt.Errorf("walk repo inventory: %w", err)
 	}
 	sigs := []signals.Signal{
 		signals.New(repoID, "git", "repo_file_count", "repo", repoID, signals.SeverityInfo, signals.DirectionNeutral, signals.ConfidenceHigh, float64(summary.TotalFiles), "count", fmt.Sprintf("Repository inventory found %d files.", summary.TotalFiles), true, createdAt),
@@ -302,6 +300,26 @@ func Inventory(repoPath, repoID string, createdAt time.Time) (signals.FileSummar
 		sigs = append(sigs, signals.New(repoID, "git", "repo_security_sensitive_file_count", "repo", repoID, signals.SeverityInfo, signals.DirectionNeutral, signals.ConfidenceMedium, float64(summary.RiskyFiles), "count", fmt.Sprintf("Repository inventory found %d security-sensitive paths.", summary.RiskyFiles), false, createdAt))
 	}
 	return summary, sigs, nil
+}
+
+func gitInventoryPaths(ctx context.Context, repoPath string) ([]string, error) {
+	out, err := gitOutput(ctx, repoPath, "ls-files", "--cached", "--others", "--exclude-standard", "-z")
+	if err != nil {
+		return nil, fmt.Errorf("collect git inventory: %w", err)
+	}
+	raw := strings.Split(out, "\x00")
+	paths := make([]string, 0, len(raw))
+	for _, path := range raw {
+		if path == "" {
+			continue
+		}
+		path = filepath.ToSlash(filepath.Clean(path))
+		if path == "." || strings.HasPrefix(path, "../") || filepath.IsAbs(path) {
+			continue
+		}
+		paths = append(paths, path)
+	}
+	return paths, nil
 }
 
 // ChangedFile is a changed path in commit history or a diff.
@@ -342,7 +360,7 @@ func CollectHistory(ctx context.Context, repoPath, repoID string, since time.Tim
 		"--since=" + since.Format(time.RFC3339),
 		"--date=iso-strict",
 		"--pretty=format:@@@%H%x09%aI%x09%s",
-		"--name-only",
+		"--numstat",
 	}
 	out, err := gitOutput(ctx, repoPath, args...)
 	if err != nil {
@@ -426,8 +444,12 @@ func parseHistory(out string, maxCommits int) History {
 		if current == nil {
 			continue
 		}
-		path := filepath.ToSlash(line)
-		current.Files = append(current.Files, ChangedFile{Path: path})
+		file, ok := parseNumstatLine(line)
+		if !ok {
+			continue
+		}
+		path := file.Path
+		current.Files = append(current.Files, file)
 		class := ClassifyPath(path)
 		current.TestsTouched = current.TestsTouched || class.IsTest
 		current.DocsTouched = current.DocsTouched || class.IsDocs
@@ -452,6 +474,10 @@ func historySignals(repoID string, history History, createdAt time.Time) []signa
 	for _, commit := range history.Commits {
 		short := shortSHA(commit.SHA)
 		out = append(out, signals.New(repoID, "git", "commit_file_count", "commit", commit.SHA, signals.SeverityInfo, signals.DirectionNeutral, signals.ConfidenceHigh, float64(len(commit.Files)), "count", fmt.Sprintf("Commit %s changed %d files.", short, len(commit.Files)), true, createdAt))
+		lineCount := changedLineCount(commit.Files)
+		if lineCount > 0 {
+			out = append(out, signals.New(repoID, "git", "commit_line_count", "commit", commit.SHA, signals.SeverityInfo, signals.DirectionNeutral, signals.ConfidenceHigh, float64(lineCount), "lines", fmt.Sprintf("Commit %s changed %d lines.", short, lineCount), true, createdAt))
+		}
 		if commit.TestsTouched {
 			out = append(out, signals.New(repoID, "git", "commit_tests_touched", "commit", commit.SHA, signals.SeverityInfo, signals.DirectionPositive, signals.ConfidenceHigh, 1, "boolean", fmt.Sprintf("Commit %s touched test files.", short), true, createdAt))
 		} else if commit.SourceTouched {
@@ -477,19 +503,46 @@ func historySignals(repoID string, history History, createdAt time.Time) []signa
 func parseNumstat(out string) []ChangedFile {
 	var files []ChangedFile
 	for _, line := range strings.Split(out, "\n") {
-		line = strings.TrimSpace(line)
-		if line == "" {
-			continue
+		file, ok := parseNumstatLine(line)
+		if ok {
+			files = append(files, file)
 		}
-		parts := strings.Split(line, "\t")
-		if len(parts) < 3 {
-			continue
-		}
-		additions, _ := strconv.Atoi(parts[0])
-		deletions, _ := strconv.Atoi(parts[1])
-		files = append(files, ChangedFile{Path: filepath.ToSlash(parts[2]), Additions: additions, Deletions: deletions})
 	}
 	return files
+}
+
+func parseNumstatLine(line string) (ChangedFile, bool) {
+	line = strings.TrimSpace(line)
+	if line == "" {
+		return ChangedFile{}, false
+	}
+	parts := strings.Split(line, "\t")
+	if len(parts) < 3 {
+		return ChangedFile{}, false
+	}
+	additions := parseNumstatCount(parts[0])
+	deletions := parseNumstatCount(parts[1])
+	path := strings.Join(parts[2:], "\t")
+	return ChangedFile{Path: filepath.ToSlash(path), Additions: additions, Deletions: deletions}, true
+}
+
+func parseNumstatCount(value string) int {
+	if value == "-" {
+		return 0
+	}
+	count, err := strconv.Atoi(value)
+	if err != nil {
+		return 0
+	}
+	return count
+}
+
+func changedLineCount(files []ChangedFile) int {
+	var total int
+	for _, file := range files {
+		total += file.Additions + file.Deletions
+	}
+	return total
 }
 
 func newFileSummary() signals.FileSummary {
@@ -511,6 +564,8 @@ func addFileSummary(summary *signals.FileSummary, path string) {
 		summary.DocsFiles++
 	case class.IsDependency:
 		summary.DependencyFiles++
+	case class.IsConfig:
+		summary.ConfigFiles++
 	case class.IsGenerated:
 		summary.GeneratedFiles++
 	case class.IsVendor:
@@ -676,6 +731,24 @@ func isDependencyFile(path, base string) bool {
 		return true
 	}
 	return path == "pipfile" || path == "pipfile.lock"
+}
+
+func isConfigPath(path, base string) bool {
+	switch base {
+	case ".editorconfig", ".gitignore", ".gitattributes", ".npmrc", ".nvmrc",
+		".prettierrc", ".prettierignore", ".eslintrc", ".golangci.yml", ".golangci.yaml",
+		".goreleaser.yml", ".goreleaser.yaml", ".dockerignore", "makefile", "justfile",
+		"lint-staged.config.js", "pnpm-workspace.yaml", "tsconfig.json", "jsconfig.json",
+		"license", "licence", "copying", "notice":
+		return true
+	}
+	return strings.HasPrefix(base, ".prettierrc.") ||
+		strings.HasPrefix(base, ".eslintrc.") ||
+		strings.HasPrefix(path, ".codex/")
+}
+
+func isExtensionlessScriptPath(path, base string) bool {
+	return strings.HasPrefix(path, "scripts/") && filepath.Ext(base) == ""
 }
 
 func isVendorPath(path string) bool {

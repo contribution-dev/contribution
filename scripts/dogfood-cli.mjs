@@ -21,7 +21,7 @@ const TMP_PARENT = "/tmp";
 const DEFAULT_BINARY = path.join(ROOT, "bin", "contribution");
 const SECRET_VALUE = "dogfood-secret-value";
 const SECRET_SENTINEL = `token=${SECRET_VALUE}`;
-const MODES = new Set(["smoke", "release"]);
+const MODES = new Set(["smoke", "release", "real"]);
 
 function parseArgs(argv) {
   const args = {
@@ -72,7 +72,8 @@ function printHelp() {
   console.log(`Usage: node scripts/dogfood-cli.mjs [options]
 
 Options:
-  --mode smoke|release  Dogfood mode to run (default: smoke)
+  --mode smoke|release|real
+                        Dogfood mode to run (default: smoke)
   --binary <path>       Binary path to build or test
   --skip-build          Use --binary without rebuilding it
   --keep-temp           Keep temporary workspaces for debugging
@@ -135,6 +136,34 @@ function writeRepoFile(repo, relativePath, content) {
 
 function git(repo, args) {
   return run("git", args, { cwd: repo });
+}
+
+function gitVisibleExistingFiles(repo) {
+  const result = git(repo, [
+    "ls-files",
+    "--cached",
+    "--others",
+    "--exclude-standard",
+    "-z",
+  ]);
+  return result.stdout
+    .split("\0")
+    .filter(Boolean)
+    .filter((relativePath) => existsSync(path.join(repo, relativePath)))
+    .sort();
+}
+
+function currentHeadSHA(repo) {
+  return git(repo, ["rev-parse", "HEAD"]).stdout.trim();
+}
+
+function writeIgnoredArtifacts(repo) {
+  writeRepoFile(repo, ".pnpm-store/store.json", "{}\n");
+  writeRepoFile(repo, ".code-reviews/report.json", "{}\n");
+  writeRepoFile(repo, ".tools/tool.json", "{}\n");
+  writeRepoFile(repo, "bin/contribution", "binary\n");
+  writeRepoFile(repo, "node_modules/pkg/index.js", "module.exports = {}\n");
+  writeRepoFile(repo, "docs-shared/vision.md", "private\n");
 }
 
 function createGitRepo(tempRoot, name) {
@@ -339,6 +368,7 @@ function assertAnalysisPublicSafe(file, privateRoot) {
     !analysis.repo?.remote_url,
     "public-safe analysis retained repo remote",
   );
+  assert(!analysis.repo?.head_sha, "public-safe analysis retained head SHA");
   assertPublicSafeFiles([file], privateRoot);
   return analysis;
 }
@@ -389,6 +419,7 @@ function analysisFixture(privateRoot) {
       source_files: 1,
       docs_files: 0,
       dependency_files: 0,
+      config_files: 0,
       generated_files: 0,
       vendor_files: 0,
       risky_files: 0,
@@ -560,6 +591,11 @@ function runSmoke(binary, tempRoot, options = {}) {
   ]);
   writeRepoFile(
     analysisRepo,
+    ".gitignore",
+    ".contribution/\n.pnpm-store/\n.code-reviews/\n.tools/\nbin/\nnode_modules/\ndocs-shared/\n",
+  );
+  writeRepoFile(
+    analysisRepo,
     "internal/app.go",
     "package app\n\nfunc Value() int { return 1 }\n",
   );
@@ -568,7 +604,13 @@ function runSmoke(binary, tempRoot, options = {}) {
     "internal/app_test.go",
     'package app\n\nimport "testing"\n\nfunc TestValue(t *testing.T) { if Value() != 1 { t.Fatal(Value()) } }\n',
   );
+  writeRepoFile(analysisRepo, "docs/guide.md", "# Guide\n");
+  writeRepoFile(analysisRepo, "lint-staged.config.js", "export default [];\n");
+  writeRepoFile(analysisRepo, "scripts/review-worker", "#!/bin/sh\n");
   commitAll(analysisRepo, "add app code and tests");
+  writeRepoFile(analysisRepo, "internal/untracked.go", "package app\n");
+  writeIgnoredArtifacts(analysisRepo);
+  const analysisRepoVisibleFiles = gitVisibleExistingFiles(analysisRepo);
 
   const privateRemoteRoot = path.join(tempRoot, "analyze-private-remote");
   runCli(
@@ -627,6 +669,22 @@ function runSmoke(binary, tempRoot, options = {}) {
     analysisRepo,
   );
   assert(analysis.version === 1, "analysis.json version mismatch");
+  assert(
+    analysis.inventory?.total_files === analysisRepoVisibleFiles.length,
+    `inventory counted ${analysis.inventory?.total_files} files, want ${analysisRepoVisibleFiles.length} Git-visible files`,
+  );
+  assert(
+    analysis.inventory?.config_files > 0,
+    "inventory did not classify tracked config files",
+  );
+  assert(
+    analysis.inventory?.source_files >= 3,
+    "inventory did not classify tracked and untracked source files",
+  );
+  assertNoTextInFiles(
+    [path.join(jsonRun, "analysis.json")],
+    [".pnpm-store", ".code-reviews", ".tools", "node_modules", "docs-shared"],
+  );
   assertPublicSafeFiles(
     [
       path.join(jsonRun, "profile.export.json"),
@@ -719,6 +777,50 @@ function runSmoke(binary, tempRoot, options = {}) {
     ],
     analysisRepo,
   );
+
+  const exportRoot = path.join(tempRoot, "export-profile-output");
+  const exportProfile = runCli(
+    binary,
+    [
+      "export-profile",
+      "--input",
+      path.join(jsonRun, "analysis.json"),
+      "--output",
+      exportRoot,
+    ],
+    { cwd: analysisRepo, env, byName: options.byName },
+  );
+  assertReferencedPathsExist(exportProfile, tempRoot);
+  assertFilesExist(exportRoot, ["profile.export.json", "share-card.json"]);
+  assertFilesAbsent(exportRoot, ["analysis.json", "report.md", "tooling.json"]);
+  assertPublicSafeFiles(collectFiles(exportRoot), analysisRepo);
+
+  const redactRoot = path.join(tempRoot, "redact-output");
+  const redact = runCli(
+    binary,
+    [
+      "redact",
+      "--input",
+      path.join(jsonRun, "analysis.json"),
+      "--output",
+      redactRoot,
+      "--format",
+      "all",
+    ],
+    { cwd: analysisRepo, env, byName: options.byName },
+  );
+  assertReferencedPathsExist(redact, tempRoot);
+  assertFilesExist(redactRoot, [
+    "analysis.json",
+    "report.md",
+    "profile.export.json",
+    "share-card.json",
+  ]);
+  assertAnalysisPublicSafe(
+    path.join(redactRoot, "analysis.json"),
+    analysisRepo,
+  );
+  assertPublicSafeFiles(collectFiles(redactRoot), analysisRepo);
 
   const privateReportRoot = path.join(tempRoot, "report-private-input");
   const privateReportFixture = path.join(tempRoot, "report-private-fixture");
@@ -934,6 +1036,94 @@ function runReleaseArtifactSmoke(tempRoot) {
   assertPublicSafeFiles(collectFiles(releaseRun), repo);
 }
 
+function runRealRepoDogfood(binary, tempRoot) {
+  const home = path.join(tempRoot, "real-home");
+  mkdirSync(home, { recursive: true });
+  const env = dogfoodEnv({
+    home,
+    pathValue: process.env.PATH,
+    includeTokenSentinel: false,
+  });
+  const output = path.join(tempRoot, "real-repo-analysis");
+  const beforeVisibleFiles = gitVisibleExistingFiles(ROOT);
+  const headSHA = currentHeadSHA(ROOT);
+
+  const analyze = runCli(
+    binary,
+    [
+      "analyze",
+      "--repo",
+      ROOT,
+      "--output",
+      output,
+      "--format",
+      "all",
+      "--public-safe",
+      "--no-external-tools",
+    ],
+    { cwd: ROOT, env },
+  );
+  assertReferencedPathsExist(analyze, tempRoot);
+  const runDir = latestRunDir(output);
+  assertFilesExist(runDir, [
+    "analysis.json",
+    "report.md",
+    "profile.export.json",
+    "share-card.json",
+    "tooling.json",
+  ]);
+  const analysisPath = path.join(runDir, "analysis.json");
+  const analysis = assertAnalysisPublicSafe(analysisPath, ROOT);
+  assert(
+    analysis.inventory?.total_files === beforeVisibleFiles.length,
+    `real repo inventory counted ${analysis.inventory?.total_files} files, want ${beforeVisibleFiles.length} Git-visible files`,
+  );
+  assert(
+    analysis.weakness_map?.confidence !== "high",
+    "local-only weakness map confidence was high",
+  );
+  assert(
+    analysis.profile?.confidence !== "high",
+    "local-only profile confidence was high",
+  );
+  assertPublicSafeFiles(collectFiles(runDir), ROOT);
+  assertNoTextInFiles(collectFiles(runDir), [
+    ROOT,
+    headSHA,
+    headSHA.slice(0, 8),
+    /https?:\/\/[^\s"']+/iu,
+    ".pnpm-store",
+    ".code-reviews",
+    ".tools",
+    "node_modules",
+    "docs-shared",
+    "/Users/gabe",
+  ]);
+
+  const redactRoot = path.join(tempRoot, "real-redact-output");
+  runCli(
+    binary,
+    [
+      "redact",
+      "--input",
+      analysisPath,
+      "--output",
+      redactRoot,
+      "--format",
+      "all",
+    ],
+    { cwd: ROOT, env },
+  );
+  assertAnalysisPublicSafe(path.join(redactRoot, "analysis.json"), ROOT);
+  assertPublicSafeFiles(collectFiles(redactRoot), ROOT);
+  assertNoTextInFiles(collectFiles(redactRoot), [
+    ROOT,
+    headSHA,
+    headSHA.slice(0, 8),
+    "/Users/gabe",
+  ]);
+}
+
 function main() {
   const args = parseArgs(process.argv.slice(2));
   const binary = path.resolve(args.binary || DEFAULT_BINARY);
@@ -946,7 +1136,11 @@ function main() {
       assert(existsSync(binary), `binary does not exist: ${binary}`);
     }
 
-    runSmoke(binary, tempRoot);
+    if (args.mode === "real") {
+      runRealRepoDogfood(binary, tempRoot);
+    } else {
+      runSmoke(binary, tempRoot);
+    }
     if (args.mode === "release") {
       runReleaseArtifactSmoke(tempRoot);
     }

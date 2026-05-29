@@ -2,6 +2,8 @@ package report
 
 import (
 	"encoding/json"
+	"os"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -11,6 +13,7 @@ import (
 
 func TestProfileExportIsPublicSafe(t *testing.T) {
 	privateRelativePath := "internal/customer/acme/session.go"
+	commitSHA := "abcdef1234567890abcdef1234567890abcdef12"
 	analysis := signals.AnalysisReport{
 		GeneratedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		Profile: signals.ProfileSummary{
@@ -28,6 +31,11 @@ func TestProfileExportIsPublicSafe(t *testing.T) {
 			SubjectType: "file",
 			SubjectID:   privateRelativePath,
 			FilePath:    privateRelativePath,
+		}, {
+			SubjectType: "commit",
+			SubjectID:   commitSHA,
+			Message:     "Commit " + commitSHA[:8] + " touched tests",
+			Evidence:    signals.Evidence{CommitSHA: commitSHA},
 		}},
 		PRCards: []signals.PRQualityCard{{
 			PRNumber:   123,
@@ -53,8 +61,14 @@ func TestProfileExportIsPublicSafe(t *testing.T) {
 	if got := export.SelectedArtifacts[0]; got.URL != "" || len(got.Risks) != 0 || got.MainRisk != "" || got.NextAction != "" {
 		t.Fatalf("selected artifact was not redacted: %+v", got)
 	}
+	if export.SelectedArtifacts[0].Title != "PR #123" {
+		t.Fatalf("selected artifact title = %q, want neutral PR label", export.SelectedArtifacts[0].Title)
+	}
 	if containsInJSON(export, privateRelativePath) {
 		t.Fatalf("profile export retained private path: %+v", export)
+	}
+	if containsInJSON(export, commitSHA) || containsInJSON(export, commitSHA[:8]) {
+		t.Fatalf("profile export retained commit SHA: %+v", export)
 	}
 }
 
@@ -62,12 +76,15 @@ func TestPublicSafeAnalysisRedactsPrivateMetadata(t *testing.T) {
 	secret := "token=dogfood-secret-value"
 	privateRoot := "/private/tmp/contribution-secret-repo"
 	privateRelativePath := "internal/customer/acme/session.go"
+	commitSHA := "abcdef1234567890abcdef1234567890abcdef12"
+	commitTitle := "Fix customer " + privateRelativePath
 	analysis := signals.AnalysisReport{
 		Repo: signals.RepoMetadata{
 			ID:          "owner/private-repo",
 			Name:        "private-repo",
 			Root:        privateRoot,
 			RemoteURL:   "https://" + secret + "@github.com/owner/private-repo.git",
+			HeadSHA:     commitSHA,
 			GitHubOwner: "owner",
 			GitHubRepo:  "private-repo",
 		},
@@ -96,10 +113,18 @@ func TestPublicSafeAnalysisRedactsPrivateMetadata(t *testing.T) {
 			Message:     privateRelativePath + " changed 4 times",
 			PublicSafe:  false,
 			CreatedAt:   time.Now(),
+		}, {
+			RepoID:      "owner/private-repo",
+			SubjectType: "commit",
+			SubjectID:   commitSHA,
+			Message:     "Commit " + commitSHA[:8] + " changed 10 lines",
+			Evidence:    signals.Evidence{CommitSHA: commitSHA},
+			PublicSafe:  true,
+			CreatedAt:   time.Now(),
 		}},
 		PRCards: []signals.PRQualityCard{{
 			PRNumber: 123,
-			Title:    "Fix " + secret,
+			Title:    commitTitle,
 			URL:      "https://github.com/owner/private-repo/pull/123",
 			Risks:    []signals.Finding{{Label: "private"}},
 			Evidence: []signals.SignalRef{{ID: "private"}},
@@ -127,7 +152,7 @@ func TestPublicSafeAnalysisRedactsPrivateMetadata(t *testing.T) {
 	}
 
 	got := PublicSafeAnalysis(analysis)
-	if got.Repo.Root != "" || got.Repo.RemoteURL != "" || got.Repo.GitHubOwner != "" || got.Repo.GitHubRepo != "" {
+	if got.Repo.Root != "" || got.Repo.RemoteURL != "" || got.Repo.HeadSHA != "" || got.Repo.GitHubOwner != "" || got.Repo.GitHubRepo != "" {
 		t.Fatalf("repo metadata was not redacted: %+v", got.Repo)
 	}
 	if got.Config.OutputDirectory != "" || !got.Config.PublicSafe || got.Config.GitHubMetadataConfigured {
@@ -145,11 +170,77 @@ func TestPublicSafeAnalysisRedactsPrivateMetadata(t *testing.T) {
 	if got.Signals[1].SubjectID != "session.go" || got.Signals[1].FilePath != "session.go" {
 		t.Fatalf("repo-relative signal path was not redacted: %+v", got.Signals[1])
 	}
-	if got.PRCards[0].URL != "" || len(got.PRCards[0].Risks) != 0 || got.PRCards[0].MainRisk != "" || len(got.PRCards[0].Evidence) != 0 {
+	if got.Signals[2].SubjectID != "" || got.Signals[2].Evidence.CommitSHA != "" {
+		t.Fatalf("commit signal metadata was not redacted: %+v", got.Signals[2])
+	}
+	if got.PRCards[0].Title != "PR #123" || got.PRCards[0].URL != "" || len(got.PRCards[0].Risks) != 0 || got.PRCards[0].MainRisk != "" || len(got.PRCards[0].Evidence) != 0 {
 		t.Fatalf("PR card was not redacted: %+v", got.PRCards[0])
 	}
-	if containsText(got, "dogfood-secret-value") || containsText(got, privateRoot) || containsText(got, privateRelativePath) {
+	if containsText(got, "dogfood-secret-value") || containsText(got, privateRoot) || containsText(got, privateRelativePath) || containsText(got, commitSHA) || containsText(got, commitSHA[:8]) || containsText(got, commitTitle) {
 		t.Fatalf("public-safe analysis retained private text: %+v", got)
+	}
+}
+
+func TestPublicSafeReportArtifactsDoNotRetainPrivateIdentifiers(t *testing.T) {
+	privateRoot := "/private/tmp/customer-repo"
+	privateRelativePath := "internal/customer/acme/session.go"
+	commitSHA := "abcdef1234567890abcdef1234567890abcdef12"
+	analysis := PublicSafeAnalysis(signals.AnalysisReport{
+		GeneratedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Repo: signals.RepoMetadata{
+			ID:        "owner/private",
+			Name:      "private",
+			Root:      privateRoot,
+			RemoteURL: "https://token=dogfood-secret-value@example.test/private.git",
+			HeadSHA:   commitSHA,
+		},
+		Config: signals.AnalysisConfigSnapshot{OutputDirectory: privateRoot + "/reports"},
+		Signals: []signals.Signal{{
+			RepoID:      "owner/private",
+			SubjectType: "commit",
+			SubjectID:   commitSHA,
+			Message:     "Commit " + commitSHA[:8] + " changed " + privateRelativePath,
+			FilePath:    privateRelativePath,
+			Evidence:    signals.Evidence{CommitSHA: commitSHA, URL: "https://example.test/private"},
+		}},
+		PRCards: []signals.PRQualityCard{{
+			Title:      "Private commit " + commitSHA[:8],
+			Label:      "mixed",
+			Confidence: signals.ConfidenceMedium,
+			Summary:    "Commit " + commitSHA[:8] + " changed " + privateRelativePath,
+			Scope:      "1 file and 10 lines",
+			MainRisk:   "private risk",
+			Evidence:   []signals.SignalRef{{ID: commitSHA, Message: privateRelativePath}},
+		}},
+		WeaknessMap: signals.WeaknessMap{
+			Strengths:  []signals.Finding{{Label: "Private", Evidence: "Commit " + commitSHA[:8] + " touched " + privateRelativePath, Confidence: signals.ConfidenceMedium}},
+			Confidence: signals.ConfidenceMedium,
+		},
+		Profile: signals.ProfileSummary{
+			Headline:           "Private " + privateRelativePath,
+			AnalyzedPRs:        1,
+			AnalysisWindowDays: 90,
+			Confidence:         signals.ConfidenceMedium,
+			Strengths:          []signals.Finding{{Label: "Private", Evidence: "Commit " + commitSHA[:8] + " touched " + privateRelativePath, Confidence: signals.ConfidenceMedium}},
+		},
+		Privacy: signals.PrivacySummary{PublicSafe: true},
+	})
+	output := t.TempDir()
+	if err := WriteReportOnly(output, analysis, "all"); err != nil {
+		t.Fatalf("WriteReportOnly() error = %v", err)
+	}
+	for _, name := range []string{"analysis.json", "report.md", "profile.export.json", "share-card.json"} {
+		// #nosec G304 -- test reads a fixed allow-list of files from t.TempDir output.
+		data, err := os.ReadFile(filepath.Join(output, name))
+		if err != nil {
+			t.Fatalf("read %s: %v", name, err)
+		}
+		text := string(data)
+		for _, forbidden := range []string{privateRoot, privateRelativePath, commitSHA, commitSHA[:8], "dogfood-secret-value", "Private commit"} {
+			if strings.Contains(text, forbidden) {
+				t.Fatalf("%s retained %q:\n%s", name, forbidden, text)
+			}
+		}
 	}
 }
 

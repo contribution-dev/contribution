@@ -37,7 +37,8 @@ pnpm validate:final:skip-install
 ```
 
 The command runs install when needed, AGENTS checks, script tests, formatting
-checks, Go vet, Go tests, race tests, build, CLI dogfood smoke, and
+checks, Go vet, Go tests, race tests, build, CLI dogfood smoke, real-repo CLI
+dogfood, and
 vulnerability scan when the required tools are available. Its install step runs
 with `CI=true` when `CI` is unset and `HUSKY=0`, so the full gate is safe in
 headless shells and does not rewrite local Git hook state.
@@ -63,6 +64,10 @@ changes.
 
 - `pnpm dogfood:smoke` builds the real CLI and exercises it against temporary
   Git repos under `/tmp/contribution-*`.
+- `pnpm dogfood:real` builds the real CLI, analyzes this repository into
+  `/tmp/contribution-*`, checks inventory against Git-visible files, confirms
+  local-only confidence is not `high`, and asserts public-safe outputs do not
+  contain local roots, remotes, commit SHAs, tokens, emails, or private paths.
 - `pnpm dogfood:release` runs the smoke flow, creates a GoReleaser snapshot,
   unpacks the current runner artifact, and runs a clean-environment smoke. This
   current-runner artifact check is the intended default; add cross-OS artifact

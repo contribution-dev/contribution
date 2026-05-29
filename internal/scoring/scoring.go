@@ -101,7 +101,7 @@ func cardFromPR(pr github.PullRequest) signals.PRQualityCard {
 		Label:        label,
 		Confidence:   confidence,
 		Summary:      fmt.Sprintf("Merged PR touching %d files with %d additions and %d deletions.", pr.ChangedFiles, pr.Additions, pr.Deletions),
-		Scope:        scopeLabel(pr.ChangedFiles, totalLines),
+		Scope:        scopeDescription(pr.ChangedFiles, totalLines),
 		TestEvidence: "Unavailable from imported PR list metadata.",
 		ReviewBurden: "GitHub PR metadata available; detailed review comments are not imported in this V1 pass.",
 		Durability:   "Post-merge churn requires file-level PR data and is not available for this card.",
@@ -118,6 +118,7 @@ func cardFromPR(pr github.PullRequest) signals.PRQualityCard {
 
 func cardFromCommit(commit gitrepo.Commit) signals.PRQualityCard {
 	fileCount := len(commit.Files)
+	lineCount := changedLineCount(commit.Files)
 	label := "mixed"
 	confidence := signals.ConfidenceMedium
 	mainRisk := "Source changes had limited test evidence."
@@ -135,7 +136,7 @@ func cardFromCommit(commit gitrepo.Commit) signals.PRQualityCard {
 		nextAction = "Repeat this small, reviewable change shape."
 		strengths = append(strengths, signals.Finding{
 			Label:      "Focused change",
-			Evidence:   fmt.Sprintf("Commit %s changed %d files.", shortSHA(commit.SHA), fileCount),
+			Evidence:   fmt.Sprintf("Commit %s changed %s.", shortSHA(commit.SHA), scopeDescription(fileCount, lineCount)),
 			Confidence: signals.ConfidenceHigh,
 		})
 	}
@@ -148,11 +149,11 @@ func cardFromCommit(commit gitrepo.Commit) signals.PRQualityCard {
 			NextAction:   "Add at least one nearby test for behavior changes.",
 		})
 	}
-	if fileCount > 12 {
+	if fileCount > 12 || lineCount > 800 {
 		label = "risky"
 		risks = append(risks, signals.Finding{
 			Label:        "Large scope",
-			Evidence:     fmt.Sprintf("Commit %s changed %d files.", shortSHA(commit.SHA), fileCount),
+			Evidence:     fmt.Sprintf("Commit %s changed %s.", shortSHA(commit.SHA), scopeDescription(fileCount, lineCount)),
 			Confidence:   signals.ConfidenceHigh,
 			WhyItMatters: "Broad changes are harder to review and easier to churn.",
 			NextAction:   "Split broad work into smaller commits or PRs.",
@@ -184,8 +185,8 @@ func cardFromCommit(commit gitrepo.Commit) signals.PRQualityCard {
 		Title:        commitTitle(commit),
 		Label:        label,
 		Confidence:   confidence,
-		Summary:      fmt.Sprintf("Commit-group card based on %d changed files.", fileCount),
-		Scope:        fmt.Sprintf("%d files", fileCount),
+		Summary:      fmt.Sprintf("Commit-group card based on %s.", scopeDescription(fileCount, lineCount)),
+		Scope:        scopeDescription(fileCount, lineCount),
 		TestEvidence: testEvidenceLabel(commit),
 		ReviewBurden: "Unavailable without GitHub metadata.",
 		Durability:   durabilityLabel(commit),
@@ -203,6 +204,7 @@ func cardFromCommit(commit gitrepo.Commit) signals.PRQualityCard {
 func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMap {
 	var focused, testTouched, sourceNoTest, large, riskyNoTest, docsTouched, fixLike int
 	for _, commit := range input.History.Commits {
+		lineCount := changedLineCount(commit.Files)
 		if len(commit.Files) <= 5 && len(commit.Files) > 0 {
 			focused++
 		}
@@ -212,7 +214,7 @@ func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMa
 		if commit.SourceTouched && !commit.TestsTouched {
 			sourceNoTest++
 		}
-		if len(commit.Files) > 12 {
+		if len(commit.Files) > 12 || lineCount > 800 {
 			large++
 		}
 		if commit.RiskyTouched && !commit.TestsTouched {
@@ -227,7 +229,7 @@ func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMa
 	}
 
 	confidence := signals.ConfidenceMedium
-	if len(input.History.Commits) >= 10 {
+	if input.GitHub.Available && len(input.History.Commits) >= 10 {
 		confidence = signals.ConfidenceHigh
 	}
 	if len(input.History.Commits) < 3 {
@@ -454,15 +456,27 @@ func durabilityLabel(commit gitrepo.Commit) string {
 	}
 }
 
-func scopeLabel(files, lines int) string {
-	switch {
-	case files > 15 || lines > 800:
-		return "large"
-	case files > 5 || lines > 300:
-		return "medium"
-	default:
-		return "small"
+func scopeDescription(files, lines int) string {
+	fileLabel := "files"
+	if files == 1 {
+		fileLabel = "file"
 	}
+	if lines > 0 {
+		lineLabel := "lines"
+		if lines == 1 {
+			lineLabel = "line"
+		}
+		return fmt.Sprintf("%d %s and %d %s", files, fileLabel, lines, lineLabel)
+	}
+	return fmt.Sprintf("%d %s", files, fileLabel)
+}
+
+func changedLineCount(files []gitrepo.ChangedFile) int {
+	var total int
+	for _, file := range files {
+		total += file.Additions + file.Deletions
+	}
+	return total
 }
 
 func defaultBranch(branch string) string {

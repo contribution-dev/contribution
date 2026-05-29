@@ -202,6 +202,7 @@ type FileSummary struct {
 	SourceFiles     int            `json:"source_files"`
 	DocsFiles       int            `json:"docs_files"`
 	DependencyFiles int            `json:"dependency_files"`
+	ConfigFiles     int            `json:"config_files"`
 	GeneratedFiles  int            `json:"generated_files"`
 	VendorFiles     int            `json:"vendor_files"`
 	RiskyFiles      int            `json:"risky_files"`

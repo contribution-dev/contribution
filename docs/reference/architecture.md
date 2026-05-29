@@ -34,10 +34,15 @@ other public-safe docs when they stabilize.
 ## Social sharing boundary
 
 The CLI may emit public-safe sharing artifacts such as `profile.export.json`
-and `share-card.json`. It should not contain hosted profile pages, OpenGraph
-rendering, X API integrations, Discord-specific sharing code, share buttons,
-social mention tracking, reply workers, auth, storage, or hosted background
-jobs.
+and `share-card.json`. `export-profile` is the dedicated command for writing
+only those contract artifacts, while `redact` is the dedicated command for
+regenerating public-safe JSON and markdown from an existing `analysis.json`.
+Both reuse the same redaction engine as `analyze --public-safe` and
+`report --public-safe`.
+
+The CLI should not contain hosted profile pages, OpenGraph rendering, X API
+integrations, Discord-specific sharing code, share buttons, social mention
+tracking, reply workers, auth, storage, or hosted background jobs.
 
 Those website and social surfaces belong in the private Contribution.dev
 website and web app repo, which consumes the CLI exports.

@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Make repository inventory Git-aware, add config-file counts, line-aware
+  history scope, confidence caps for local-only conclusions, and stricter
+  public-safe SHA/title redaction.
+- Add `export-profile`, `redact`, and real-repo CLI dogfood coverage for the
+  public-safe export contract.
 - Add repo-owned CLI dogfood, contract coverage routing, and release artifact
   smoke validation.
 - Make final validation headless-safe and include Node script regression tests

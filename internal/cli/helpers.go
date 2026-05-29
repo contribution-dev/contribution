@@ -73,7 +73,7 @@ func runAnalyze(ctx context.Context, out io.Writer, opts analyzeOptions) (string
 	if err := writeLine(out, "Git history: collecting"); err != nil {
 		return "", err
 	}
-	inventory, inventorySignals, err := gitrepo.Inventory(repo.Path, repo.ID, start)
+	inventory, inventorySignals, err := gitrepo.Inventory(ctx, repo.Path, repo.ID, start)
 	if err != nil {
 		return "", err
 	}

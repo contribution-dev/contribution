@@ -21,6 +21,7 @@
     "test:changed": "scripts/with-tools node scripts/run-changed-checks.mjs --mode test",
     "checks:changed": "scripts/with-tools node scripts/run-changed-checks.mjs --mode all",
     "dogfood:smoke": "scripts/with-tools node scripts/dogfood-cli.mjs --mode smoke",
+    "dogfood:real": "scripts/with-tools node scripts/dogfood-cli.mjs --mode real",
     "dogfood:release": "scripts/with-tools node scripts/dogfood-cli.mjs --mode release",
     "format": "prettier --write . && scripts/go-format write",
     "format:check": "prettier --check . && scripts/go-format check",

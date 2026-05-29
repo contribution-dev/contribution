@@ -1,6 +1,9 @@
 package preflight
 
 import (
+	"encoding/json"
+	"reflect"
+	"sort"
 	"testing"
 	"time"
 
@@ -55,6 +58,61 @@ func TestBuildPreflightAppliesPolicyAndCoverage(t *testing.T) {
 	if !hasRubricStatus(got.Rubric, "changed_line_coverage", "fail") {
 		t.Fatalf("coverage rubric did not fail: %+v", got.Rubric)
 	}
+}
+
+func TestPreflightReportJSONContract(t *testing.T) {
+	diff := gitrepo.DiffSummary{
+		Files: []gitrepo.ChangedFile{{
+			Path:       "internal/auth/session.go",
+			Additions:  10,
+			Deletions:  2,
+			LineRanges: []signals.LineRange{{Start: 10, End: 19}},
+		}},
+		FileSummary: signals.FileSummary{
+			TotalFiles:  1,
+			ByClass:     map[string]int{"source": 1},
+			ByLanguage:  map[string]int{"Go": 1},
+			SourceFiles: 1,
+		},
+	}
+	got := Build(
+		signals.RepoMetadata{ID: "local:test", Name: "test"},
+		"main",
+		"HEAD",
+		diff,
+		signals.PreflightCoverage{Status: "available", CoveredLines: 3, TotalLines: 10, Percent: 30},
+		config.PreflightConfig{MaxFiles: 20, MaxLines: 800, RequireTestsForSource: true, ChangedLineCoverageMin: 80},
+		signals.ToolingReport{},
+		nil,
+		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	)
+	object := marshalPreflightContractObject(t, got)
+	assertPreflightContractKeys(t, object, []string{
+		"version",
+		"generated_at",
+		"repo",
+		"base",
+		"head",
+		"risk_level",
+		"why",
+		"changed_files",
+		"file_summary",
+		"total_changed_lines",
+		"coverage",
+		"rubric",
+		"test_evidence",
+		"tooling",
+		"reviewer_focus",
+		"limitations",
+		"privacy",
+	})
+	assertPreflightContractKeys(t, preflightContractNestedObject(t, object, "privacy"), []string{
+		"public_safe",
+		"raw_code_included",
+		"raw_diffs_included",
+		"private_paths_included_in_public_export",
+		"author_emails_included",
+	})
 }
 
 func TestShouldFailForRisk(t *testing.T) {
@@ -169,4 +227,45 @@ func hasRubricStatus(items []signals.PreflightRubricItem, id string, status stri
 		}
 	}
 	return false
+}
+
+func marshalPreflightContractObject(t *testing.T, value any) map[string]any {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(data, &object); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	return object
+}
+
+func preflightContractNestedObject(t *testing.T, object map[string]any, key string) map[string]any {
+	t.Helper()
+	nested, ok := object[key].(map[string]any)
+	if !ok {
+		t.Fatalf("%s = %T, want object", key, object[key])
+	}
+	return nested
+}
+
+func assertPreflightContractKeys(t *testing.T, object map[string]any, want []string) {
+	t.Helper()
+	got := preflightContractSortedKeys(object)
+	want = append([]string{}, want...)
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("JSON keys = %v, want %v", got, want)
+	}
+}
+
+func preflightContractSortedKeys(object map[string]any) []string {
+	keys := make([]string, 0, len(object))
+	for key := range object {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
 }

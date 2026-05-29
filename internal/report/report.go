@@ -131,7 +131,6 @@ func PublicSafeAnalysis(analysis signals.AnalysisReport) signals.AnalysisReport 
 	analysis.Privacy.RawDiffsIncluded = false
 	analysis.Privacy.PrivatePathsIncludedInPublicExport = false
 	analysis.Privacy.AuthorEmailsIncluded = false
-	analysis.Privacy.UploadEnabled = false
 	analysis.PRCards = publicCards(analysis.PRCards, len(analysis.PRCards), pathReplacements)
 	analysis.WeaknessMap = publicSafeWeaknessMap(analysis.WeaknessMap, pathReplacements)
 	analysis.Profile.Strengths = publicFindings(analysis.Profile.Strengths, len(analysis.Profile.Strengths), pathReplacements)

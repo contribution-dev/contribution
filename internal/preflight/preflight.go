@@ -169,7 +169,6 @@ func Build(repo signals.RepoMetadata, base string, head string, diff gitrepo.Dif
 			PublicSafe:       false,
 			RawCodeIncluded:  false,
 			RawDiffsIncluded: false,
-			UploadEnabled:    false,
 		},
 	}
 }

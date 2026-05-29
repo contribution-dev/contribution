@@ -1,0 +1,209 @@
+package report
+
+import (
+	"encoding/json"
+	"reflect"
+	"sort"
+	"testing"
+	"time"
+
+	"github.com/contribution-dev/contribution/internal/signals"
+)
+
+func TestAnalysisReportJSONContract(t *testing.T) {
+	object := marshalReportContractObject(t, reportContractAnalysisFixture())
+	assertReportContractKeys(t, object, []string{
+		"version",
+		"generated_at",
+		"repo",
+		"config",
+		"tooling",
+		"inventory",
+		"signals",
+		"pr_quality_cards",
+		"weakness_map",
+		"profile",
+		"limitations",
+		"privacy",
+	})
+	assertReportContractKeys(t, reportContractNestedObject(t, object, "privacy"), reportPrivacyContractKeys())
+}
+
+func TestProfileExportJSONContract(t *testing.T) {
+	object := marshalReportContractObject(t, ProfileExport(reportContractAnalysisFixture()))
+	assertReportContractKeys(t, object, []string{
+		"version",
+		"generated_at",
+		"profile",
+		"summary",
+		"strengths",
+		"improvement_trends",
+		"badge_candidates",
+		"selected_artifacts",
+		"redaction",
+	})
+	assertReportContractKeys(t, reportContractNestedObject(t, object, "profile"), []string{
+		"display_name",
+		"headline",
+		"visibility",
+	})
+	assertReportContractKeys(t, reportContractNestedObject(t, object, "summary"), []string{
+		"analyzed_prs",
+		"analysis_window_days",
+		"confidence",
+	})
+	assertReportContractKeys(t, reportContractNestedObject(t, object, "redaction"), []string{
+		"public_safe",
+		"raw_code_included",
+		"raw_diffs_included",
+		"private_paths_included",
+	})
+}
+
+func TestShareCardJSONContract(t *testing.T) {
+	object := marshalReportContractObject(t, ShareCard(reportContractAnalysisFixture()))
+	assertReportContractKeys(t, object, []string{
+		"version",
+		"title",
+		"subtitle",
+		"highlights",
+		"confidence",
+		"public_safe",
+	})
+}
+
+func reportContractAnalysisFixture() signals.AnalysisReport {
+	now := time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC)
+	return signals.AnalysisReport{
+		Version:     1,
+		GeneratedAt: now,
+		Repo: signals.RepoMetadata{
+			ID:            "local:test",
+			Name:          "test",
+			DefaultBranch: "main",
+		},
+		Config: signals.AnalysisConfigSnapshot{
+			SinceDays:       90,
+			MaxPRs:          3,
+			PublicSafe:      true,
+			OutputDirectory: "/tmp/contribution-test",
+		},
+		Tooling: signals.ToolingReport{
+			GeneratedAt: now,
+			Tools:       []signals.ToolAvailability{{Name: "git", Required: true, Available: true}},
+			Limitations: []string{"GitHub metadata unavailable."},
+		},
+		Inventory: signals.FileSummary{
+			TotalFiles:  1,
+			ByClass:     map[string]int{"source": 1},
+			ByLanguage:  map[string]int{"Go": 1},
+			SourceFiles: 1,
+		},
+		Signals: []signals.Signal{{
+			ID:          "sig-1",
+			RepoID:      "local:test",
+			Source:      "git",
+			Type:        "change_scope",
+			SubjectType: "commit",
+			Severity:    signals.SeverityInfo,
+			Direction:   signals.DirectionPositive,
+			Confidence:  signals.ConfidenceMedium,
+			Message:     "Small tested change.",
+			Evidence:    signals.Evidence{ToolVersion: "test"},
+			PublicSafe:  true,
+			CreatedAt:   now,
+		}},
+		PRCards: []signals.PRQualityCard{{
+			PRNumber:     123,
+			Title:        "Improve contract tests",
+			Label:        "strong",
+			Confidence:   signals.ConfidenceMedium,
+			Summary:      "Small tested change.",
+			Scope:        "1 file and 10 lines",
+			TestEvidence: "Go tests cover the behavior.",
+			ReviewBurden: "Low",
+			Durability:   "Durable",
+			MainRisk:     "Low",
+			Strengths:    []signals.Finding{{Label: "Focused", Evidence: "Single-purpose change.", Confidence: signals.ConfidenceMedium}},
+			Risks:        []signals.Finding{{Label: "Small risk", Evidence: "Contract drift.", Confidence: signals.ConfidenceLow}},
+			Evidence:     []signals.SignalRef{{ID: "sig-1", Message: "Small tested change."}},
+			NextAction:   "Keep contracts covered.",
+		}},
+		WeaknessMap: signals.WeaknessMap{
+			Strengths:   []signals.Finding{{Label: "Focused", Evidence: "Single-purpose change.", Confidence: signals.ConfidenceMedium}},
+			Weaknesses:  []signals.Finding{{Label: "Coverage gap", Evidence: "Contracts need tests.", Confidence: signals.ConfidenceLow}},
+			WatchItems:  []signals.Finding{{Label: "Schema drift", Evidence: "Artifacts are consumed elsewhere.", Confidence: signals.ConfidenceMedium}},
+			NextActions: []string{"Keep contracts covered."},
+			Confidence:  signals.ConfidenceMedium,
+		},
+		Profile: signals.ProfileSummary{
+			DisplayName:        "Example Developer",
+			Headline:           "AI-native contribution profile",
+			AnalyzedPRs:        1,
+			AnalysisWindowDays: 90,
+			Confidence:         signals.ConfidenceMedium,
+			Strengths:          []signals.Finding{{Label: "Focused", Evidence: "Single-purpose change.", Confidence: signals.ConfidenceMedium}},
+			ImprovementTrends:  []signals.Finding{{Label: "Contract coverage", Evidence: "Added focused tests.", Confidence: signals.ConfidenceMedium}},
+			BadgeCandidates:    []signals.BadgeCandidate{{ID: "focused", Label: "Focused contributor", Confidence: signals.ConfidenceMedium}},
+		},
+		Limitations: []string{"Local-only fixture."},
+		Privacy: signals.PrivacySummary{
+			PublicSafe:                         true,
+			RawCodeIncluded:                    false,
+			RawDiffsIncluded:                   false,
+			PrivatePathsIncludedInPublicExport: false,
+			AuthorEmailsIncluded:               false,
+		},
+	}
+}
+
+func reportPrivacyContractKeys() []string {
+	return []string{
+		"public_safe",
+		"raw_code_included",
+		"raw_diffs_included",
+		"private_paths_included_in_public_export",
+		"author_emails_included",
+	}
+}
+
+func marshalReportContractObject(t *testing.T, value any) map[string]any {
+	t.Helper()
+	data, err := json.Marshal(value)
+	if err != nil {
+		t.Fatalf("json.Marshal() error = %v", err)
+	}
+	var object map[string]any
+	if err := json.Unmarshal(data, &object); err != nil {
+		t.Fatalf("json.Unmarshal() error = %v", err)
+	}
+	return object
+}
+
+func reportContractNestedObject(t *testing.T, object map[string]any, key string) map[string]any {
+	t.Helper()
+	nested, ok := object[key].(map[string]any)
+	if !ok {
+		t.Fatalf("%s = %T, want object", key, object[key])
+	}
+	return nested
+}
+
+func assertReportContractKeys(t *testing.T, object map[string]any, want []string) {
+	t.Helper()
+	got := sortedReportContractKeys(object)
+	want = append([]string{}, want...)
+	sort.Strings(want)
+	if !reflect.DeepEqual(got, want) {
+		t.Fatalf("JSON keys = %v, want %v", got, want)
+	}
+}
+
+func sortedReportContractKeys(object map[string]any) []string {
+	keys := make([]string, 0, len(object))
+	for key := range object {
+		keys = append(keys, key)
+	}
+	sort.Strings(keys)
+	return keys
+}

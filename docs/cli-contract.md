@@ -14,6 +14,10 @@ lives in Go tests and `scripts/dogfood-cli.mjs`.
   tokens, private repo roots, private remotes, `head_sha`, commit SHAs, and raw
   commit or PR titles. Artifact labels use neutral public text such as
   `Artifact 1` or `PR #123`.
+- Artifact privacy objects record only exposure posture:
+  `public_safe`, `raw_code_included`, `raw_diffs_included`,
+  `private_paths_included_in_public_export`, and `author_emails_included`.
+  They do not include upload, publish, hosted-state, or destination controls.
 - Public-safe markdown must remain useful after redaction. When private
   risk/action details are omitted from JSON, rendered tables use neutral
   fallback text instead of blank cells.
@@ -53,6 +57,9 @@ lives in Go tests and `scripts/dogfood-cli.mjs`.
 - `profile.export.json` and `share-card.json` are the stable public-safe export
   contract for the separate website/app repo. The CLI does not upload or host
   them.
+- `analysis.json`, `profile.export.json`, `share-card.json`, `preflight.json`,
+  `friend-review-packet.json`, and `friend-feedback.export.json` have
+  behavior-level contract tests for their top-level JSON shape.
 - `preflight.json` is V2. It includes structured changed files, additions and
   deletions, new-side changed line ranges, total changed lines, optional
   changed-line coverage, and rubric items. Missing coverage is `unknown`, not

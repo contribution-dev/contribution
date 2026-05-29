@@ -370,10 +370,6 @@ function assertAnalysisPublicSafe(file, privateRoot) {
     "analysis.json public_safe mismatch",
   );
   assert(
-    analysis.privacy?.upload_enabled === false,
-    "analysis upload posture changed",
-  );
-  assert(
     analysis.privacy?.raw_code_included === false,
     "analysis includes raw code",
   );
@@ -497,7 +493,6 @@ function analysisFixture(privateRoot) {
       raw_diffs_included: false,
       private_paths_included_in_public_export: false,
       author_emails_included: false,
-      upload_enabled: false,
     },
   };
 }

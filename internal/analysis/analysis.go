@@ -160,7 +160,6 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 			RawDiffsIncluded:                   false,
 			PrivatePathsIncludedInPublicExport: false,
 			AuthorEmailsIncluded:               false,
-			UploadEnabled:                      false,
 		},
 	}
 	if analysis.Profile.Headline == "" {

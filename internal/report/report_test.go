@@ -145,7 +145,6 @@ func TestPublicSafeAnalysisRedactsPrivateMetadata(t *testing.T) {
 			RawDiffsIncluded:                   true,
 			PrivatePathsIncludedInPublicExport: true,
 			AuthorEmailsIncluded:               true,
-			UploadEnabled:                      true,
 		},
 	}
 
@@ -159,7 +158,7 @@ func TestPublicSafeAnalysisRedactsPrivateMetadata(t *testing.T) {
 	if len(got.Config.SelfReportedAITools) != 0 || len(got.Config.SelfReportedAIModes) != 0 {
 		t.Fatalf("self-reported AI config was not cleared: %+v", got.Config)
 	}
-	if !got.Privacy.PublicSafe || got.Privacy.RawCodeIncluded || got.Privacy.RawDiffsIncluded || got.Privacy.UploadEnabled {
+	if !got.Privacy.PublicSafe || got.Privacy.RawCodeIncluded || got.Privacy.RawDiffsIncluded {
 		t.Fatalf("privacy flags were not public-safe: %+v", got.Privacy)
 	}
 	if got.Signals[0].RepoID != "private-repository" || got.Signals[0].SubjectID != "private-repository" || got.Signals[0].FilePath != "session.go" {

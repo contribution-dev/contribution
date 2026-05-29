@@ -122,7 +122,6 @@ type PrivacySummary struct {
 	RawDiffsIncluded                   bool `json:"raw_diffs_included"`
 	PrivatePathsIncludedInPublicExport bool `json:"private_paths_included_in_public_export"`
 	AuthorEmailsIncluded               bool `json:"author_emails_included"`
-	UploadEnabled                      bool `json:"upload_enabled"`
 }
 
 // Finding is a human-readable conclusion with evidence and confidence.

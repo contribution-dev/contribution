@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Add direct `internal/analysis.Run` coverage for output format behavior and
+  GitHub metadata degradation; `analyze --format markdown` now still writes the
+  canonical `analysis.json`.
 - Split CLI command wiring from analysis, preflight, friend-review, report, and
   privacy behavior; remove stale config options, obsolete review scripts, the
   unused UI-runtime review lane, and duplicate helper logic.

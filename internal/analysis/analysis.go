@@ -20,6 +20,11 @@ import (
 	"github.com/contribution-dev/contribution/internal/tools"
 )
 
+var (
+	nowUTC         = func() time.Time { return time.Now().UTC() }
+	fetchMergedPRs = github.FetchMergedPRs
+)
+
 // Options are the effective analyze command options.
 type Options struct {
 	Repo            string
@@ -34,7 +39,7 @@ type Options struct {
 
 // Run analyzes a repository and writes the configured report artifacts.
 func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
-	start := time.Now().UTC()
+	start := nowUTC()
 	if opts.Format == "" {
 		opts.Format = "all"
 	}
@@ -91,7 +96,7 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 		ghCtx, cancel := context.WithTimeout(ctx, 20*time.Second)
 		defer cancel()
 		var ghErr error
-		metadata, ghErr = github.FetchMergedPRs(ghCtx, repo.GitHubOwner, repo.GitHubRepo, token, maxPRs)
+		metadata, ghErr = fetchMergedPRs(ghCtx, repo.GitHubOwner, repo.GitHubRepo, token, maxPRs)
 		if ghErr != nil {
 			metadata = github.Metadata{Reason: "GitHub metadata failed: " + ghErr.Error()}
 		}

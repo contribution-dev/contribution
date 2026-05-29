@@ -51,12 +51,8 @@ func WriteAnalysisBundle(outputDir string, analysis signals.AnalysisReport, form
 	if err := ValidateFormat(format, true); err != nil {
 		return err
 	}
-	switch format {
-	case "all", "json":
-		if err := writeJSON(filepath.Join(outputDir, "analysis.json"), analysis); err != nil {
-			return err
-		}
-	case "markdown":
+	if err := writeJSON(filepath.Join(outputDir, "analysis.json"), analysis); err != nil {
+		return err
 	}
 	if format == "all" || format == "markdown" {
 		if err := os.WriteFile(filepath.Join(outputDir, "report.md"), []byte(Markdown(analysis)), 0o600); err != nil {

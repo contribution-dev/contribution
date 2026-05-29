@@ -30,3 +30,14 @@ tests can exercise behavior without process-level side effects.
 Private product strategy and implementation notes are not committed to the
 public CLI repository. Public CLI contracts should be documented here or in
 other public-safe docs when they stabilize.
+
+## Social sharing boundary
+
+The CLI may emit public-safe sharing artifacts such as `profile.export.json`
+and `share-card.json`. It should not contain hosted profile pages, OpenGraph
+rendering, X API integrations, Discord-specific sharing code, share buttons,
+social mention tracking, reply workers, auth, storage, or hosted background
+jobs.
+
+Those website and social surfaces belong in the private Contribution.dev
+website and web app repo, which consumes the CLI exports.

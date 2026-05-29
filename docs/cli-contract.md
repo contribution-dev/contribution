@@ -14,6 +14,9 @@ lives in Go tests and `scripts/dogfood-cli.mjs`.
   tokens, private repo roots, and private remotes.
 - Missing optional tools or GitHub metadata should degrade reports, not fail
   local analysis.
+- The CLI may generate `profile.export.json` and `share-card.json`, but it must
+  not publish profiles, render OpenGraph images, call X or Discord APIs, track
+  social mentions, run reply workers, or store hosted social state.
 
 ## Commands
 

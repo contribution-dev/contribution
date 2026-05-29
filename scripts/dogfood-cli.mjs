@@ -328,6 +328,32 @@ function assertPublicSafeFiles(files, privateRoot) {
   ]);
 }
 
+function assertPublicSafeReportQuality(file) {
+  const text = readFileSync(file, "utf8");
+  assert(!text.includes("V1"), `${file} retained phase-stale V1 wording`);
+  let checkedRows = 0;
+  for (const line of text.split(/\r?\n/u)) {
+    if (
+      !line.startsWith("| ") ||
+      line.startsWith("| PR ") ||
+      line.startsWith("| ---")
+    ) {
+      continue;
+    }
+    const cells = line
+      .split("|")
+      .slice(1, -1)
+      .map((cell) => cell.trim());
+    if (cells.length < 9) {
+      continue;
+    }
+    checkedRows += 1;
+    assert(cells[7], `${file} has empty ledger main risk cell: ${line}`);
+    assert(cells[8], `${file} has empty ledger next action cell: ${line}`);
+  }
+  assert(checkedRows > 0, `${file} has no PR quality ledger rows`);
+}
+
 function assertResultNoSecrets(result) {
   const text = `${result.stdout}\n${result.stderr}`;
   assert(
@@ -748,6 +774,7 @@ function runSmoke(binary, tempRoot, options = {}) {
   ]);
   assertAnalysisPublicSafe(path.join(allRun, "analysis.json"), analysisRepo);
   assertPublicSafeFiles(collectFiles(allRun), analysisRepo);
+  assertPublicSafeReportQuality(path.join(allRun, "report.md"));
 
   const reportRoot = path.join(tempRoot, "report-output");
   const report = runCli(
@@ -777,6 +804,7 @@ function runSmoke(binary, tempRoot, options = {}) {
     ],
     analysisRepo,
   );
+  assertPublicSafeReportQuality(path.join(reportRoot, "report.md"));
 
   const exportRoot = path.join(tempRoot, "export-profile-output");
   const exportProfile = runCli(
@@ -821,6 +849,7 @@ function runSmoke(binary, tempRoot, options = {}) {
     analysisRepo,
   );
   assertPublicSafeFiles(collectFiles(redactRoot), analysisRepo);
+  assertPublicSafeReportQuality(path.join(redactRoot, "report.md"));
 
   const privateReportRoot = path.join(tempRoot, "report-private-input");
   const privateReportFixture = path.join(tempRoot, "report-private-fixture");
@@ -854,6 +883,7 @@ function runSmoke(binary, tempRoot, options = {}) {
     analysisRepo,
   );
   assertPublicSafeFiles(collectFiles(privateReportRoot), analysisRepo);
+  assertPublicSafeReportQuality(path.join(privateReportRoot, "report.md"));
 
   const preflightRepoInfo = createGitRepo(tempRoot, "preflight-repo");
   writeRepoFile(
@@ -1014,6 +1044,7 @@ function runSmoke(binary, tempRoot, options = {}) {
     "feedback import did not add friend_feedback signals",
   );
   assertPublicSafeFiles(collectFiles(feedbackRoot), packetRepo);
+  assertPublicSafeReportQuality(path.join(feedbackRoot, "report.md"));
 }
 
 function currentGoTarget() {
@@ -1180,6 +1211,7 @@ function runRealRepoDogfood(binary, tempRoot) {
     "local-only profile confidence was high",
   );
   assertPublicSafeFiles(collectFiles(runDir), ROOT);
+  assertPublicSafeReportQuality(path.join(runDir, "report.md"));
   assertNoTextInFiles(collectFiles(runDir), [
     ROOT,
     headSHA,
@@ -1209,6 +1241,7 @@ function runRealRepoDogfood(binary, tempRoot) {
   );
   assertAnalysisPublicSafe(path.join(redactRoot, "analysis.json"), ROOT);
   assertPublicSafeFiles(collectFiles(redactRoot), ROOT);
+  assertPublicSafeReportQuality(path.join(redactRoot, "report.md"));
   assertNoTextInFiles(collectFiles(redactRoot), [
     ROOT,
     headSHA,

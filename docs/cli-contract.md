@@ -14,6 +14,9 @@ lives in Go tests and `scripts/dogfood-cli.mjs`.
   tokens, private repo roots, private remotes, `head_sha`, commit SHAs, and raw
   commit or PR titles. Artifact labels use neutral public text such as
   `Artifact 1` or `PR #123`.
+- Public-safe markdown must remain useful after redaction. When private
+  risk/action details are omitted from JSON, rendered tables use neutral
+  fallback text instead of blank cells.
 - Missing optional tools or GitHub metadata should degrade reports, not fail
   local analysis.
 - The CLI may generate `profile.export.json` and `share-card.json`, but it must

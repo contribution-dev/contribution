@@ -1,11 +1,11 @@
 # contribution
 
-`contribution` is an open-source CLI for contribution workflows.
+`contribution` is an open-source CLI for private contribution-quality analysis.
+It scans local Git evidence, writes a deterministic contribution report, and
+emits public-safe artifacts that a separate web app can import.
 
-The project is intentionally small today: the repository is wired for Go
-development, release automation, CI, and the local commit-review workflow. New
-product commands should start under `internal/cli` and be exposed from
-`cmd/contribution`.
+The CLI is local-first. It does not upload raw code, publish profiles, call
+social APIs, or store hosted state.
 
 ## Requirements
 
@@ -29,7 +29,28 @@ pnpm tools:preflight
 pnpm checks:changed
 ```
 
-Common commands:
+Run the CLI locally:
+
+```bash
+scripts/with-tools go run ./cmd/contribution analyze --repo . --output /tmp/contribution-report --format all --no-external-tools
+scripts/with-tools go run ./cmd/contribution preflight --base main --head HEAD --output /tmp/contribution-preflight --format all
+```
+
+Core product commands:
+
+- `contribution init` creates safe default `.contribution.yml` config.
+- `contribution doctor` reports required and optional tool availability.
+- `contribution analyze` writes `analysis.json`, `report.md`,
+  `profile.export.json`, `share-card.json`, and `tooling.json`.
+- `contribution preflight` writes V2 current-diff readiness artifacts with
+  changed-line ranges, optional Go/LCOV coverage, and policy rubric evidence.
+- `contribution packet` writes a public-safe V2 friend-review packet.
+- `contribution import-feedback` imports public-safe friend feedback exports.
+- `contribution export-profile` writes only public-safe web profile artifacts.
+- `contribution redact` regenerates public-safe JSON and markdown from an
+  existing `analysis.json`.
+
+Common development commands:
 
 ```bash
 pnpm test

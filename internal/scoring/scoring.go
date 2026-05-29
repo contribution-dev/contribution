@@ -68,7 +68,7 @@ func cardFromPR(pr github.PullRequest) signals.PRQualityCard {
 	totalLines := pr.Additions + pr.Deletions
 	label := "mixed"
 	confidence := signals.ConfidenceMedium
-	mainRisk := "Test and review details are limited to GitHub metadata imported in V1."
+	mainRisk := "Test and review details are limited to currently imported GitHub metadata."
 	nextAction := "Use preflight on the current diff to add file-level test and risk evidence before review."
 	var strengths []signals.Finding
 	var risks []signals.Finding
@@ -103,7 +103,7 @@ func cardFromPR(pr github.PullRequest) signals.PRQualityCard {
 		Summary:      fmt.Sprintf("Merged PR touching %d files with %d additions and %d deletions.", pr.ChangedFiles, pr.Additions, pr.Deletions),
 		Scope:        scopeDescription(pr.ChangedFiles, totalLines),
 		TestEvidence: "Unavailable from imported PR list metadata.",
-		ReviewBurden: "GitHub PR metadata available; detailed review comments are not imported in this V1 pass.",
+		ReviewBurden: "GitHub PR metadata available; detailed review comments were not imported for this analysis.",
 		Durability:   "Post-merge churn requires file-level PR data and is not available for this card.",
 		MainRisk:     mainRisk,
 		Strengths:    strengths,
@@ -319,7 +319,7 @@ func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMa
 
 	watchItems := []signals.Finding{{
 		Label:        "Coverage is unavailable",
-		Evidence:     "No coverage report was imported in V1, so test conclusions use file-touch evidence only.",
+		Evidence:     "No coverage report was imported for this analysis, so test conclusions use file-touch evidence only.",
 		Confidence:   signals.ConfidenceHigh,
 		WhyItMatters: "Test-file evidence is useful but cannot prove changed-line coverage.",
 		NextAction:   "Export coverage later if you want stronger verification evidence.",
@@ -338,7 +338,7 @@ func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMa
 			Label:        "AI workflow evidence is self-reported",
 			Evidence:     "AI usage came from configuration, not provenance or telemetry.",
 			Confidence:   signals.ConfidenceLow,
-			WhyItMatters: "V1 does not detect AI-authored code or calculate token efficiency.",
+			WhyItMatters: "The CLI does not detect AI-authored code or calculate token efficiency.",
 			NextAction:   "Use AI for adversarial review and test generation before opening PRs.",
 		})
 	}

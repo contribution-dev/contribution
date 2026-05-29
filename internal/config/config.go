@@ -140,7 +140,7 @@ func Default() Config {
 func Validate(cfg Config) []string {
 	var warnings []string
 	if cfg.Version != 1 {
-		warnings = append(warnings, fmt.Sprintf("Config version %d is not V1; continuing with best effort.", cfg.Version))
+		warnings = append(warnings, fmt.Sprintf("Config version %d is not supported; continuing with best effort.", cfg.Version))
 	}
 	if cfg.Analysis.SinceDays <= 0 {
 		warnings = append(warnings, "analysis.since_days must be positive; defaulting to 90.")
@@ -158,7 +158,7 @@ func Validate(cfg Config) []string {
 		warnings = append(warnings, "preflight.changed_line_coverage_min must be between 0 and 100; ignoring the configured threshold.")
 	}
 	if cfg.Privacy.UploadEnabled {
-		warnings = append(warnings, "privacy.upload_enabled is true, but V1 does not implement upload.")
+		warnings = append(warnings, "privacy.upload_enabled is true, but the CLI does not implement upload.")
 	}
 	if cfg.Privacy.IncludeRawDiffs {
 		warnings = append(warnings, "privacy.include_raw_diffs is true; public exports will still omit raw diffs.")

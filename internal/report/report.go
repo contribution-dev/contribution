@@ -22,7 +22,7 @@ type pathReplacement struct {
 
 var commitSHAPattern = regexp.MustCompile(`\b[0-9a-fA-F]{7,40}\b`)
 
-// WriteAnalysisBundle writes the V1 analysis artifacts.
+// WriteAnalysisBundle writes analysis artifacts.
 func WriteAnalysisBundle(outputDir string, analysis signals.AnalysisReport, format string) error {
 	if err := os.MkdirAll(outputDir, 0o750); err != nil {
 		return fmt.Errorf("create output directory: %w", err)
@@ -193,13 +193,13 @@ func Markdown(analysis signals.AnalysisReport) string {
 		fmt.Fprintln(&buf)
 		fmt.Fprintln(&buf, "## Review Burden")
 		fmt.Fprintln(&buf)
-		fmt.Fprintln(&buf, "GitHub metadata was requested. Detailed review comments are enrichment data and may be unavailable if API access failed or V1 did not import them for this repo.")
+		fmt.Fprintln(&buf, "GitHub metadata was requested. Detailed review comments are enrichment data and may be unavailable if API access failed or this report did not import them for this repo.")
 	}
 	if len(analysis.Config.SelfReportedAITools) > 0 || len(analysis.Config.SelfReportedAIModes) > 0 {
 		fmt.Fprintln(&buf)
 		fmt.Fprintln(&buf, "## AI Workflow Notes")
 		fmt.Fprintln(&buf)
-		fmt.Fprintf(&buf, "AI workflow confidence is low because V1 only uses self-reported tools and modes. Tools: %s. Modes: %s. V1 does not detect AI-authored code or calculate token efficiency.\n", joinOrNone(analysis.Config.SelfReportedAITools), joinOrNone(analysis.Config.SelfReportedAIModes))
+		fmt.Fprintf(&buf, "AI workflow confidence is low because this report only uses self-reported tools and modes. Tools: %s. Modes: %s. The CLI does not detect AI-authored code or calculate token efficiency.\n", joinOrNone(analysis.Config.SelfReportedAITools), joinOrNone(analysis.Config.SelfReportedAIModes))
 	}
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "## Next 3 Actions")
@@ -489,56 +489,6 @@ func writeNumberedFindings(buf *bytes.Buffer, findings []signals.Finding) {
 		}
 		fmt.Fprintf(buf, "Confidence: %s\n\n", finding.Confidence)
 	}
-}
-
-func writeLedger(buf *bytes.Buffer, cards []signals.PRQualityCard) {
-	if len(cards) == 0 {
-		fmt.Fprintln(buf, "No PR or commit-group cards were available.")
-		return
-	}
-	fmt.Fprintln(buf, "| PR | Label | Confidence | Scope | Test evidence | Review burden | Durability | Main risk | Next action |")
-	fmt.Fprintln(buf, "| --- | --- | --- | --- | --- | --- | --- | --- | --- |")
-	for _, card := range cards {
-		pr := "commit"
-		if card.PRNumber > 0 {
-			pr = fmt.Sprintf("#%d", card.PRNumber)
-		}
-		fmt.Fprintf(buf, "| %s | %s | %s | %s | %s | %s | %s | %s | %s |\n",
-			escapeTable(pr),
-			escapeTable(card.Label),
-			escapeTable(string(card.Confidence)),
-			escapeTable(card.Scope),
-			escapeTable(card.TestEvidence),
-			escapeTable(card.ReviewBurden),
-			escapeTable(card.Durability),
-			escapeTable(card.MainRisk),
-			escapeTable(card.NextAction),
-		)
-	}
-}
-
-func testEvidence(analysis signals.AnalysisReport) string {
-	if analysis.Inventory.TestFiles == 0 {
-		return "No test files were found in the repository inventory. This does not prove behavior is untested, but V1 has no coverage report or test-file evidence to rely on."
-	}
-	return fmt.Sprintf("Repository inventory found %d test files and %d source files. No coverage report was imported, so this is based on test-file evidence only.", analysis.Inventory.TestFiles, analysis.Inventory.SourceFiles)
-}
-
-func durability(analysis signals.AnalysisReport) string {
-	highChurn := 0
-	fixLike := 0
-	for _, sig := range analysis.Signals {
-		switch sig.Type {
-		case "high_churn_file":
-			highChurn++
-		case "follow_up_fix_commit", "revert_commit":
-			fixLike++
-		}
-	}
-	if highChurn == 0 && fixLike == 0 {
-		return "No strong churn or revert pattern was detected in the local analysis window. PR-level post-merge churn needs GitHub file metadata and is unavailable when PR metadata is missing."
-	}
-	return fmt.Sprintf("The analysis found %d high-churn file signals and %d low-confidence fix or revert signals. Treat message-based fix signals as directional, not proof.", highChurn, fixLike)
 }
 
 func publicFindings(findings []signals.Finding, limit int, replacements ...[]pathReplacement) []signals.Finding {

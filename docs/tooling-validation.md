@@ -64,11 +64,12 @@ changes.
 
 - `pnpm dogfood:smoke` builds the real CLI and exercises it against temporary
   Git repos under `/tmp/contribution-*`, including V2 preflight coverage,
-  packet, and feedback-import flows.
+  packet, feedback-import flows, and public-safe report quality checks.
 - `pnpm dogfood:real` builds the real CLI, analyzes this repository into
   `/tmp/contribution-*`, checks inventory against Git-visible files, confirms
   local-only confidence is not `high`, and asserts public-safe outputs do not
-  contain local roots, remotes, commit SHAs, tokens, emails, or private paths.
+  contain local roots, remotes, commit SHAs, tokens, emails, private paths,
+  stale phase wording, or blank PR-ledger risk/action cells.
 - `pnpm dogfood:release` runs the smoke flow, creates a GoReleaser snapshot,
   unpacks the current runner artifact, and runs a clean-environment smoke. This
   current-runner artifact check is the intended default; add cross-OS artifact

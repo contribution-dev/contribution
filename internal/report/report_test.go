@@ -236,11 +236,41 @@ func TestPublicSafeReportArtifactsDoNotRetainPrivateIdentifiers(t *testing.T) {
 			t.Fatalf("read %s: %v", name, err)
 		}
 		text := string(data)
+		if name == "report.md" {
+			assertLedgerHasNoEmptyRiskActions(t, text)
+			if strings.Contains(text, "V1") {
+				t.Fatalf("%s retained phase-stale V1 wording:\n%s", name, text)
+			}
+		}
 		for _, forbidden := range []string{privateRoot, privateRelativePath, commitSHA, commitSHA[:8], "dogfood-secret-value", "Private commit"} {
 			if strings.Contains(text, forbidden) {
 				t.Fatalf("%s retained %q:\n%s", name, forbidden, text)
 			}
 		}
+	}
+}
+
+func assertLedgerHasNoEmptyRiskActions(t *testing.T, text string) {
+	t.Helper()
+	checked := 0
+	for _, line := range strings.Split(text, "\n") {
+		if !strings.HasPrefix(line, "| ") || strings.HasPrefix(line, "| PR ") || strings.HasPrefix(line, "| ---") {
+			continue
+		}
+		cells := strings.Split(line, "|")
+		if len(cells) < 10 {
+			continue
+		}
+		checked++
+		if strings.TrimSpace(cells[8]) == "" {
+			t.Fatalf("ledger row has empty main risk cell: %s", line)
+		}
+		if strings.TrimSpace(cells[9]) == "" {
+			t.Fatalf("ledger row has empty next action cell: %s", line)
+		}
+	}
+	if checked == 0 {
+		t.Fatalf("no ledger rows found in report:\n%s", text)
 	}
 }
 

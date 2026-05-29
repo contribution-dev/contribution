@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Harden public-safe markdown reports so redacted PR-ledger rows keep neutral
+  risk/action fallback text and generated report copy no longer uses stale V1
+  phase wording.
 - Add V2 preflight artifacts with structured changed files, changed-line
   coverage import, rubric evidence, repo policy checks, fail-on-risk behavior,
   and a reusable GitHub Action wrapper.

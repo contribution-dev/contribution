@@ -30,7 +30,7 @@ function cleanReviewState(overrides = {}) {
   };
 }
 
-test("push gate evaluates blocking non-tip outgoing commits", async () => {
+test("push gate skips blocking non-tip outgoing commits", async () => {
   const repoRoot = await mkdtemp(path.join(tmpdir(), "push-gate-repo-"));
   const reviewsDir = path.join(repoRoot, ".code-reviews");
   try {
@@ -61,8 +61,8 @@ test("push gate evaluates blocking non-tip outgoing commits", async () => {
     });
 
     assert.equal(result.summary.shas, 2);
-    assert.equal(result.summary.blocked, 1);
-    assert.equal(result.blocked[0].sha, SHA_A);
+    assert.equal(result.summary.blocked, 0);
+    assert.deepEqual(result.blocked, []);
   } finally {
     await rm(repoRoot, { recursive: true, force: true });
   }

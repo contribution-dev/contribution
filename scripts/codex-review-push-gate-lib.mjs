@@ -1059,6 +1059,11 @@ export async function executePushGate({
       break;
     }
 
+    // Only evaluate pushed tip SHAs. Older outgoing commits are superseded by tip state.
+    if (!pushTipShas.has(sha)) {
+      continue;
+    }
+
     const waitResult = await waitForReview({
       reviewsDir,
       sha,

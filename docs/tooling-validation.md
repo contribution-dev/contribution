@@ -33,8 +33,10 @@ This repo uses Go for product code and Node/pnpm for repository automation.
 ## Review automation
 
 - `post-commit` enqueues every local commit for Codex review.
-- `pre-push` waits for required review evidence and blocks unresolved major or
-  blocker findings.
+- `pre-push` waits for required review evidence on pushed branch tips and
+  blocks unresolved major or blocker findings. Older outgoing commits are
+  superseded by tip state; they can still be reviewed asynchronously without
+  blocking the push gate.
 - Codex review is the only active review lane. Do not add dormant lane plumbing
   without a runnable producer, gate, and tests.
 - Review state is canonical under `.code-reviews` with Codex queue jobs in

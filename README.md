@@ -89,8 +89,8 @@ pnpm review:status
 ## Commit Review
 
 Every local commit is enqueued for Codex review by the `post-commit` hook. The
-`pre-push` hook waits for required review evidence and blocks pushes with
-unresolved major or blocker findings.
+`pre-push` hook waits for required review evidence on pushed branch tips and
+blocks pushes with unresolved major or blocker findings.
 
 On macOS, install or repair durable review workers with:
 

@@ -15,6 +15,7 @@ import (
 	coveragepkg "github.com/contribution-dev/contribution/internal/coverage"
 	gitrepo "github.com/contribution-dev/contribution/internal/git"
 	"github.com/contribution-dev/contribution/internal/github"
+	"github.com/contribution-dev/contribution/internal/publicsafe"
 	"github.com/contribution-dev/contribution/internal/receipt"
 	"github.com/contribution-dev/contribution/internal/report"
 	"github.com/contribution-dev/contribution/internal/signals"
@@ -206,7 +207,7 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 		analysis.Profile.Headline = "AI-native contribution profile"
 	}
 	if opts.PublicSafe {
-		analysis = report.PublicSafeAnalysis(analysis)
+		analysis = publicsafe.Analysis(analysis)
 	}
 	if err := report.WriteAnalysisBundle(outputDir, analysis, opts.Format); err != nil {
 		return "", err

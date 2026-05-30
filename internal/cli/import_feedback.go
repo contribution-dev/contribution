@@ -6,6 +6,7 @@ import (
 	"time"
 
 	"github.com/contribution-dev/contribution/internal/friend"
+	"github.com/contribution-dev/contribution/internal/publicsafe"
 	"github.com/contribution-dev/contribution/internal/report"
 	"github.com/spf13/cobra"
 )
@@ -44,7 +45,7 @@ func newImportFeedbackCommand(out io.Writer) *cobra.Command {
 			now := time.Now().UTC()
 			analysis = friend.ApplyFeedback(analysis, feedback, now)
 			if publicSafe {
-				analysis = report.PublicSafeAnalysis(analysis)
+				analysis = publicsafe.Analysis(analysis)
 			}
 			if err := report.WriteAnalysisBundle(output, analysis, format); err != nil {
 				return err

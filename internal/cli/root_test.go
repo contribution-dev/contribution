@@ -170,6 +170,7 @@ func TestPreflightCommandWritesJSONArtifacts(t *testing.T) {
 		t.Fatalf("stdout = %q, want preflight path", stdout)
 	}
 	outputDir := strings.TrimSpace(strings.TrimPrefix(stdout, prefix))
+	// #nosec G304 -- test reads an artifact path created under a private temp dir.
 	data, err := os.ReadFile(filepath.Join(outputDir, "preflight.json"))
 	if err != nil {
 		t.Fatalf("read preflight.json: %v", err)

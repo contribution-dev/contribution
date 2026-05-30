@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Harden public-safe boundaries and foundation checks: public-safe analysis and
+  packet transformations now live outside report rendering, worktree preflight
+  no longer follows untracked symlinks for line evidence, coverage import is
+  bounded and deterministic for ambiguous suffix matches, and changed-aware CLI
+  contract routing includes all core behavior packages.
 - Harden local foundation checks and shared CLI internals: `pnpm tools:check`
   now verifies local tooling without repairing launchd workers, `pnpm build`
   creates `bin/` in clean checkouts, GitHub enrichment paginates large PR

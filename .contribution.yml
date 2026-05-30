@@ -11,12 +11,14 @@ preflight:
   require_tests_for_source: false
   changed_line_coverage_min: 0
   risky_paths:
-    - internal/auth/
-    - internal/security/
-    - internal/billing/
-    - internal/payments/
-    - app/api/auth/
-    - apps/app/app/api/auth/
+    - internal/privacy/
+    - internal/github/
+    - internal/git/
+    - internal/tools/
+    - scripts/codex-review-*
+    - scripts/lib/codex-review-*
+    - scripts/risk-policy/
+    - .github/workflows/
 coverage:
   command: go test ./... -coverprofile=coverage.out
   path: coverage.out

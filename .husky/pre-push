@@ -121,7 +121,7 @@ fi
 
 REPO_ROOT="$(git rev-parse --show-toplevel 2>/dev/null || pwd)"
 . "$REPO_ROOT/scripts/codex-review-dir.sh"
-RESOLVED_REVIEWS_DIR="$(resolve_codex_reviews_dir "$REPO_ROOT" "${CODE_REVIEW_DIR:-${CODEX_REVIEW_DIR:-$REPO_ROOT/.code-reviews}}" 2>/dev/null || true)"
+RESOLVED_REVIEWS_DIR="$(resolve_codex_reviews_dir "$REPO_ROOT" "${CODE_REVIEW_DIR:-$REPO_ROOT/.code-reviews}" 2>/dev/null || true)"
 if [ -z "$RESOLVED_REVIEWS_DIR" ]; then
   echo "========================================"
   echo "PRE-PUSH FAILED: unable to resolve writable codex review artifacts directory"

@@ -43,6 +43,11 @@ This repo uses Go for product code and Node/pnpm for repository automation.
 - Review severity parsing and rank comparisons are centralized in
   `scripts/lib/review-severity.mjs`; control-plane and risk-policy scripts
   should import that helper instead of carrying local rank tables.
+- Risk-policy finding limits use a bounded default when `MAX_FINDINGS` or
+  `--max-findings` is missing, invalid, or too large, so malformed inputs must
+  not suppress all actionable review findings.
+- Stale active-job recovery requeues only the originally observed worker claim;
+  it must not remove an active job that another worker claimed concurrently.
 - On macOS, `pnpm tools:check` verifies durable review workers without changing
   launchd state.
 - `pnpm review:status` is the default operator status view. It includes a

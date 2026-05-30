@@ -1,5 +1,12 @@
 import assert from "node:assert/strict";
-import { mkdtemp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
+import {
+  mkdtemp,
+  mkdir,
+  readFile,
+  rename,
+  rm,
+  writeFile,
+} from "node:fs/promises";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import test from "node:test";
@@ -7,12 +14,14 @@ import test from "node:test";
 import {
   normalizeReviewRootOverride,
   resolveReviewRootOverride,
+  createReviewQueueBaseJob,
   REVIEW_QUEUE_LANES,
   REVIEW_QUEUE_STATUSES,
 } from "./codex-review-state.mjs";
 import {
   ensureReviewQueue,
   listReviewJobs,
+  reclaimStaleActiveJobs,
 } from "../codex-review-queue-lib.mjs";
 
 test("review queue lanes stay Codex-only", () => {
@@ -75,6 +84,92 @@ test("canonical queue setup does not migrate top-level queue jobs", async () => 
       await readFile(path.join(legacyPendingDir, `${sha}.json`), "utf8"),
       `${JSON.stringify({ sha, status: "pending" })}\n`,
     );
+  } finally {
+    await rm(tempRoot, { recursive: true, force: true });
+  }
+});
+
+test("stale active reclaim does not delete a concurrently claimed job", async () => {
+  const tempRoot = await mkdtemp(path.join(tmpdir(), "contribution-queue-"));
+  try {
+    const reviewsDir = path.join(tempRoot, ".code-reviews");
+    const sha = "0123456789abcdef0123456789abcdef01234567";
+    await ensureReviewQueue(reviewsDir, "codex");
+    const activePath = path.join(
+      reviewsDir,
+      "queue",
+      "codex",
+      "active",
+      `${sha}.json`,
+    );
+    const pendingPath = path.join(
+      reviewsDir,
+      "queue",
+      "codex",
+      "pending",
+      `${sha}.json`,
+    );
+    const oldJob = {
+      ...createReviewQueueBaseJob({
+        sha,
+        trigger: "post-commit",
+        source: "test",
+        lane: "codex",
+      }),
+      status: "active",
+      updated_at: "2026-01-01T00:00:00.000Z",
+      started_at: "2026-01-01T00:00:00.000Z",
+      worker: {
+        id: "old-worker",
+        pid: 999999,
+        host: "test",
+        claimed_at: "2026-01-01T00:00:00.000Z",
+        heartbeat_at: "2026-01-01T00:00:00.000Z",
+      },
+      lane_states: {
+        codex: {
+          status: "running",
+          started_at: "2026-01-01T00:00:00.000Z",
+          completed_at: "",
+          finding_count: 0,
+          blocker_count: 0,
+          major_count: 0,
+          minor_count: 0,
+        },
+      },
+    };
+    await writeFile(activePath, `${JSON.stringify(oldJob, null, 2)}\n`, "utf8");
+
+    await reclaimStaleActiveJobs(reviewsDir, {
+      staleAfterMs: 0,
+      nowMs: Date.parse("2026-01-01T00:01:00.000Z"),
+      beforeRemoveActive: async ({ activePath, pendingPath, job }) => {
+        await rename(pendingPath, activePath);
+        await writeFile(
+          activePath,
+          `${JSON.stringify(
+            {
+              ...job,
+              status: "active",
+              worker: {
+                id: "new-worker",
+                pid: process.pid,
+                host: "test",
+                claimed_at: "2026-01-01T00:01:00.000Z",
+                heartbeat_at: "2026-01-01T00:01:00.000Z",
+              },
+            },
+            null,
+            2,
+          )}\n`,
+          "utf8",
+        );
+      },
+    });
+
+    const active = JSON.parse(await readFile(activePath, "utf8"));
+    assert.equal(active.worker.id, "new-worker");
+    await assert.rejects(() => readFile(pendingPath, "utf8"), /ENOENT/u);
   } finally {
     await rm(tempRoot, { recursive: true, force: true });
   }

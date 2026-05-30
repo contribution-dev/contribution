@@ -11,10 +11,6 @@ inputs:
     description: Whether to run pnpm install with retries
     required: false
     default: "true"
-  cache-pnpm-store:
-    description: Whether to cache pnpm store for faster dependency installs
-    required: false
-    default: "false"
 
 runs:
   using: composite
@@ -34,23 +30,6 @@ runs:
         corepack install
         pnpm --version
 
-    - name: Resolve pnpm store path
-      if: ${{ inputs.cache-pnpm-store == 'true' }}
-      id: pnpm-store
-      shell: bash
-      run: echo "path=$(pnpm store path --silent)" >> "$GITHUB_OUTPUT"
-
-    - name: Restore pnpm store cache
-      if: ${{ inputs.cache-pnpm-store == 'true' }}
-      id: pnpm-store-cache
-      uses: actions/cache/restore@v5
-      with:
-        path: ${{ steps.pnpm-store.outputs.path }}
-        key: ${{ runner.os }}-pnpm-store-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml') }}
-        restore-keys: |
-          ${{ runner.os }}-pnpm-store-${{ inputs.node-version }}-
-          ${{ runner.os }}-pnpm-store-
-
     - name: Install dependencies (retry up to 5 times)
       if: ${{ inputs.run-install == 'true' }}
       shell: bash
@@ -65,27 +44,3 @@ runs:
         done
         echo "pnpm install failed after 5 attempts."
         exit 1
-
-    - name: Save pnpm store cache
-      if: >-
-        ${{
-          inputs.cache-pnpm-store == 'true' &&
-          inputs.run-install == 'true' &&
-          github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
-          steps.pnpm-store-cache.outputs.cache-hit != 'true'
-        }}
-      shell: bash
-      run: pnpm store prune
-
-    - name: Persist pruned pnpm store cache
-      if: >-
-        ${{
-          inputs.cache-pnpm-store == 'true' &&
-          inputs.run-install == 'true' &&
-          github.ref == format('refs/heads/{0}', github.event.repository.default_branch) &&
-          steps.pnpm-store-cache.outputs.cache-hit != 'true'
-        }}
-      uses: actions/cache/save@v5
-      with:
-        path: ${{ steps.pnpm-store.outputs.path }}
-        key: ${{ runner.os }}-pnpm-store-${{ inputs.node-version }}-${{ hashFiles('pnpm-lock.yaml') }}

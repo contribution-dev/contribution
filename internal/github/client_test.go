@@ -147,20 +147,20 @@ func TestFetchPREnrichmentPaginates(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		w.Header().Set("Content-Type", "application/json")
 		page := r.URL.Query().Get("page")
-		switch {
-		case r.URL.Path == "/repos/owner/repo/pulls/7/files":
+		switch r.URL.Path {
+		case "/repos/owner/repo/pulls/7/files":
 			if page == "1" {
 				_, _ = w.Write([]byte(`[` + strings.TrimSuffix(strings.Repeat(`{"filename":"internal/page-one.go"},`, 100), ",") + `]`))
 				return
 			}
 			_, _ = w.Write([]byte(`[{"filename":"internal/page-two.go"}]`))
-		case r.URL.Path == "/repos/owner/repo/pulls/7/reviews":
+		case "/repos/owner/repo/pulls/7/reviews":
 			if page == "1" {
 				_, _ = w.Write([]byte(`[` + strings.TrimSuffix(strings.Repeat(`{"state":"APPROVED"},`, 100), ",") + `]`))
 				return
 			}
 			_, _ = w.Write([]byte(`[{"state":"CHANGES_REQUESTED"}]`))
-		case r.URL.Path == "/repos/owner/repo/commits/abcdef/check-runs":
+		case "/repos/owner/repo/commits/abcdef/check-runs":
 			if page == "1" {
 				_, _ = w.Write([]byte(`{"check_runs":[` + strings.TrimSuffix(strings.Repeat(`{"conclusion":"success"},`, 100), ",") + `]}`))
 				return

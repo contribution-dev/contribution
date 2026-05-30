@@ -43,11 +43,21 @@ test("docs-only contract coverage commands can read from a file list", () => {
 
 test("CLI contract matching covers all command behavior packages", () => {
   for (const file of [
+    "internal/analysis/analysis.go",
+    "internal/cli/root.go",
+    "internal/config/config.go",
     "internal/preflight/preflight.go",
     "internal/coverage/parser.go",
     "internal/friend/friend.go",
     "internal/fileclass/classify.go",
+    "internal/git/repo.go",
+    "internal/github/client.go",
+    "internal/privacy/redaction.go",
+    "internal/publicsafe/publicsafe.go",
     "internal/receipt/scoring.go",
+    "internal/report/report.go",
+    "internal/signals/types.go",
+    "internal/tools/analyzers.go",
   ]) {
     assert.equal(
       hasContractSensitiveDomainChanges([file], "cli-contract"),

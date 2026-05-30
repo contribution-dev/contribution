@@ -11,6 +11,8 @@ import { reviewSeverityRank } from "../lib/review-severity.mjs";
 const FINDING_HEADER_REGEX =
   /^### \[(?<findingId>[^\]]+)\] \[(?<severity>[A-Z]+)\] (?<title>.+?) \(confidence (?<confidence>[0-9.]+)\)/gm;
 const EVIDENCE_FILE_REGEX = /`(?<file>[^`:\n]+):(?<lines>[^`\n]+)`/;
+const DEFAULT_MAX_FINDINGS = 5;
+const MAX_FINDINGS_LIMIT = 50;
 
 function parseCommitLine(body) {
   const match = body.match(/- Commit: `(?<sha>[0-9a-f]{7,40})`/i);
@@ -30,6 +32,17 @@ export function isSameCommitSha(commitSha, headSha) {
 
 function severityRank(severity) {
   return reviewSeverityRank(severity);
+}
+
+export function normalizeMaxFindings(value) {
+  const parsed =
+    typeof value === "number"
+      ? value
+      : Number.parseInt(String(value ?? ""), 10);
+  if (!Number.isFinite(parsed) || parsed <= 0) {
+    return DEFAULT_MAX_FINDINGS;
+  }
+  return Math.min(Math.floor(parsed), MAX_FINDINGS_LIMIT);
 }
 
 export function parseFindingsFromCommentBody(body) {
@@ -58,6 +71,7 @@ export function normalizeActionableFindings({
   headSha,
   maxFindings,
 }) {
+  const limit = normalizeMaxFindings(maxFindings);
   const dedup = new Map();
   for (const comment of comments) {
     const body = String(comment?.body ?? "");
@@ -80,7 +94,7 @@ export function normalizeActionableFindings({
       if (severityDelta !== 0) return severityDelta;
       return b.confidence - a.confidence;
     })
-    .slice(0, maxFindings);
+    .slice(0, limit);
 }
 
 async function writeReport(report) {
@@ -100,7 +114,7 @@ function parseArgs(argv) {
     pullNumber: Number.parseInt(process.env.PR_NUMBER ?? "0", 10),
     token: process.env.GITHUB_TOKEN ?? "",
     headSha: process.env.PR_HEAD_SHA ?? "",
-    maxFindings: Number.parseInt(process.env.MAX_FINDINGS ?? "5", 10),
+    maxFindings: normalizeMaxFindings(process.env.MAX_FINDINGS),
   };
   for (let i = 2; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -112,7 +126,7 @@ function parseArgs(argv) {
     }
     switch (arg) {
       case "--max-findings":
-        args.maxFindings = Number.parseInt(next ?? "5", 10);
+        args.maxFindings = normalizeMaxFindings(next);
         i += 1;
         break;
       default:

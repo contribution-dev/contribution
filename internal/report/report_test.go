@@ -8,6 +8,7 @@ import (
 	"testing"
 	"time"
 
+	"github.com/contribution-dev/contribution/internal/publicsafe"
 	"github.com/contribution-dev/contribution/internal/signals"
 )
 
@@ -216,7 +217,7 @@ func TestPublicSafeAnalysisRedactsPrivateMetadata(t *testing.T) {
 		},
 	}
 
-	got := PublicSafeAnalysis(analysis)
+	got := publicsafe.Analysis(analysis)
 	if got.Repo.Root != "" || got.Repo.RemoteURL != "" || got.Repo.HeadSHA != "" || got.Repo.GitHubOwner != "" || got.Repo.GitHubRepo != "" {
 		t.Fatalf("repo metadata was not redacted: %+v", got.Repo)
 	}
@@ -278,7 +279,7 @@ func TestPublicSafeAnalysisRedactsPathsAndEmailsOutsideSignals(t *testing.T) {
 		Limitations: []string{"Contact " + email + " about " + privatePath},
 	}
 
-	got := PublicSafeAnalysis(analysis)
+	got := publicsafe.Analysis(analysis)
 	for _, forbidden := range []string{privatePath, email} {
 		if containsText(got, forbidden) {
 			t.Fatalf("public-safe analysis retained %q: %+v", forbidden, got)
@@ -293,7 +294,7 @@ func TestPublicSafeReportArtifactsDoNotRetainPrivateIdentifiers(t *testing.T) {
 	privateRoot := "/private/tmp/customer-repo"
 	privateRelativePath := "internal/customer/acme/session.go"
 	commitSHA := "abcdef1234567890abcdef1234567890abcdef12"
-	analysis := PublicSafeAnalysis(signals.AnalysisReport{
+	analysis := publicsafe.Analysis(signals.AnalysisReport{
 		GeneratedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		Repo: signals.RepoMetadata{
 			ID:        "owner/private",
@@ -476,7 +477,7 @@ func TestMarkdownIncludesPrivateExplainabilityDeepDivesAndSetup(t *testing.T) {
 func TestPublicSafeAnalysisRedactsDeepDivesAndCoverage(t *testing.T) {
 	privatePath := "internal/customer/acme/session.go"
 	commitSHA := "abcdef1234567890abcdef1234567890abcdef12"
-	analysis := PublicSafeAnalysis(signals.AnalysisReport{
+	analysis := publicsafe.Analysis(signals.AnalysisReport{
 		Repo: signals.RepoMetadata{ID: "owner/private", Name: "private", HeadSHA: commitSHA},
 		Coverage: signals.CoverageSummary{
 			Status:           "available",

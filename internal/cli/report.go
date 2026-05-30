@@ -5,6 +5,7 @@ import (
 	"io"
 	"path/filepath"
 
+	"github.com/contribution-dev/contribution/internal/publicsafe"
 	"github.com/contribution-dev/contribution/internal/report"
 	"github.com/spf13/cobra"
 )
@@ -30,7 +31,7 @@ func newReportCommand(out io.Writer) *cobra.Command {
 				return err
 			}
 			if publicSafe {
-				analysis = report.PublicSafeAnalysis(analysis)
+				analysis = publicsafe.Analysis(analysis)
 			}
 			if output == "" {
 				output = filepath.Dir(input)

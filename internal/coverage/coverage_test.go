@@ -190,6 +190,44 @@ func TestParseFilesReportsScannerErrors(t *testing.T) {
 	}
 }
 
+func TestParseFilesRejectsOversizedCoverageFile(t *testing.T) {
+	repo := t.TempDir()
+	cover := filepath.Join(repo, "coverage.out")
+	// #nosec G304 -- test creates a coverage artifact under a private temp dir.
+	file, err := os.Create(cover)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if err := file.Truncate(maxCoverageFileBytes + 1); err != nil {
+		_ = file.Close()
+		t.Fatal(err)
+	}
+	if err := file.Close(); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err = ParseFiles([]string{cover}, FormatGo, repo)
+
+	if err == nil || !strings.Contains(err.Error(), "exceeds") {
+		t.Fatalf("ParseFiles() error = %v, want oversized coverage error", err)
+	}
+}
+
+func TestParseFilesRejectsAbsurdCoverageRange(t *testing.T) {
+	repo := t.TempDir()
+	cover := filepath.Join(repo, "coverage.out")
+	data := "mode: set\ninternal/app.go:1.1,200000.1 1 1\n"
+	if err := os.WriteFile(cover, []byte(data), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := ParseFiles([]string{cover}, FormatGo, repo)
+
+	if err == nil || !strings.Contains(err.Error(), "coverage range") {
+		t.Fatalf("ParseFiles() error = %v, want range bound error", err)
+	}
+}
+
 func TestChangedLineCoverageUnknownWhenNoRecordsMatch(t *testing.T) {
 	report := Report{Files: map[string]File{
 		"src/app.ts": {Lines: map[int]bool{1: true}},
@@ -204,5 +242,24 @@ func TestChangedLineCoverageUnknownWhenNoRecordsMatch(t *testing.T) {
 	}
 	if got.TotalLines != 0 {
 		t.Fatalf("TotalLines = %d, want 0", got.TotalLines)
+	}
+}
+
+func TestChangedLineCoverageIsUnknownForAmbiguousSuffixMatch(t *testing.T) {
+	report := Report{Files: map[string]File{
+		"pkg/one/app.go": {Lines: map[int]bool{1: true}},
+		"pkg/two/app.go": {Lines: map[int]bool{1: false}},
+	}}
+
+	got := ComputeChangedLineCoverage(report, []ChangedFileInput{{
+		Path:       "app.go",
+		LineRanges: []signals.LineRange{{Start: 1, End: 1}},
+	}})
+
+	if got.Status != "unknown" {
+		t.Fatalf("Status = %q, want unknown", got.Status)
+	}
+	if got.TotalLines != 0 {
+		t.Fatalf("TotalLines = %d, want ambiguous match to contribute no lines", got.TotalLines)
 	}
 }

@@ -461,7 +461,7 @@ func untrackedChangedFiles(ctx context.Context, repoPath string) ([]ChangedFile,
 
 func untrackedChangedFile(repoPath string, rel string) (ChangedFile, bool, error) {
 	path := filepath.Join(repoPath, filepath.FromSlash(rel))
-	info, err := os.Stat(path)
+	info, err := os.Lstat(path)
 	if err != nil {
 		if errors.Is(err, os.ErrNotExist) {
 			return ChangedFile{}, false, nil
@@ -470,6 +470,9 @@ func untrackedChangedFile(repoPath string, rel string) (ChangedFile, bool, error
 	}
 	if info.IsDir() {
 		return ChangedFile{}, false, nil
+	}
+	if info.Mode()&os.ModeSymlink != 0 || !info.Mode().IsRegular() {
+		return ChangedFile{Path: rel}, true, nil
 	}
 	lines, text, err := countTextLines(path)
 	if err != nil {
@@ -508,7 +511,7 @@ func countTextLines(path string) (int, bool, error) {
 				return 0, false, nil
 			}
 			lines += bytes.Count(chunk, []byte{'\n'})
-			last = chunk[n-1]
+			last = chunk[len(chunk)-1]
 			hasData = true
 		}
 		if errors.Is(readErr, io.EOF) {

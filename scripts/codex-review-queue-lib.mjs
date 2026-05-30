@@ -375,6 +375,7 @@ export async function reclaimStaleActiveJobs(
     lane = "codex",
     staleAfterMs = DEFAULT_STALE_AFTER_MS,
     nowMs = Date.now(),
+    beforeRemoveActive = async () => {},
   } = {},
 ) {
   const normalizedLane = normalizeReviewQueueLane();
@@ -420,10 +421,41 @@ export async function reclaimStaleActiveJobs(
       entry.job.sha,
     );
     await atomicWriteJson(pendingPath, nextJob);
-    await rm(entry.filePath, { force: true });
+    await beforeRemoveActive({
+      activePath: entry.filePath,
+      pendingPath,
+      job: nextJob,
+    });
+    await removeStaleActiveJobFile(entry.filePath, entry.job);
     reclaimed.push(nextJob.sha);
   }
   return reclaimed;
+}
+
+async function removeStaleActiveJobFile(filePath, originalJob) {
+  let current;
+  try {
+    current = normalizeJob(await readJson(filePath), "active");
+  } catch {
+    return false;
+  }
+  if (!isSameActiveJobForReclaim(current, originalJob)) {
+    return false;
+  }
+  await rm(filePath, { force: true });
+  return true;
+}
+
+function isSameActiveJobForReclaim(current, original) {
+  if (!current || !original) return false;
+  return (
+    current.status === "active" &&
+    current.sha === original.sha &&
+    current.worker?.id === original.worker?.id &&
+    current.worker?.pid === original.worker?.pid &&
+    current.worker?.claimed_at === original.worker?.claimed_at &&
+    current.worker?.heartbeat_at === original.worker?.heartbeat_at
+  );
 }
 
 export async function claimNextReviewJob(

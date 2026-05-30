@@ -5,6 +5,7 @@ import (
 	"os"
 	"os/exec"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 	"time"
@@ -353,6 +354,42 @@ func TestDiffWorktreeKeepsLargeUntrackedFilesBounded(t *testing.T) {
 	}
 	if file.Additions != 0 || len(file.LineRanges) != 0 {
 		t.Fatalf("large file evidence = %+v, want path only", file)
+	}
+}
+
+func TestDiffWorktreeDoesNotFollowUntrackedSymlinks(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("symlink fixture is not portable on Windows")
+	}
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repoPath := t.TempDir()
+	runGit(t, repoPath, "init", "-b", "main")
+	runGit(t, repoPath, "config", "user.email", "dogfood@example.test")
+	runGit(t, repoPath, "config", "user.name", "Dogfood User")
+	writeTestFile(t, repoPath, "README.md", "# fixture\n")
+	runGit(t, repoPath, "add", ".")
+	runGit(t, repoPath, "commit", "-m", "initial fixture")
+
+	outside := filepath.Join(t.TempDir(), "outside.txt")
+	if err := os.WriteFile(outside, []byte("one\ntwo\nthree\n"), 0o600); err != nil {
+		t.Fatalf("write outside target: %v", err)
+	}
+	if err := os.Symlink(outside, filepath.Join(repoPath, "linked-outside.txt")); err != nil {
+		t.Fatalf("create symlink: %v", err)
+	}
+
+	diff, err := DiffWorktree(context.Background(), repoPath, "HEAD")
+	if err != nil {
+		t.Fatalf("DiffWorktree() error = %v", err)
+	}
+	file := changedFileByPath(diff.Files, "linked-outside.txt")
+	if file == nil {
+		t.Fatalf("files = %+v, want linked-outside.txt", diff.Files)
+	}
+	if file.Additions != 0 || len(file.LineRanges) != 0 {
+		t.Fatalf("symlink evidence = %+v, want path only", file)
 	}
 }
 

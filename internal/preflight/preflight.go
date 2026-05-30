@@ -186,7 +186,8 @@ func Build(input BuildInput) signals.PreflightReport {
 	} else if input.Coverage.Reason != "" {
 		testEvidence += " " + input.Coverage.Reason
 	}
-	limitations := append(input.Limitations, "Optional analyzer findings depend on installed external tools and bounded scan time.")
+	limitations := append([]string{}, input.Limitations...)
+	limitations = append(limitations, "Optional analyzer findings depend on installed external tools and bounded scan time.")
 	return signals.PreflightReport{
 		Version:           2,
 		GeneratedAt:       input.Now,

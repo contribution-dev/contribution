@@ -24,7 +24,10 @@ const (
 	// FormatLCOV is the LCOV tracefile format.
 	FormatLCOV Format = "lcov"
 
-	maxCoverageLineBytes = 1024 * 1024
+	maxCoverageFileBytes  = 20 * 1024 * 1024
+	maxCoverageLineBytes  = 1024 * 1024
+	maxCoverageRangeLines = 100000
+	maxCoverageLineNumber = 10000000
 )
 
 // Report stores executable line coverage keyed by repository-relative path.
@@ -46,6 +49,11 @@ func ValidateFormat(format string) error {
 	default:
 		return fmt.Errorf("unsupported coverage format %q", format)
 	}
+}
+
+// IsSupportedFormat reports whether format is empty, auto, go, or lcov.
+func IsSupportedFormat(format string) bool {
+	return ValidateFormat(format) == nil
 }
 
 // ResolveInputs returns explicit coverage paths or, when none were passed,
@@ -223,6 +231,13 @@ type ChangedFileInput struct {
 }
 
 func parseFile(path string, format Format, repoRoot string) (Report, Format, error) {
+	info, err := os.Stat(path)
+	if err != nil {
+		return Report{}, "", fmt.Errorf("stat coverage %s: %w", path, err)
+	}
+	if info.Size() > maxCoverageFileBytes {
+		return Report{}, "", fmt.Errorf("coverage %s exceeds %d bytes", path, maxCoverageFileBytes)
+	}
 	// #nosec G304 -- coverage path is user-provided CLI input.
 	data, err := os.ReadFile(path)
 	if err != nil {
@@ -287,6 +302,9 @@ func parseGoCoverprofile(data string, repoRoot string) (Report, error) {
 		if startLine <= 0 || endLine <= 0 {
 			continue
 		}
+		if err := validateCoverageRange(startLine, endLine); err != nil {
+			return report, fmt.Errorf("parse go coverage: %w", err)
+		}
 		count, err := strconv.Atoi(fields[2])
 		if err != nil {
 			count = 0
@@ -317,6 +335,9 @@ func parseLCOV(data string, repoRoot string) (Report, error) {
 			lineNumber, err := strconv.Atoi(strings.TrimSpace(parts[0]))
 			if err != nil || lineNumber <= 0 {
 				continue
+			}
+			if err := validateCoverageRange(lineNumber, lineNumber); err != nil {
+				return report, fmt.Errorf("parse lcov coverage: %w", err)
 			}
 			count, err := strconv.Atoi(strings.TrimSpace(parts[1]))
 			if err != nil {
@@ -420,6 +441,22 @@ func addLine(report *Report, path string, line int, covered bool) {
 	report.Files[path] = file
 }
 
+func validateCoverageRange(startLine int, endLine int) error {
+	if startLine <= 0 || endLine <= 0 {
+		return fmt.Errorf("coverage line numbers must be positive")
+	}
+	if startLine > maxCoverageLineNumber || endLine > maxCoverageLineNumber {
+		return fmt.Errorf("coverage line number exceeds %d", maxCoverageLineNumber)
+	}
+	if endLine < startLine {
+		endLine = startLine
+	}
+	if endLine-startLine+1 > maxCoverageRangeLines {
+		return fmt.Errorf("coverage range %d-%d exceeds %d lines", startLine, endLine, maxCoverageRangeLines)
+	}
+	return nil
+}
+
 func parseLeadingInt(value string) int {
 	value = strings.TrimSpace(value)
 	var digits strings.Builder
@@ -444,24 +481,39 @@ func findCoverageFile(files map[string]File, changedPath string) (File, bool) {
 	if file, ok := files[changedPath]; ok {
 		return file, true
 	}
-	for path, file := range files {
+	var matches []string
+	for path := range files {
 		if strings.HasSuffix(path, "/"+changedPath) {
-			return file, true
+			matches = append(matches, path)
 		}
 	}
-	return File{}, false
+	if len(matches) != 1 {
+		return File{}, false
+	}
+	return files[matches[0]], true
+}
+
+func boundedChangedRange(rng signals.LineRange) (int, int, bool) {
+	start := rng.Start
+	end := rng.End
+	if start <= 0 || start > maxCoverageLineNumber {
+		return 0, 0, false
+	}
+	if end < start {
+		end = start
+	}
+	if end > maxCoverageLineNumber || end-start+1 > maxCoverageRangeLines {
+		return 0, 0, false
+	}
+	return start, end, true
 }
 
 func changedLines(ranges []signals.LineRange) []int {
 	var out []int
 	for _, rng := range ranges {
-		start := rng.Start
-		end := rng.End
-		if start <= 0 {
+		start, end, ok := boundedChangedRange(rng)
+		if !ok {
 			continue
-		}
-		if end < start {
-			end = start
 		}
 		for line := start; line <= end; line++ {
 			out = append(out, line)

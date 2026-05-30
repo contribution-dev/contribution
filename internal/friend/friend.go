@@ -12,7 +12,7 @@ import (
 	"strings"
 	"time"
 
-	"github.com/contribution-dev/contribution/internal/report"
+	"github.com/contribution-dev/contribution/internal/publicsafe"
 	"github.com/contribution-dev/contribution/internal/signals"
 )
 
@@ -45,8 +45,8 @@ func FindPRCard(cards []signals.PRQualityCard, pr int) (signals.PRQualityCard, b
 func BuildPacket(repo signals.RepoMetadata, card signals.PRQualityCard, publicSafe bool, now time.Time) signals.FriendReviewPacket {
 	artifactLabel := card.Title
 	if publicSafe {
-		repo = report.PublicSafeRepo(repo)
-		card = report.PublicSafeCard(card, 1)
+		repo = publicsafe.Repo(repo)
+		card = publicsafe.Card(card, 1)
 		artifactLabel = card.Title
 	}
 	evidence := []string{

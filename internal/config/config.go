@@ -8,6 +8,7 @@ import (
 	"os"
 	"path/filepath"
 
+	coveragepkg "github.com/contribution-dev/contribution/internal/coverage"
 	"gopkg.in/yaml.v3"
 )
 
@@ -150,7 +151,7 @@ func validate(cfg Config) []string {
 	if cfg.Preflight.ChangedLineCoverageMin < 0 || cfg.Preflight.ChangedLineCoverageMin > 100 {
 		warnings = append(warnings, "preflight.changed_line_coverage_min must be between 0 and 100; ignoring the configured threshold.")
 	}
-	if cfg.Coverage.Format != "" && cfg.Coverage.Format != "auto" && cfg.Coverage.Format != "go" && cfg.Coverage.Format != "lcov" {
+	if !coveragepkg.IsSupportedFormat(cfg.Coverage.Format) {
 		warnings = append(warnings, "coverage.format must be auto, go, or lcov; defaulting to auto.")
 	}
 	return warnings
@@ -211,7 +212,7 @@ func applyDefaults(cfg *Config) {
 	if cfg.Preflight.RiskyPaths == nil {
 		cfg.Preflight.RiskyPaths = defaults.Preflight.RiskyPaths
 	}
-	if cfg.Coverage.Format == "" || (cfg.Coverage.Format != "auto" && cfg.Coverage.Format != "go" && cfg.Coverage.Format != "lcov") {
+	if !coveragepkg.IsSupportedFormat(cfg.Coverage.Format) {
 		cfg.Coverage.Format = defaults.Coverage.Format
 	}
 	if cfg.AIUsage.SelfReportedTools == nil {

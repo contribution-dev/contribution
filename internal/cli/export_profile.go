@@ -4,6 +4,7 @@ import (
 	"fmt"
 	"io"
 
+	"github.com/contribution-dev/contribution/internal/publicsafe"
 	"github.com/contribution-dev/contribution/internal/report"
 	"github.com/spf13/cobra"
 )
@@ -26,7 +27,7 @@ func newExportProfileCommand(out io.Writer) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			analysis = report.PublicSafeAnalysis(analysis)
+			analysis = publicsafe.Analysis(analysis)
 			if err := report.WriteProfileArtifacts(output, analysis); err != nil {
 				return err
 			}

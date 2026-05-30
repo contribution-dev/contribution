@@ -9,6 +9,14 @@ test("hooks enqueue commit review and gate pushes", () => {
   assert.match(postCommit, /codex-review-enqueue/);
   assert.match(prePush, /codex-review-push-gate/);
   assert.match(prePush, /run-changed-checks\.mjs/);
+  assert.doesNotMatch(postCommit, /CODEX_REVIEW_DIR/);
+  assert.doesNotMatch(prePush, /CODEX_REVIEW_DIR/);
+});
+
+test("pre-commit hook reuses the shared bootstrap", () => {
+  const preCommit = readFileSync(".husky/pre-commit", "utf8");
+  assert.match(preCommit, /codex-bootstrap\.sh/);
+  assert.doesNotMatch(preCommit, /\.tools\/go\/bin/);
 });
 
 test("post-push hook uses canonical Codex queue only", () => {

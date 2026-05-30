@@ -15,10 +15,13 @@ tooling layer for repository automation.
   receipt, and preflight flows.
 - `internal/friend` owns friend-review packet creation and feedback import.
 - `internal/report` owns report rendering, private report explainability,
-  public-safe exports, and shared output format validation.
+  public-safe export artifact construction, and shared output format
+  validation.
 - `internal/receipt` owns PR quality cards, weakness map, trend comparison,
   deep dives, profile summary, and receipt confidence.
-- `internal/privacy` owns redaction primitives. Callers should not create
+- `internal/privacy` owns redaction primitives.
+- `internal/publicsafe` owns public-safe transformation policy for analysis,
+  repo metadata, and PR cards. Callers should reuse it instead of creating
   parallel public-safe sanitizers.
 - Public Go packages should not be added until the project has a stable library
   contract.

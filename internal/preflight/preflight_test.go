@@ -1,9 +1,15 @@
 package preflight
 
 import (
+	"context"
 	"encoding/json"
+	"io"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"reflect"
 	"sort"
+	"strings"
 	"testing"
 	"time"
 
@@ -147,6 +153,53 @@ func TestBuildPreflightUsesAnalyzerFindings(t *testing.T) {
 	}
 	if !hasRubricStatus(got.Rubric, "analyzer_findings", "fail") {
 		t.Fatalf("analyzer rubric did not fail: %+v", got.Rubric)
+	}
+}
+
+func TestRunWorktreeFailOnRiskWritesArtifactsAndReturnsError(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repoPath := t.TempDir()
+	runPreflightGit(t, repoPath, "init", "-b", "main")
+	runPreflightGit(t, repoPath, "config", "user.email", "dogfood@example.test")
+	runPreflightGit(t, repoPath, "config", "user.name", "Dogfood User")
+	writePreflightTestFile(t, repoPath, "internal/app.go", "package app\n\nfunc Value() int { return 1 }\n")
+	runPreflightGit(t, repoPath, "add", ".")
+	runPreflightGit(t, repoPath, "commit", "-m", "initial fixture")
+	writePreflightTestFile(t, repoPath, "internal/app.go", "package app\n\nfunc Value() int { return 2 }\n")
+	t.Chdir(repoPath)
+
+	outputRoot := filepath.Join(t.TempDir(), "preflight")
+	outputDir, err := Run(context.Background(), io.Discard, Options{
+		Base:            "HEAD",
+		Output:          outputRoot,
+		Format:          "json",
+		FailOnRisk:      "medium",
+		Worktree:        true,
+		NoExternalTools: true,
+	})
+
+	if err == nil || !strings.Contains(err.Error(), "preflight risk medium meets --fail-on-risk=medium") {
+		t.Fatalf("Run() error = %v, want fail-on-risk error", err)
+	}
+	if outputDir == "" {
+		t.Fatal("Run() outputDir is empty")
+	}
+	var report signals.PreflightReport
+	// #nosec G304 -- test reads an artifact path created under a private temp dir.
+	data, err := os.ReadFile(filepath.Join(outputDir, "preflight.json"))
+	if err != nil {
+		t.Fatalf("read preflight artifact: %v", err)
+	}
+	if err := json.Unmarshal(data, &report); err != nil {
+		t.Fatalf("parse preflight artifact: %v", err)
+	}
+	if report.Head != "WORKTREE" || report.RiskLevel != "medium" {
+		t.Fatalf("preflight head/risk = %q/%q, want WORKTREE/medium", report.Head, report.RiskLevel)
+	}
+	if report.FileSummary.SourceFiles != 1 || report.FileSummary.TestFiles != 0 {
+		t.Fatalf("file summary = %+v, want one source and no tests", report.FileSummary)
 	}
 }
 
@@ -410,4 +463,25 @@ func preflightContractSortedKeys(object map[string]any) []string {
 	}
 	sort.Strings(keys)
 	return keys
+}
+
+func runPreflightGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	// #nosec G204 -- test helper runs git with fixture-controlled arguments.
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %v failed: %v\n%s", args, err, out)
+	}
+}
+
+func writePreflightTestFile(t *testing.T, root string, rel string, content string) {
+	t.Helper()
+	path := filepath.Join(root, filepath.FromSlash(rel))
+	if err := os.MkdirAll(filepath.Dir(path), 0o750); err != nil {
+		t.Fatalf("mkdir %s: %v", filepath.Dir(path), err)
+	}
+	if err := os.WriteFile(path, []byte(content), 0o600); err != nil {
+		t.Fatalf("write %s: %v", rel, err)
+	}
 }

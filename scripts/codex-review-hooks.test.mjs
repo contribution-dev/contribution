@@ -158,7 +158,7 @@ test("commit review recovers final JSON from codex stdout", () => {
       "codex",
       '{"schema_version":2,"summary":"early","findings":[]}',
       "tokens used",
-      '{"schema_version":2,"summary":"final","findings":[{"severity":"major"}]}',
+      '\u001b[2mcodex\u001b[0m {"schema_version":2,"summary":"final","findings":[{"severity":"major"}]}',
     ].join("\n");
     assert.equal(
       extractCodexReviewOutput(transcript),

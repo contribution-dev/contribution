@@ -197,18 +197,29 @@ function isReviewOutputPayload(value) {
   );
 }
 
+function stripAnsiControl(value) {
+  return String(value ?? "").replace(
+    // eslint-disable-next-line no-control-regex
+    /\x1b(?:[@-Z\\-_]|\[[0-?]*[ -/]*[@-~])/gu,
+    "",
+  );
+}
+
 export function extractCodexReviewOutput(outputText) {
   const lines = String(outputText ?? "")
     .split(/\r?\n/u)
-    .map((line) => line.trim())
+    .map((line) => stripAnsiControl(line).trim())
     .filter(Boolean);
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const line = lines[index];
-    if (!line.startsWith("{") || !line.endsWith("}")) {
+    const start = line.indexOf("{");
+    const end = line.lastIndexOf("}");
+    if (start < 0 || end <= start) {
       continue;
     }
+    const candidate = line.slice(start, end + 1);
     try {
-      const parsed = JSON.parse(line);
+      const parsed = JSON.parse(candidate);
       if (isReviewOutputPayload(parsed)) {
         return `${JSON.stringify(parsed, null, 2)}\n`;
       }

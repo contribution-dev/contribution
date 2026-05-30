@@ -8,6 +8,9 @@ lives in Go tests and `scripts/dogfood-cli.mjs`.
 
 - Commands must be deterministic about stdout, stderr, exit status, and output
   files.
+- Successful `analyze` and `preflight` runs print concise terminal summaries
+  with the main result, next action context, capped unavailable-signal notes,
+  and only the artifact paths actually written for the selected format.
 - Errors return a non-zero exit code, write the error to stderr at process
   level, and do not create unrelated artifacts.
 - Public-safe outputs must omit raw code, raw diffs, author emails, secrets,

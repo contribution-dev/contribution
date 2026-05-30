@@ -213,21 +213,148 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 	if err := report.WriteAnalysisBundle(outputDir, analysis, opts.Format); err != nil {
 		return "", err
 	}
-	switch opts.Format {
-	case "json":
-		if err := writef(out, "Analysis artifacts written to %s\n", filepath.Join(outputDir, "analysis.json")); err != nil {
-			return "", err
-		}
-	case "markdown":
-		if err := writef(out, "Report written to %s\n", filepath.Join(outputDir, "report.md")); err != nil {
-			return "", err
-		}
-	default:
-		if err := writef(out, "Report artifacts written to %s\n", outputDir); err != nil {
-			return "", err
-		}
+	if err := writeAnalyzeReceipt(out, analysis, outputDir, opts.Format); err != nil {
+		return "", err
 	}
 	return outputDir, nil
+}
+
+func writeAnalyzeReceipt(out io.Writer, analysis signals.AnalysisReport, outputDir string, format string) error {
+	if _, err := fmt.Fprintln(out); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(out, "Contribution receipt"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(out, "Artifacts: %d recent artifacts over %d days\n", analysis.Profile.AnalyzedPRs, analysis.Profile.AnalysisWindowDays); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(out, "Confidence: %s\n", analysis.Profile.Confidence); err != nil {
+		return err
+	}
+	if len(analysis.WeaknessMap.Strengths) > 0 {
+		if _, err := fmt.Fprintf(out, "Strength: %s\n", terminalFinding(analysis.WeaknessMap.Strengths[0])); err != nil {
+			return err
+		}
+	} else if _, err := fmt.Fprintln(out, "Strength: No strength finding available."); err != nil {
+		return err
+	}
+	if len(analysis.WeaknessMap.Weaknesses) > 0 {
+		if _, err := fmt.Fprintf(out, "Risk: %s\n", terminalFinding(analysis.WeaknessMap.Weaknesses[0])); err != nil {
+			return err
+		}
+	} else if _, err := fmt.Fprintln(out, "Risk: No major weakness detected with the available evidence."); err != nil {
+		return err
+	}
+	if len(analysis.WeaknessMap.NextActions) > 0 {
+		if _, err := fmt.Fprintln(out, "Next:"); err != nil {
+			return err
+		}
+		for i, action := range firstTerminalStrings(analysis.WeaknessMap.NextActions, 3) {
+			if _, err := fmt.Fprintf(out, "%d. %s\n", i+1, terminalText(action)); err != nil {
+				return err
+			}
+		}
+	} else if _, err := fmt.Fprintln(out, "Next: No immediate next action recorded."); err != nil {
+		return err
+	}
+	if notes := analyzeUnavailableNotes(analysis); len(notes) > 0 {
+		if _, err := fmt.Fprintln(out); err != nil {
+			return err
+		}
+		if _, err := fmt.Fprintln(out, "Unavailable:"); err != nil {
+			return err
+		}
+		for _, note := range notes {
+			if _, err := fmt.Fprintf(out, "- %s\n", note); err != nil {
+				return err
+			}
+		}
+	}
+	if _, err := fmt.Fprintln(out); err != nil {
+		return err
+	}
+	if writesMarkdown(format) {
+		if _, err := fmt.Fprintf(out, "Report: %s\n", filepath.Join(outputDir, "report.md")); err != nil {
+			return err
+		}
+	}
+	_, err := fmt.Fprintf(out, "Data: %s\n", filepath.Join(outputDir, "analysis.json"))
+	return err
+}
+
+func terminalFinding(finding signals.Finding) string {
+	label := terminalText(finding.Label)
+	evidence := terminalText(finding.Evidence)
+	if evidence == "" {
+		return label
+	}
+	return label + " - " + evidence
+}
+
+func terminalText(value string) string {
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func firstTerminalStrings(values []string, limit int) []string {
+	if len(values) < limit {
+		limit = len(values)
+	}
+	return values[:limit]
+}
+
+func analyzeUnavailableNotes(analysis signals.AnalysisReport) []string {
+	var notes []string
+	if analysis.Coverage.Status != "available" {
+		reason := terminalText(analysis.Coverage.Reason)
+		if reason == "" {
+			reason = "Coverage was not imported."
+		}
+		notes = append(notes, reason)
+	}
+	if !analysis.Config.GitHubMetadataConfigured {
+		notes = append(notes, "GitHub metadata was not requested; review burden is unavailable.")
+	} else if githubMetadataLimited(analysis.Limitations) {
+		notes = append(notes, "GitHub metadata was requested but did not provide PR review evidence.")
+	}
+	if note := optionalToolUnavailableNote(analysis.Tooling.Tools); note != "" {
+		notes = append(notes, note)
+	}
+	return firstTerminalStrings(notes, 3)
+}
+
+func githubMetadataLimited(limitations []string) bool {
+	for _, limitation := range limitations {
+		if strings.HasPrefix(limitation, "GitHub metadata failed") || strings.HasPrefix(limitation, "GitHub returned no") {
+			return true
+		}
+	}
+	return false
+}
+
+func optionalToolUnavailableNote(tools []signals.ToolAvailability) string {
+	var names []string
+	for _, tool := range tools {
+		if !tool.Required && !tool.Available {
+			names = append(names, tool.Name)
+		}
+	}
+	if len(names) == 0 {
+		return ""
+	}
+	visible := names
+	if len(visible) > 3 {
+		visible = visible[:3]
+	}
+	note := "Optional tool signals unavailable: " + strings.Join(visible, ", ")
+	if remaining := len(names) - len(visible); remaining > 0 {
+		note += fmt.Sprintf(" (+%d more)", remaining)
+	}
+	return note + "."
+}
+
+func writesMarkdown(format string) bool {
+	return format == "" || format == "all" || format == "markdown"
 }
 
 func analyzeCoverage(paths []string, format string, repoPath string, repoID string, createdAt time.Time) (signals.CoverageSummary, []signals.Signal, []string, error) {
@@ -338,11 +465,6 @@ func missingOptionalTools(tooling signals.ToolingReport) int {
 
 func writeLine(out io.Writer, args ...any) error {
 	_, err := fmt.Fprintln(out, args...)
-	return err
-}
-
-func writef(out io.Writer, format string, args ...any) error {
-	_, err := fmt.Fprintf(out, format, args...)
 	return err
 }
 

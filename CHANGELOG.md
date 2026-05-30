@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Add terminal receipt summaries for `analyze` and `preflight`, including
+  confidence, top evidence, next actions, capped unavailable signals, and
+  format-aware artifact paths while keeping durable report files on disk.
 - Harden public-safe boundaries and foundation checks: public-safe analysis and
   packet transformations now live outside report rendering, worktree preflight
   no longer follows untracked symlinks for line evidence, coverage import is

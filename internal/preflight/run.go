@@ -5,6 +5,7 @@ import (
 	"fmt"
 	"io"
 	"path/filepath"
+	"strings"
 	"time"
 
 	"github.com/contribution-dev/contribution/internal/config"
@@ -140,10 +141,67 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 	if ShouldFailForRisk(preflight.RiskLevel, opts.FailOnRisk) {
 		return outputDir, fmt.Errorf("preflight risk %s meets --fail-on-risk=%s", preflight.RiskLevel, opts.FailOnRisk)
 	}
-	if _, err := fmt.Fprintf(out, "Preflight written to %s\n", outputDir); err != nil {
+	if err := writePreflightSummary(out, preflight, outputDir, opts.Format); err != nil {
 		return "", err
 	}
 	return outputDir, nil
+}
+
+func writePreflightSummary(out io.Writer, preflight signals.PreflightReport, outputDir string, format string) error {
+	if _, err := fmt.Fprintf(out, "Preflight: %s risk\n", preflight.RiskLevel); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(out, "Scope: %d files, %d changed lines\n", preflight.FileSummary.TotalFiles, preflight.TotalChangedLines); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(out, "Tests: %s\n", terminalText(preflight.TestEvidence)); err != nil {
+		return err
+	}
+	if len(preflight.ReviewerFocus) > 0 {
+		if _, err := fmt.Fprintln(out, "Focus:"); err != nil {
+			return err
+		}
+		for _, item := range firstStrings(preflight.ReviewerFocus, 3) {
+			if _, err := fmt.Fprintf(out, "- %s\n", terminalText(item)); err != nil {
+				return err
+			}
+		}
+	} else if _, err := fmt.Fprintln(out, "Focus: No specific reviewer focus recorded."); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(out); err != nil {
+		return err
+	}
+	if writesMarkdown(format) {
+		if _, err := fmt.Fprintf(out, "Report: %s\n", filepath.Join(outputDir, "preflight.md")); err != nil {
+			return err
+		}
+	}
+	if writesJSON(format) {
+		if _, err := fmt.Fprintf(out, "Data: %s\n", filepath.Join(outputDir, "preflight.json")); err != nil {
+			return err
+		}
+	}
+	return nil
+}
+
+func terminalText(value string) string {
+	return strings.Join(strings.Fields(value), " ")
+}
+
+func firstStrings(values []string, limit int) []string {
+	if len(values) < limit {
+		limit = len(values)
+	}
+	return values[:limit]
+}
+
+func writesMarkdown(format string) bool {
+	return format == "" || format == "all" || format == "markdown"
+}
+
+func writesJSON(format string) bool {
+	return format == "" || format == "all" || format == "json"
 }
 
 func outputRoot(flag string, repo gitrepo.Repo, cfg config.Config) (string, error) {

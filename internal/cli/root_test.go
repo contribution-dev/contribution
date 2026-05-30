@@ -194,11 +194,22 @@ func TestPreflightCommandWritesJSONArtifacts(t *testing.T) {
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)
 	}
-	const prefix = "Preflight written to "
-	if !strings.HasPrefix(stdout, prefix) {
-		t.Fatalf("stdout = %q, want preflight path", stdout)
+	for _, want := range []string{
+		"Preflight: medium risk",
+		"Scope: 1 files",
+		"Tests: No test files changed. No coverage report was imported.",
+		"Focus:",
+		"- missing tests around changed behavior",
+		"Data: ",
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout)
+		}
 	}
-	outputDir := strings.TrimSpace(strings.TrimPrefix(stdout, prefix))
+	if strings.Contains(stdout, "Report:") || strings.Contains(stdout, "preflight.md") {
+		t.Fatalf("stdout should not point at markdown for json output:\n%s", stdout)
+	}
+	outputDir := filepath.Dir(lineValue(t, stdout, "Data: "))
 	// #nosec G304 -- test reads an artifact path created under a private temp dir.
 	data, err := os.ReadFile(filepath.Join(outputDir, "preflight.json"))
 	if err != nil {
@@ -358,6 +369,17 @@ func executeForTest(args []string, info BuildInfo) (string, string, error) {
 	cmd.SetArgs(args)
 	err := cmd.Execute()
 	return stdout.String(), stderr.String(), err
+}
+
+func lineValue(t *testing.T, text string, prefix string) string {
+	t.Helper()
+	for _, line := range strings.Split(text, "\n") {
+		if strings.HasPrefix(line, prefix) {
+			return strings.TrimSpace(strings.TrimPrefix(line, prefix))
+		}
+	}
+	t.Fatalf("missing line prefix %q in:\n%s", prefix, text)
+	return ""
 }
 
 func setupGitPath(t *testing.T) {

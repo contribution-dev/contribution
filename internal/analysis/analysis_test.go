@@ -84,8 +84,36 @@ func TestRunWritesJsonArtifactsAndLocalOnlyFallback(t *testing.T) {
 		t.Fatal("expected confidence setup actions")
 	}
 	assertContains(t, analysis.Limitations, "GitHub metadata was not requested; continuing local-only.")
-	if !strings.Contains(stdout.String(), "GitHub metadata: unavailable, continuing local-only") {
-		t.Fatalf("stdout missing local-only fallback message:\n%s", stdout.String())
+	got := stdout.String()
+	for _, want := range []string{
+		"GitHub metadata: unavailable, continuing local-only",
+		"Contribution receipt",
+		"Artifacts: 1 recent artifacts over 14 days",
+		"Confidence: low",
+		"Strength:",
+		"Risk:",
+		"Next:",
+		"Unavailable:",
+		"Optional tool signals unavailable:",
+		"Data: " + filepath.Join(outputDir, "analysis.json"),
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("stdout missing %q:\n%s", want, got)
+		}
+	}
+	for _, unwanted := range []string{
+		"Report:",
+		"report.md",
+		"scc was skipped",
+		"semgrep was skipped",
+		"gitleaks was skipped",
+		"osv-scanner was skipped",
+		"trivy was skipped",
+		"dogfood@example.test",
+	} {
+		if strings.Contains(got, unwanted) {
+			t.Fatalf("stdout contains %q:\n%s", unwanted, got)
+		}
 	}
 }
 
@@ -202,8 +230,11 @@ func TestRunMarkdownWritesCanonicalAnalysisWhenGitHubFetchFails(t *testing.T) {
 	if !strings.Contains(stdout.String(), "GitHub metadata: requested") {
 		t.Fatalf("stdout missing requested metadata message:\n%s", stdout.String())
 	}
-	if !strings.Contains(stdout.String(), "Report written to "+filepath.Join(outputDir, "report.md")) {
+	if !strings.Contains(stdout.String(), "Report: "+filepath.Join(outputDir, "report.md")) {
 		t.Fatalf("stdout missing markdown completion message:\n%s", stdout.String())
+	}
+	if !strings.Contains(stdout.String(), "Data: "+filepath.Join(outputDir, "analysis.json")) {
+		t.Fatalf("stdout missing canonical analysis path:\n%s", stdout.String())
 	}
 }
 

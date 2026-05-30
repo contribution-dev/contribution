@@ -13,24 +13,52 @@ import (
 )
 
 func TestParseAnalyzerFindings(t *testing.T) {
-	semgrep := parseSemgrepFindings([]byte(`{"results":[{"check_id":"go.rule","path":"internal/app.go","extra":{"message":"avoid this","severity":"WARNING"}}]}`))
+	semgrep, err := parseSemgrepFindings([]byte(`{"results":[{"check_id":"go.rule","path":"internal/app.go","extra":{"message":"avoid this","severity":"WARNING"}}]}`))
+	if err != nil {
+		t.Fatalf("parseSemgrepFindings() error = %v", err)
+	}
 	if len(semgrep) != 1 || semgrep[0].Tool != "semgrep" || semgrep[0].Severity != signals.SeverityMedium || semgrep[0].FilePath != "internal/app.go" || semgrep[0].Scope != "repo_existing_or_unknown" {
 		t.Fatalf("semgrep findings = %+v", semgrep)
 	}
 
-	gitleaks := parseGitleaksFindings([]byte(`[{"RuleID":"generic-api-key","Description":"redacted secret","File":"internal/config.go"}]`))
+	gitleaks, err := parseGitleaksFindings([]byte(`[{"RuleID":"generic-api-key","Description":"redacted secret","File":"internal/config.go"}]`))
+	if err != nil {
+		t.Fatalf("parseGitleaksFindings() error = %v", err)
+	}
 	if len(gitleaks) != 1 || gitleaks[0].Tool != "gitleaks" || gitleaks[0].Severity != signals.SeverityHigh {
 		t.Fatalf("gitleaks findings = %+v", gitleaks)
 	}
 
-	osv := parseOSVFindings([]byte(`{"results":[{"source":{"path":"go.mod"},"packages":[{"package":{"name":"example"},"vulnerabilities":[{"id":"OSV-1","summary":"bad dep","severity":[{"type":"CVSS_V3","score":"HIGH"}]}]}]}]}`))
+	osv, err := parseOSVFindings([]byte(`{"results":[{"source":{"path":"go.mod"},"packages":[{"package":{"name":"example"},"vulnerabilities":[{"id":"OSV-1","summary":"bad dep","severity":[{"type":"CVSS_V3","score":"HIGH"}]}]}]}]}`))
+	if err != nil {
+		t.Fatalf("parseOSVFindings() error = %v", err)
+	}
 	if len(osv) != 1 || osv[0].Tool != "osv-scanner" || osv[0].RuleID != "OSV-1" || osv[0].Severity != signals.SeverityHigh {
 		t.Fatalf("osv findings = %+v", osv)
 	}
 
-	trivy := parseTrivyFindings([]byte(`{"Results":[{"Target":"package-lock.json","Vulnerabilities":[{"VulnerabilityID":"CVE-1","Severity":"CRITICAL","Title":"bad vuln"}],"Misconfigurations":[{"ID":"MIS-1","Severity":"MEDIUM","Message":"bad config"}],"Secrets":[{"RuleID":"secret-1","Severity":"HIGH","Title":"secret"}]}]}`))
+	trivy, err := parseTrivyFindings([]byte(`{"Results":[{"Target":"package-lock.json","Vulnerabilities":[{"VulnerabilityID":"CVE-1","Severity":"CRITICAL","Title":"bad vuln"}],"Misconfigurations":[{"ID":"MIS-1","Severity":"MEDIUM","Message":"bad config"}],"Secrets":[{"RuleID":"secret-1","Severity":"HIGH","Title":"secret"}]}]}`))
+	if err != nil {
+		t.Fatalf("parseTrivyFindings() error = %v", err)
+	}
 	if len(trivy) != 3 || trivy[0].Severity != signals.SeverityCritical || trivy[2].Tool != "trivy" {
 		t.Fatalf("trivy findings = %+v", trivy)
+	}
+}
+
+func TestRunAnalyzersReportsParseFailures(t *testing.T) {
+	bin := t.TempDir()
+	writeFakeTool(t, bin, "semgrep", `not-json`, 0)
+	t.Setenv("PATH", bin)
+
+	tooling := signals.ToolingReport{Tools: []signals.ToolAvailability{{Name: "semgrep", Available: true}}}
+	findings, _, limitations := RunAnalyzers(context.Background(), t.TempDir(), "repo", tooling, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+
+	if len(findings) != 0 {
+		t.Fatalf("findings = %+v, want none for malformed output", findings)
+	}
+	if len(limitations) != 1 || !strings.Contains(limitations[0], "semgrep output could not be parsed") {
+		t.Fatalf("limitations = %+v, want parse limitation", limitations)
 	}
 }
 

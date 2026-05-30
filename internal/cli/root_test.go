@@ -2,6 +2,7 @@ package cli
 
 import (
 	"bytes"
+	"encoding/json"
 	"os"
 	"os/exec"
 	"path/filepath"
@@ -130,6 +131,55 @@ func TestDoctorUsesRepoLocalOptionalTools(t *testing.T) {
 	}
 	if !strings.Contains(stdout, "scripts/with-tools") {
 		t.Fatalf("doctor stdout missing repo-local tool bootstrap guidance:\n%s", stdout)
+	}
+}
+
+func TestPreflightCommandWritesJSONArtifacts(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-b", "main")
+	runGit(t, repo, "config", "user.email", "cli@example.test")
+	runGit(t, repo, "config", "user.name", "CLI Test")
+	if err := os.MkdirAll(filepath.Join(repo, "internal"), 0o750); err != nil {
+		t.Fatalf("mkdir internal: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "internal", "app.go"), []byte("package app\n"), 0o600); err != nil {
+		t.Fatalf("write app.go: %v", err)
+	}
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "initial fixture")
+	if err := os.WriteFile(filepath.Join(repo, "internal", "app.go"), []byte("package app\n\nfunc Value() int { return 1 }\n"), 0o600); err != nil {
+		t.Fatalf("update app.go: %v", err)
+	}
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "add value")
+	chdir(t, repo)
+
+	outputRoot := t.TempDir()
+	stdout, stderr, err := executeForTest([]string{"preflight", "--base", "HEAD~1", "--head", "HEAD", "--output", outputRoot, "--format", "json", "--no-external-tools"}, BuildInfo{})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	const prefix = "Preflight written to "
+	if !strings.HasPrefix(stdout, prefix) {
+		t.Fatalf("stdout = %q, want preflight path", stdout)
+	}
+	outputDir := strings.TrimSpace(strings.TrimPrefix(stdout, prefix))
+	data, err := os.ReadFile(filepath.Join(outputDir, "preflight.json"))
+	if err != nil {
+		t.Fatalf("read preflight.json: %v", err)
+	}
+	var artifact map[string]any
+	if err := json.Unmarshal(data, &artifact); err != nil {
+		t.Fatalf("parse preflight.json: %v", err)
+	}
+	if artifact["version"] != float64(2) || artifact["head"] != "HEAD" {
+		t.Fatalf("preflight artifact = %+v, want V2 HEAD artifact", artifact)
 	}
 }
 

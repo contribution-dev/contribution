@@ -49,3 +49,24 @@ test("treats architecture reference updates as CLI contract coverage", () => {
   assert.match(result.stdout, /coverage artifact\(s\) changed/u);
   assert.equal(result.stderr, "");
 });
+
+test("requires coverage for CLI-facing changes", () => {
+  const result = spawnSync(
+    process.execPath,
+    [
+      "scripts/check-cli-contract-coverage.mjs",
+      "--files",
+      "internal/preflight/preflight.go",
+    ],
+    {
+      cwd: process.cwd(),
+      encoding: "utf8",
+    },
+  );
+
+  assert.equal(result.status, 1);
+  assert.match(
+    result.stderr,
+    /CLI-facing changes require matching contract coverage/u,
+  );
+});

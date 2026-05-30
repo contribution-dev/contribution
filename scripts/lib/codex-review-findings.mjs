@@ -737,32 +737,6 @@ export function buildReviewArtifacts({
   };
 }
 
-export function writeReviewMarkdownProjection({ sidecar, targetMd }) {
-  const findings = Array.isArray(sidecar?.findings) ? sidecar.findings : [];
-  const reviewStatus = String(sidecar?.review_status ?? "").trim();
-  const actionRequired = isActionableCodexReviewReport(
-    {
-      findings,
-      review_status: reviewStatus,
-    },
-    true,
-  );
-  if (!actionRequired) {
-    rmSync(targetMd, { force: true });
-    return { actionRequired: false };
-  }
-  atomicWrite(
-    targetMd,
-    renderReviewMarkdown({
-      sidecar,
-      findings,
-      findingsCount: findings.length,
-      actionRequired: true,
-    }),
-  );
-  return { actionRequired: true };
-}
-
 export function writeReviewArtifacts(input) {
   const result = buildReviewArtifacts(input);
   atomicWrite(input.targetJson, `${JSON.stringify(result.sidecar, null, 2)}\n`);

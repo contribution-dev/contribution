@@ -24,4 +24,9 @@ test("package exposes optional analyzer install and check commands", () => {
     pkg.scripts["tools:optional:check"],
     "scripts/with-tools bash scripts/install-optional-tools.sh --check",
   );
+  assert.equal(
+    pkg.scripts["tools:check"],
+    "scripts/with-tools bash scripts/preflight-tools.sh",
+  );
+  assert.equal(pkg.scripts["tools:preflight"], "pnpm tools:check");
 });

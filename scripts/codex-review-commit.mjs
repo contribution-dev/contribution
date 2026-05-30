@@ -301,14 +301,6 @@ export function resolveCodexReviewMaxAttempts(
   return parsePositiveInt(value, 1);
 }
 
-export function isRetryableCodexExecError(errorCode) {
-  return (
-    String(errorCode ?? "")
-      .trim()
-      .toLowerCase() === "timeout"
-  );
-}
-
 export function selectHighSignalCommitFindings(
   findings,
   {

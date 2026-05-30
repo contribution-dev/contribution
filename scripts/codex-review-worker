@@ -299,9 +299,6 @@ async function runJob({
       processEnv: {
         ...process.env,
         CODE_REVIEW_LANE: lane,
-        CODEX_REVIEW_CODEX_ENABLED:
-          process.env.CODEX_REVIEW_CODEX_ENABLED ?? "1",
-        CODEX_REVIEW_OLLAMA_ENABLED: "0",
         CODEX_REVIEW_OPEN_ON_FINDINGS: "0",
         CODEX_REVIEW_MAX_ATTEMPTS:
           process.env.CODEX_REVIEW_CODEX_MAX_ATTEMPTS ??

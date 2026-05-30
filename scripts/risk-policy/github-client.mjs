@@ -58,13 +58,6 @@ export async function getPullRequest({ token, owner, repo, pullNumber }) {
   });
 }
 
-export async function getIssue({ token, owner, repo, issueNumber }) {
-  return githubRequest({
-    token,
-    url: buildApiUrl(`/repos/${owner}/${repo}/issues/${issueNumber}`),
-  });
-}
-
 export async function listPullRequestFiles({ token, owner, repo, pullNumber }) {
   return listPaginated({
     token,
@@ -98,69 +91,6 @@ export async function createIssueComment({
   });
 }
 
-export async function updateIssue({
-  token,
-  owner,
-  repo,
-  issueNumber,
-  body,
-  labels,
-  state,
-}) {
-  return githubRequest({
-    token,
-    method: "PATCH",
-    url: buildApiUrl(`/repos/${owner}/${repo}/issues/${issueNumber}`),
-    body: {
-      ...(body !== undefined ? { body } : {}),
-      ...(labels ? { labels } : {}),
-      ...(state ? { state } : {}),
-    },
-  });
-}
-
-export async function createIssue({ token, owner, repo, title, body, labels }) {
-  return githubRequest({
-    token,
-    method: "POST",
-    url: buildApiUrl(`/repos/${owner}/${repo}/issues`),
-    body: { title, body, ...(labels ? { labels } : {}) },
-  });
-}
-
-export async function listRepoIssues({
-  token,
-  owner,
-  repo,
-  state = "open",
-  labels,
-}) {
-  return listPaginated({
-    token,
-    initialPath: `/repos/${owner}/${repo}/issues`,
-    query: {
-      state,
-      ...(labels ? { labels } : {}),
-    },
-    key: null,
-  });
-}
-
-export async function addIssueLabels({
-  token,
-  owner,
-  repo,
-  issueNumber,
-  labels,
-}) {
-  return githubRequest({
-    token,
-    method: "POST",
-    url: buildApiUrl(`/repos/${owner}/${repo}/issues/${issueNumber}/labels`),
-    body: { labels },
-  });
-}
-
 export async function listCheckRunsForHead({ token, owner, repo, headSha }) {
   const payload = await githubRequest({
     token,
@@ -169,63 +99,6 @@ export async function listCheckRunsForHead({ token, owner, repo, headSha }) {
     }),
   });
   return Array.isArray(payload?.check_runs) ? payload.check_runs : [];
-}
-
-export async function listWorkflowRuns({
-  token,
-  owner,
-  repo,
-  workflowId,
-  event,
-  status,
-  stopWhen,
-}) {
-  return listPaginated({
-    token,
-    initialPath: `/repos/${owner}/${repo}/actions/workflows/${workflowId}/runs`,
-    query: { event, status },
-    key: "workflow_runs",
-    stopWhen,
-  });
-}
-
-export async function listWorkflowRunJobs({ token, owner, repo, runId }) {
-  return listPaginated({
-    token,
-    initialPath: `/repos/${owner}/${repo}/actions/runs/${runId}/jobs`,
-    query: {},
-    key: "jobs",
-  });
-}
-
-export async function listWorkflowRunArtifacts({ token, owner, repo, runId }) {
-  return listPaginated({
-    token,
-    initialPath: `/repos/${owner}/${repo}/actions/runs/${runId}/artifacts`,
-    query: {},
-    key: "artifacts",
-  });
-}
-
-export async function downloadArtifactArchive({ token, archiveUrl }) {
-  const response = await fetch(archiveUrl, {
-    headers: {
-      Accept: "application/vnd.github+json",
-      Authorization: `Bearer ${token}`,
-      "X-GitHub-Api-Version": "2022-11-28",
-      "User-Agent": "contribution-risk-policy",
-    },
-  });
-
-  if (!response.ok) {
-    const text = await response.text();
-    throw new Error(
-      `GitHub artifact download failed (${response.status}) for ${archiveUrl}: ${text}`,
-    );
-  }
-
-  const arrayBuffer = await response.arrayBuffer();
-  return Buffer.from(arrayBuffer);
 }
 
 export async function graphqlRequest({ token, query, variables }) {

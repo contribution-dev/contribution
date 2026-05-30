@@ -11,9 +11,13 @@ tooling layer for repository automation.
 - `internal/analysis` owns the analyze workflow orchestration.
 - `internal/preflight` owns changed-file policy, risk classification, coverage,
   personal pattern checks, and fail-on-risk decisions.
+- `internal/fileclass` owns shared repository path classification used by git,
+  receipt, and preflight flows.
 - `internal/friend` owns friend-review packet creation and feedback import.
 - `internal/report` owns report rendering, private report explainability,
   public-safe exports, and shared output format validation.
+- `internal/receipt` owns PR quality cards, weakness map, trend comparison,
+  deep dives, profile summary, and receipt confidence.
 - `internal/privacy` owns redaction primitives. Callers should not create
   parallel public-safe sanitizers.
 - Public Go packages should not be added until the project has a stable library

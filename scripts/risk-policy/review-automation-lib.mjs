@@ -85,21 +85,3 @@ export function isStaleWorkflowHead({ eventHeadSha, currentHeadSha }) {
   if (!eventHeadSha || !currentHeadSha) return false;
   return !isSameCommitSha(eventHeadSha, currentHeadSha);
 }
-
-export function percentile(values, p) {
-  if (!Array.isArray(values) || values.length === 0) return null;
-  const sorted = [...values].sort((a, b) => a - b);
-  const rank = (p / 100) * (sorted.length - 1);
-  const low = Math.floor(rank);
-  const high = Math.ceil(rank);
-  if (low === high) return sorted[low];
-  const weight = rank - low;
-  return sorted[low] * (1 - weight) + sorted[high] * weight;
-}
-
-export function ageInDays(createdAtIso, now = new Date()) {
-  const created = new Date(createdAtIso);
-  if (Number.isNaN(created.getTime())) return null;
-  const diffMs = now.getTime() - created.getTime();
-  return Math.floor(diffMs / (24 * 60 * 60 * 1000));
-}

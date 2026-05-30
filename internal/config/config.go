@@ -83,7 +83,7 @@ func Load(repoRoot string) (Config, []string, error) {
 	if err := decoder.Decode(&cfg); err != nil {
 		return cfg, nil, fmt.Errorf("parse %s: %w", path, err)
 	}
-	warnings := Validate(cfg)
+	warnings := validate(cfg)
 	applyDefaults(&cfg)
 	return cfg, warnings, nil
 }
@@ -130,8 +130,7 @@ func Default() Config {
 	return cfg
 }
 
-// Validate returns non-fatal warnings for risky or unusual settings.
-func Validate(cfg Config) []string {
+func validate(cfg Config) []string {
 	var warnings []string
 	if cfg.Version != 1 {
 		warnings = append(warnings, fmt.Sprintf("Config version %d is not supported; continuing with best effort.", cfg.Version))

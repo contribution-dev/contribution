@@ -26,7 +26,7 @@ type analyzerDefinition struct {
 	name    string
 	label   string
 	args    []string
-	parse   func([]byte) []signals.AnalyzerFinding
+	parse   func([]byte) ([]signals.AnalyzerFinding, error)
 	prepare func(context.Context, string, []string) (analyzerRun, []string)
 }
 
@@ -74,7 +74,11 @@ func RunAnalyzers(parent context.Context, repoPath string, repoID string, toolin
 		}
 		out, err := runAnalyzer(parent, run.dir, repoPath, def.name, toolPaths[def.name], run.args)
 		run.cleanup()
-		parsed := limitAnalyzerFindings(def.parse(out), 20)
+		parsed, parseErr := def.parse(out)
+		if parseErr != nil {
+			limitations = append(limitations, fmt.Sprintf("%s output could not be parsed: %s", def.label, truncateAnalyzerText(privacy.RedactSecretLikeText(parseErr.Error()))))
+		}
+		parsed = limitAnalyzerFindings(parsed, 20)
 		findings = append(findings, parsed...)
 		if err != nil && len(parsed) == 0 {
 			limitations = append(limitations, fmt.Sprintf("%s scan unavailable: %s", def.label, truncateAnalyzerText(privacy.RedactSecretLikeText(err.Error()))))
@@ -265,7 +269,7 @@ func runAnalyzer(parent context.Context, repoPath string, envRepoPath string, na
 	return out, nil
 }
 
-func parseSemgrepFindings(data []byte) []signals.AnalyzerFinding {
+func parseSemgrepFindings(data []byte) ([]signals.AnalyzerFinding, error) {
 	var raw struct {
 		Results []struct {
 			CheckID string `json:"check_id"`
@@ -277,7 +281,7 @@ func parseSemgrepFindings(data []byte) []signals.AnalyzerFinding {
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil
+		return nil, err
 	}
 	out := make([]signals.AnalyzerFinding, 0, len(raw.Results))
 	for _, item := range raw.Results {
@@ -287,17 +291,17 @@ func parseSemgrepFindings(data []byte) []signals.AnalyzerFinding {
 		}
 		out = append(out, analyzerFinding("semgrep", item.CheckID, item.Extra.Severity, item.Path, message, false))
 	}
-	return out
+	return out, nil
 }
 
-func parseGitleaksFindings(data []byte) []signals.AnalyzerFinding {
+func parseGitleaksFindings(data []byte) ([]signals.AnalyzerFinding, error) {
 	var raw []struct {
 		RuleID      string `json:"RuleID"`
 		Description string `json:"Description"`
 		File        string `json:"File"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil
+		return nil, err
 	}
 	out := make([]signals.AnalyzerFinding, 0, len(raw))
 	for _, item := range raw {
@@ -307,10 +311,10 @@ func parseGitleaksFindings(data []byte) []signals.AnalyzerFinding {
 		}
 		out = append(out, analyzerFinding("gitleaks", item.RuleID, "high", item.File, message, false))
 	}
-	return out
+	return out, nil
 }
 
-func parseOSVFindings(data []byte) []signals.AnalyzerFinding {
+func parseOSVFindings(data []byte) ([]signals.AnalyzerFinding, error) {
 	var raw struct {
 		Results []struct {
 			Source struct {
@@ -332,7 +336,7 @@ func parseOSVFindings(data []byte) []signals.AnalyzerFinding {
 		} `json:"results"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil
+		return nil, err
 	}
 	var out []signals.AnalyzerFinding
 	for _, result := range raw.Results {
@@ -346,10 +350,10 @@ func parseOSVFindings(data []byte) []signals.AnalyzerFinding {
 			}
 		}
 	}
-	return out
+	return out, nil
 }
 
-func parseTrivyFindings(data []byte) []signals.AnalyzerFinding {
+func parseTrivyFindings(data []byte) ([]signals.AnalyzerFinding, error) {
 	var raw struct {
 		Results []struct {
 			Target          string `json:"Target"`
@@ -373,7 +377,7 @@ func parseTrivyFindings(data []byte) []signals.AnalyzerFinding {
 		} `json:"Results"`
 	}
 	if err := json.Unmarshal(data, &raw); err != nil {
-		return nil
+		return nil, err
 	}
 	var out []signals.AnalyzerFinding
 	for _, result := range raw.Results {
@@ -402,7 +406,7 @@ func parseTrivyFindings(data []byte) []signals.AnalyzerFinding {
 			out = append(out, analyzerFinding("trivy", secret.RuleID, secret.Severity, result.Target, message, false))
 		}
 	}
-	return out
+	return out, nil
 }
 
 func analyzerFinding(tool string, ruleID string, severity string, filePath string, message string, publicSafe bool) signals.AnalyzerFinding {

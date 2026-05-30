@@ -23,6 +23,8 @@ const (
 	FormatGo Format = "go"
 	// FormatLCOV is the LCOV tracefile format.
 	FormatLCOV Format = "lcov"
+
+	maxCoverageLineBytes = 1024 * 1024
 )
 
 // Report stores executable line coverage keyed by repository-relative path.
@@ -232,9 +234,11 @@ func parseFile(path string, format Format, repoRoot string) (Report, Format, err
 	}
 	switch detected {
 	case FormatGo:
-		return parseGoCoverprofile(string(data), repoRoot), detected, nil
+		report, err := parseGoCoverprofile(string(data), repoRoot)
+		return report, detected, err
 	case FormatLCOV:
-		return parseLCOV(string(data), repoRoot), detected, nil
+		report, err := parseLCOV(string(data), repoRoot)
+		return report, detected, err
 	default:
 		return Report{}, detected, fmt.Errorf("unsupported coverage format %q for %s", detected, path)
 	}
@@ -251,9 +255,10 @@ func detectFormat(path string, data string) Format {
 	return FormatGo
 }
 
-func parseGoCoverprofile(data string, repoRoot string) Report {
+func parseGoCoverprofile(data string, repoRoot string) (Report, error) {
 	report := Report{Files: map[string]File{}}
 	scanner := bufio.NewScanner(strings.NewReader(data))
+	scanner.Buffer(make([]byte, 0, 64*1024), maxCoverageLineBytes)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if line == "" || strings.HasPrefix(line, "mode:") {
@@ -288,13 +293,17 @@ func parseGoCoverprofile(data string, repoRoot string) Report {
 		}
 		addRange(&report, path, startLine, endLine, count > 0)
 	}
-	return report
+	if err := scanner.Err(); err != nil {
+		return report, fmt.Errorf("parse go coverage: %w", err)
+	}
+	return report, nil
 }
 
-func parseLCOV(data string, repoRoot string) Report {
+func parseLCOV(data string, repoRoot string) (Report, error) {
 	report := Report{Files: map[string]File{}}
 	var current string
 	scanner := bufio.NewScanner(strings.NewReader(data))
+	scanner.Buffer(make([]byte, 0, 64*1024), maxCoverageLineBytes)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		switch {
@@ -318,7 +327,10 @@ func parseLCOV(data string, repoRoot string) Report {
 			current = ""
 		}
 	}
-	return report
+	if err := scanner.Err(); err != nil {
+		return report, fmt.Errorf("parse lcov coverage: %w", err)
+	}
+	return report, nil
 }
 
 func normalizePath(path string, repoRoot string) string {
@@ -357,6 +369,7 @@ func goModulePath(repoRoot string) string {
 		return ""
 	}
 	scanner := bufio.NewScanner(strings.NewReader(string(data)))
+	scanner.Buffer(make([]byte, 0, 64*1024), maxCoverageLineBytes)
 	for scanner.Scan() {
 		line := strings.TrimSpace(scanner.Text())
 		if strings.HasPrefix(line, "module ") {

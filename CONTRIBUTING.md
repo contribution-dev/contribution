@@ -7,7 +7,7 @@ Thanks for contributing to `contribution`.
 ```bash
 pnpm install
 scripts/with-tools go mod download
-pnpm tools:preflight
+pnpm tools:check
 ```
 
 ## Workflow

@@ -4,6 +4,11 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Harden local foundation checks and shared CLI internals: `pnpm tools:check`
+  now verifies local tooling without repairing launchd workers, `pnpm build`
+  creates `bin/` in clean checkouts, GitHub enrichment paginates large PR
+  metadata sets, and changed-file detection now fails explicit bad refs instead
+  of silently falling back.
 - Discover repo-local optional analyzer tools from `.tools/` during `doctor`,
   `analyze`, and `preflight`, keep zero-PR GitHub metadata runs at local-only
   confidence, and make `pnpm review:queue:backlog` a read-only status command
@@ -11,8 +16,8 @@ All notable changes to this project will be documented in this file.
 - Add `preflight --run-coverage` to run the configured `coverage.command`
   without shell expansion before importing changed-line coverage.
 - Add pinned `pnpm tools:install:optional` and `pnpm tools:optional:check`
-  flows for Semgrep, Gitleaks, OSV Scanner, and Trivy; `pnpm tools:preflight`
-  now points missing analyzer tools at that bootstrap path.
+  flows for Semgrep, Gitleaks, OSV Scanner, and Trivy; `pnpm tools:check` now
+  points missing analyzer tools at that bootstrap path.
 - Add bounded Gitleaks worktree scanning over Git-visible files so uncommitted
   tracked and non-ignored untracked secrets can be reported without scanning
   ignored/generated directories.

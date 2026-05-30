@@ -28,17 +28,16 @@ func TestBuildPreflightAppliesPolicyAndCoverage(t *testing.T) {
 		},
 	}
 
-	got := Build(
-		signals.RepoMetadata{ID: "local:test"},
-		"main",
-		"HEAD",
-		diff,
-		signals.PreflightCoverage{Status: "available", CoveredLines: 3, TotalLines: 10, Percent: 30},
-		config.PreflightConfig{MaxFiles: 20, MaxLines: 800, RequireTestsForSource: true, ChangedLineCoverageMin: 80},
-		signals.ToolingReport{},
-		nil,
-		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-	)
+	got := Build(BuildInput{
+		Repo:     signals.RepoMetadata{ID: "local:test"},
+		Base:     "main",
+		Head:     "HEAD",
+		Diff:     diff,
+		Coverage: signals.PreflightCoverage{Status: "available", CoveredLines: 3, TotalLines: 10, Percent: 30},
+		Policy:   config.PreflightConfig{MaxFiles: 20, MaxLines: 800, RequireTestsForSource: true, ChangedLineCoverageMin: 80},
+		Tooling:  signals.ToolingReport{},
+		Now:      time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	})
 
 	if got.Version != 2 {
 		t.Fatalf("Version = %d, want 2", got.Version)
@@ -75,24 +74,23 @@ func TestBuildPreflightUsesPersonalPatterns(t *testing.T) {
 		},
 	}
 
-	got := BuildWithPersonal(
-		signals.RepoMetadata{ID: "local:test"},
-		"main",
-		"HEAD",
-		diff,
-		signals.PreflightCoverage{Status: "unknown", Reason: "No coverage report was imported."},
-		config.PreflightConfig{MaxFiles: 20, MaxLines: 800},
-		signals.PersonalPreflightContext{
+	got := Build(BuildInput{
+		Repo:     signals.RepoMetadata{ID: "local:test"},
+		Base:     "main",
+		Head:     "HEAD",
+		Diff:     diff,
+		Coverage: signals.PreflightCoverage{Status: "unknown", Reason: "No coverage report was imported."},
+		Policy:   config.PreflightConfig{MaxFiles: 20, MaxLines: 800},
+		Personal: signals.PersonalPreflightContext{
 			HighChurnFiles:           []string{"internal/report/report.go"},
 			RecentSourceWithoutTests: 3,
 			TypicalFiles:             2,
 			TypicalLines:             50,
 			ArtifactsAnalyzed:        8,
 		},
-		signals.ToolingReport{},
-		nil,
-		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-	)
+		Tooling: signals.ToolingReport{},
+		Now:     time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	})
 
 	if got.PersonalContext == nil {
 		t.Fatal("PersonalContext = nil, want populated context")
@@ -121,15 +119,14 @@ func TestBuildPreflightUsesAnalyzerFindings(t *testing.T) {
 		},
 	}
 
-	got := BuildWithPersonalAndAnalyzers(
-		signals.RepoMetadata{ID: "local:test"},
-		"main",
-		"HEAD",
-		diff,
-		signals.PreflightCoverage{Status: "unknown", Reason: "No coverage report was imported."},
-		config.PreflightConfig{MaxFiles: 20, MaxLines: 800},
-		signals.PersonalPreflightContext{},
-		[]signals.AnalyzerFinding{{
+	got := Build(BuildInput{
+		Repo:     signals.RepoMetadata{ID: "local:test"},
+		Base:     "main",
+		Head:     "HEAD",
+		Diff:     diff,
+		Coverage: signals.PreflightCoverage{Status: "unknown", Reason: "No coverage report was imported."},
+		Policy:   config.PreflightConfig{MaxFiles: 20, MaxLines: 800},
+		AnalyzerFindings: []signals.AnalyzerFinding{{
 			Tool:       "semgrep",
 			RuleID:     "go.rule",
 			Severity:   signals.SeverityHigh,
@@ -138,10 +135,9 @@ func TestBuildPreflightUsesAnalyzerFindings(t *testing.T) {
 			Message:    "avoid this pattern",
 			Confidence: signals.ConfidenceMedium,
 		}},
-		signals.ToolingReport{},
-		nil,
-		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-	)
+		Tooling: signals.ToolingReport{},
+		Now:     time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	})
 
 	if got.RiskLevel != "high" {
 		t.Fatalf("RiskLevel = %q, want high", got.RiskLevel)
@@ -222,17 +218,16 @@ func TestPreflightReportJSONContract(t *testing.T) {
 			SourceFiles: 1,
 		},
 	}
-	got := Build(
-		signals.RepoMetadata{ID: "local:test", Name: "test"},
-		"main",
-		"HEAD",
-		diff,
-		signals.PreflightCoverage{Status: "available", CoveredLines: 3, TotalLines: 10, Percent: 30},
-		config.PreflightConfig{MaxFiles: 20, MaxLines: 800, RequireTestsForSource: true, ChangedLineCoverageMin: 80},
-		signals.ToolingReport{},
-		nil,
-		time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
-	)
+	got := Build(BuildInput{
+		Repo:     signals.RepoMetadata{ID: "local:test", Name: "test"},
+		Base:     "main",
+		Head:     "HEAD",
+		Diff:     diff,
+		Coverage: signals.PreflightCoverage{Status: "available", CoveredLines: 3, TotalLines: 10, Percent: 30},
+		Policy:   config.PreflightConfig{MaxFiles: 20, MaxLines: 800, RequireTestsForSource: true, ChangedLineCoverageMin: 80},
+		Tooling:  signals.ToolingReport{},
+		Now:      time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+	})
 	object := marshalPreflightContractObject(t, got)
 	assertPreflightContractKeys(t, object, []string{
 		"version",
@@ -345,17 +340,16 @@ func TestBuildPreflightPolicyMatrix(t *testing.T) {
 
 	for _, tt := range tests {
 		t.Run(tt.name, func(t *testing.T) {
-			got := Build(
-				signals.RepoMetadata{ID: "local:test"},
-				"main",
-				"HEAD",
-				gitrepo.DiffSummary{Files: tt.files, FileSummary: tt.summary},
-				tt.coverage,
-				tt.policy,
-				signals.ToolingReport{},
-				nil,
-				now,
-			)
+			got := Build(BuildInput{
+				Repo:     signals.RepoMetadata{ID: "local:test"},
+				Base:     "main",
+				Head:     "HEAD",
+				Diff:     gitrepo.DiffSummary{Files: tt.files, FileSummary: tt.summary},
+				Coverage: tt.coverage,
+				Policy:   tt.policy,
+				Tooling:  signals.ToolingReport{},
+				Now:      now,
+			})
 			if got.RiskLevel != tt.wantRisk {
 				t.Fatalf("RiskLevel = %q, want %q\nreport = %+v", got.RiskLevel, tt.wantRisk, got)
 			}

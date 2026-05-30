@@ -9,7 +9,6 @@ export const DEFAULT_STALE_AFTER_MS = 10 * 60 * 1000;
 export const NON_ACTIONABLE_SUMMARY_PATTERN =
   /no commit-scoped bugs|no commit-scoped correctness issues|no actionable findings|no high-confidence behavioral regressions|no concrete bugs|no commit-scoped bugs or regressions found/i;
 export const CODE_REVIEW_ROOT_DIRNAME = ".code-reviews";
-export const INCOMPLETE_REVIEW_STATUSES = ["partial_success"];
 
 const SHA_PATTERN = /^[0-9a-f]{40}$/;
 
@@ -714,13 +713,6 @@ export function reportSatisfiesLane(report, lane = "codex") {
     );
   }
   return ["ok", "partial_success"].includes(reviewStatus);
-}
-
-export function hasDurableReviewEvidence(report, lane = "codex") {
-  if (reportSatisfiesLane(report, lane)) {
-    return true;
-  }
-  return Array.isArray(report?.findings) && report.findings.length > 0;
 }
 
 export function isReviewQueueJobStale({

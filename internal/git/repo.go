@@ -8,6 +8,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"io"
 	"net/url"
 	"os"
 	"os/exec"
@@ -17,9 +18,12 @@ import (
 	"strings"
 	"time"
 
+	"github.com/contribution-dev/contribution/internal/fileclass"
 	"github.com/contribution-dev/contribution/internal/privacy"
 	"github.com/contribution-dev/contribution/internal/signals"
 )
+
+const maxUntrackedTextBytes = 1024 * 1024
 
 // Repo describes a resolved repository location.
 type Repo struct {
@@ -213,62 +217,9 @@ func ParseGitHubRepo(remote string) (string, string) {
 	return "", ""
 }
 
-// Classification describes a V1 file path classification.
-type Classification struct {
-	Class             string
-	Language          string
-	IsTest            bool
-	IsDocs            bool
-	IsSource          bool
-	IsDependency      bool
-	IsConfig          bool
-	IsGenerated       bool
-	IsVendor          bool
-	IsInfrastructure  bool
-	IsBuildArtifact   bool
-	IsMigration       bool
-	IsSecurityRelated bool
-}
-
-// ClassifyPath classifies a repository-relative path.
-func ClassifyPath(path string) Classification {
-	p := filepath.ToSlash(strings.TrimPrefix(path, "./"))
-	lower := strings.ToLower(p)
-	base := strings.ToLower(filepath.Base(p))
-	class := Classification{Class: "source", Language: languageForPath(lower), IsSource: true}
-
-	switch {
-	case isVendorPath(lower):
-		class = Classification{Class: "vendor", Language: languageForPath(lower), IsVendor: true}
-	case isGeneratedPath(lower):
-		class = Classification{Class: "generated", Language: languageForPath(lower), IsGenerated: true}
-	case isBuildArtifactPath(lower):
-		class = Classification{Class: "build_artifact", Language: languageForPath(lower), IsBuildArtifact: true}
-	case isTestPath(lower):
-		class = Classification{Class: "test", Language: languageForPath(lower), IsTest: true}
-	case isDocsPath(lower, base):
-		class = Classification{Class: "docs", Language: "Markdown", IsDocs: true}
-	case isDependencyFile(lower, base):
-		class = Classification{Class: "dependency", Language: languageForPath(lower), IsDependency: true}
-	case isConfigPath(lower, base):
-		class = Classification{Class: "config", Language: languageForPath(lower), IsConfig: true}
-	case isInfrastructurePath(lower, base):
-		class = Classification{Class: "infrastructure", Language: languageForPath(lower), IsInfrastructure: true}
-	case isMigrationPath(lower):
-		class = Classification{Class: "migration", Language: languageForPath(lower), IsMigration: true, IsSource: true}
-	case isExtensionlessScriptPath(lower, base):
-		class = Classification{Class: "source", Language: "Shell", IsSource: true}
-	case languageForPath(lower) == "Other":
-		class = Classification{Class: "unknown", Language: "Other"}
-	}
-
-	class.IsSecurityRelated = isSecuritySensitivePath(lower)
-	return class
-}
-
 // Inventory uses Git's visible file set and emits repo-level inventory signals.
 func Inventory(ctx context.Context, repoPath, repoID string, createdAt time.Time) (signals.FileSummary, []signals.Signal, error) {
-	summary := newFileSummary()
+	summary := fileclass.NewSummary()
 	paths, err := gitInventoryPaths(ctx, repoPath)
 	if err != nil {
 		return summary, nil, err
@@ -284,7 +235,7 @@ func Inventory(ctx context.Context, repoPath, repoID string, createdAt time.Time
 		if info.IsDir() {
 			continue
 		}
-		addFileSummary(&summary, rel)
+		fileclass.AddToSummary(&summary, rel)
 	}
 	sigs := []signals.Signal{
 		signals.New(repoID, "git", "repo_file_count", "repo", repoID, signals.SeverityInfo, signals.DirectionNeutral, signals.ConfidenceHigh, float64(summary.TotalFiles), "count", fmt.Sprintf("Repository inventory found %d files.", summary.TotalFiles), true, createdAt),
@@ -429,9 +380,9 @@ func Diff(ctx context.Context, repoPath, base, head string) (DiffSummary, error)
 			files[i].LineRanges = ranges[files[i].Path]
 		}
 	}
-	summary := newFileSummary()
+	summary := fileclass.NewSummary()
 	for _, file := range files {
-		addFileSummary(&summary, file.Path)
+		fileclass.AddToSummary(&summary, file.Path)
 	}
 	return DiffSummary{Files: files, FileSummary: summary}, nil
 }
@@ -463,9 +414,9 @@ func DiffWorktree(ctx context.Context, repoPath, base string) (DiffSummary, erro
 		return DiffSummary{}, err
 	}
 	files = append(files, untracked...)
-	summary := newFileSummary()
+	summary := fileclass.NewSummary()
 	for _, file := range files {
-		addFileSummary(&summary, file.Path)
+		fileclass.AddToSummary(&summary, file.Path)
 	}
 	return DiffSummary{Files: files, FileSummary: summary}, nil
 }
@@ -520,12 +471,13 @@ func untrackedChangedFile(repoPath string, rel string) (ChangedFile, bool, error
 	if info.IsDir() {
 		return ChangedFile{}, false, nil
 	}
-	// #nosec G304 -- path comes from git ls-files output constrained to repo-relative paths.
-	data, err := os.ReadFile(path)
+	lines, text, err := countTextLines(path)
 	if err != nil {
 		return ChangedFile{}, false, fmt.Errorf("read untracked path %s: %w", rel, err)
 	}
-	lines := countTextLines(data)
+	if !text {
+		return ChangedFile{Path: rel}, true, nil
+	}
 	file := ChangedFile{Path: rel, Additions: lines}
 	if lines > 0 {
 		file.LineRanges = []signals.LineRange{{Start: 1, End: lines}}
@@ -533,15 +485,43 @@ func untrackedChangedFile(repoPath string, rel string) (ChangedFile, bool, error
 	return file, true, nil
 }
 
-func countTextLines(data []byte) int {
-	if len(data) == 0 {
-		return 0
+func countTextLines(path string) (int, bool, error) {
+	// #nosec G304 -- path comes from git ls-files output constrained to repo-relative paths.
+	file, err := os.Open(path)
+	if err != nil {
+		return 0, false, err
 	}
-	lines := bytes.Count(data, []byte{'\n'})
-	if data[len(data)-1] != '\n' {
+	defer func() {
+		_ = file.Close()
+	}()
+	buf := make([]byte, 32*1024)
+	var lines int
+	var total int64
+	var last byte
+	var hasData bool
+	for {
+		n, readErr := file.Read(buf)
+		if n > 0 {
+			chunk := buf[:n]
+			total += int64(n)
+			if total > maxUntrackedTextBytes || bytes.IndexByte(chunk, 0) >= 0 {
+				return 0, false, nil
+			}
+			lines += bytes.Count(chunk, []byte{'\n'})
+			last = chunk[n-1]
+			hasData = true
+		}
+		if errors.Is(readErr, io.EOF) {
+			break
+		}
+		if readErr != nil {
+			return 0, false, readErr
+		}
+	}
+	if hasData && last != '\n' {
 		lines++
 	}
-	return lines
+	return lines, true, nil
 }
 
 func parseHistory(out string, maxCommits int) History {
@@ -588,7 +568,7 @@ func parseHistory(out string, maxCommits int) History {
 		}
 		path := file.Path
 		current.Files = append(current.Files, file)
-		class := ClassifyPath(path)
+		class := fileclass.ClassifyPath(path)
 		current.TestsTouched = current.TestsTouched || class.IsTest
 		current.DocsTouched = current.DocsTouched || class.IsDocs
 		current.SourceTouched = current.SourceTouched || class.IsSource
@@ -747,39 +727,6 @@ func TotalChangedLines(files []ChangedFile) int {
 	return total
 }
 
-func newFileSummary() signals.FileSummary {
-	return signals.FileSummary{
-		ByClass:    map[string]int{},
-		ByLanguage: map[string]int{},
-	}
-}
-
-func addFileSummary(summary *signals.FileSummary, path string) {
-	class := ClassifyPath(path)
-	summary.TotalFiles++
-	summary.ByClass[class.Class]++
-	summary.ByLanguage[class.Language]++
-	switch {
-	case class.IsTest:
-		summary.TestFiles++
-	case class.IsDocs:
-		summary.DocsFiles++
-	case class.IsDependency:
-		summary.DependencyFiles++
-	case class.IsConfig:
-		summary.ConfigFiles++
-	case class.IsGenerated:
-		summary.GeneratedFiles++
-	case class.IsVendor:
-		summary.VendorFiles++
-	case class.IsSource:
-		summary.SourceFiles++
-	}
-	if class.IsSecurityRelated {
-		summary.RiskyFiles++
-	}
-}
-
 func highChurnFiles(counts map[string]int) []string {
 	type pair struct {
 		path      string
@@ -823,7 +770,7 @@ func highChurnWeight(path string) int {
 }
 
 func highChurnClassRank(path string) int {
-	class := ClassifyPath(path)
+	class := fileclass.ClassifyPath(path)
 	switch {
 	case class.IsSecurityRelated:
 		return 5
@@ -885,148 +832,6 @@ func directionForPositiveCount(count int) signals.Direction {
 		return signals.DirectionPositive
 	}
 	return signals.DirectionNeutral
-}
-
-func languageForPath(path string) string {
-	switch strings.ToLower(filepath.Ext(path)) {
-	case ".go":
-		return "Go"
-	case ".js", ".mjs", ".cjs":
-		return "JavaScript"
-	case ".ts", ".tsx":
-		return "TypeScript"
-	case ".jsx":
-		return "JavaScript"
-	case ".py":
-		return "Python"
-	case ".rb":
-		return "Ruby"
-	case ".rs":
-		return "Rust"
-	case ".java":
-		return "Java"
-	case ".kt", ".kts":
-		return "Kotlin"
-	case ".swift":
-		return "Swift"
-	case ".c", ".h":
-		return "C"
-	case ".cc", ".cpp", ".cxx", ".hpp":
-		return "C++"
-	case ".cs":
-		return "C#"
-	case ".php":
-		return "PHP"
-	case ".md", ".mdx":
-		return "Markdown"
-	case ".yaml", ".yml":
-		return "YAML"
-	case ".json":
-		return "JSON"
-	case ".toml":
-		return "TOML"
-	case ".tf":
-		return "Terraform"
-	case ".sh", ".bash", ".zsh":
-		return "Shell"
-	case ".sql":
-		return "SQL"
-	default:
-		return "Other"
-	}
-}
-
-func isTestPath(path string) bool {
-	base := filepath.Base(path)
-	return strings.HasSuffix(base, "_test.go") ||
-		strings.HasSuffix(base, ".test.ts") ||
-		strings.HasSuffix(base, ".test.tsx") ||
-		strings.HasSuffix(base, ".spec.ts") ||
-		strings.HasSuffix(base, ".spec.tsx") ||
-		strings.HasSuffix(base, ".test.js") ||
-		strings.HasSuffix(base, ".spec.js") ||
-		strings.HasSuffix(base, ".test.mjs") ||
-		strings.HasSuffix(base, ".spec.mjs") ||
-		strings.HasSuffix(base, ".test.cjs") ||
-		strings.HasSuffix(base, ".spec.cjs") ||
-		strings.HasPrefix(base, "test_") && strings.HasSuffix(base, ".py") ||
-		strings.HasSuffix(base, "_test.py") ||
-		strings.HasPrefix(path, "tests/") ||
-		strings.HasPrefix(path, "spec/") ||
-		strings.HasPrefix(path, "__tests__/")
-}
-
-func isDocsPath(path, base string) bool {
-	return strings.HasPrefix(base, "readme") ||
-		strings.HasPrefix(path, "docs/") ||
-		strings.HasSuffix(path, ".md") ||
-		strings.HasSuffix(path, ".mdx")
-}
-
-func isDependencyFile(path, base string) bool {
-	switch base {
-	case "package.json", "package-lock.json", "pnpm-lock.yaml", "yarn.lock", "go.mod", "go.sum",
-		"requirements.txt", "poetry.lock", "pipfile", "pipfile.lock", "cargo.toml", "cargo.lock",
-		"gemfile", "gemfile.lock", "pom.xml", "build.gradle":
-		return true
-	}
-	return path == "pipfile" || path == "pipfile.lock"
-}
-
-func isConfigPath(path, base string) bool {
-	switch base {
-	case ".editorconfig", ".gitignore", ".gitattributes", ".npmrc", ".nvmrc",
-		".prettierrc", ".prettierignore", ".eslintrc", ".golangci.yml", ".golangci.yaml",
-		".goreleaser.yml", ".goreleaser.yaml", ".dockerignore", "makefile", "justfile",
-		".contribution.yml", ".contribution.yaml", "lint-staged.config.js", "pnpm-workspace.yaml", "tsconfig.json", "jsconfig.json",
-		"license", "licence", "copying", "notice":
-		return true
-	}
-	return strings.HasPrefix(base, ".prettierrc.") ||
-		strings.HasPrefix(base, ".eslintrc.") ||
-		strings.HasPrefix(path, ".codex/")
-}
-
-func isExtensionlessScriptPath(path, base string) bool {
-	return strings.HasPrefix(path, "scripts/") && filepath.Ext(base) == ""
-}
-
-func isVendorPath(path string) bool {
-	return strings.HasPrefix(path, "vendor/") || strings.HasPrefix(path, "node_modules/")
-}
-
-func isGeneratedPath(path string) bool {
-	base := filepath.Base(path)
-	return strings.HasPrefix(path, "generated/") ||
-		strings.Contains(base, ".generated.") ||
-		strings.HasSuffix(base, ".pb.go") ||
-		strings.Contains(base, ".gen.")
-}
-
-func isBuildArtifactPath(path string) bool {
-	return strings.HasPrefix(path, "dist/") ||
-		strings.HasPrefix(path, "build/") ||
-		strings.HasPrefix(path, "coverage/")
-}
-
-func isInfrastructurePath(path, base string) bool {
-	return base == "dockerfile" ||
-		strings.HasPrefix(base, "docker-compose") ||
-		strings.HasPrefix(path, ".github/") ||
-		strings.HasPrefix(path, "terraform/") ||
-		strings.HasSuffix(path, ".tf") ||
-		strings.HasPrefix(path, "k8s/") ||
-		strings.HasPrefix(path, "helm/") ||
-		strings.HasPrefix(path, "charts/")
-}
-
-func isMigrationPath(path string) bool {
-	return strings.Contains(path, "migration") || strings.Contains(path, "migrations/")
-}
-
-func isSecuritySensitivePath(path string) bool {
-	keywords := []string{"auth", "oauth", "permission", "permissions", "rbac", "security", "secret", "secrets", "token", "tokens", "billing", "payment", "payments", "checkout", "session", "sessions", "crypto", "password", "passwords", "admin"}
-	return containsAny(path, keywords)
 }
 
 func containsAny(value string, needles []string) bool {

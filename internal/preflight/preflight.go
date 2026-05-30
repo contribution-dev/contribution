@@ -11,27 +11,33 @@ import (
 
 	"github.com/contribution-dev/contribution/internal/config"
 	coveragepkg "github.com/contribution-dev/contribution/internal/coverage"
+	"github.com/contribution-dev/contribution/internal/fileclass"
 	gitrepo "github.com/contribution-dev/contribution/internal/git"
 	"github.com/contribution-dev/contribution/internal/signals"
 )
 
-// Build creates a V2 preflight report from a git diff, coverage, and policy.
-func Build(repo signals.RepoMetadata, base string, head string, diff gitrepo.DiffSummary, coverage signals.PreflightCoverage, policy config.PreflightConfig, tooling signals.ToolingReport, limitations []string, now time.Time) signals.PreflightReport {
-	return BuildWithPersonal(repo, base, head, diff, coverage, policy, signals.PersonalPreflightContext{}, tooling, limitations, now)
+// BuildInput is the complete deterministic evidence for a preflight report.
+type BuildInput struct {
+	Repo             signals.RepoMetadata
+	Base             string
+	Head             string
+	Diff             gitrepo.DiffSummary
+	Coverage         signals.PreflightCoverage
+	Policy           config.PreflightConfig
+	Personal         signals.PersonalPreflightContext
+	AnalyzerFindings []signals.AnalyzerFinding
+	Tooling          signals.ToolingReport
+	Limitations      []string
+	Now              time.Time
 }
 
-// BuildWithPersonal creates a V2 preflight report with recent single-player patterns.
-func BuildWithPersonal(repo signals.RepoMetadata, base string, head string, diff gitrepo.DiffSummary, coverage signals.PreflightCoverage, policy config.PreflightConfig, personal signals.PersonalPreflightContext, tooling signals.ToolingReport, limitations []string, now time.Time) signals.PreflightReport {
-	return BuildWithPersonalAndAnalyzers(repo, base, head, diff, coverage, policy, personal, nil, tooling, limitations, now)
-}
-
-// BuildWithPersonalAndAnalyzers creates a V2 preflight report with recent patterns and optional analyzer findings.
-func BuildWithPersonalAndAnalyzers(repo signals.RepoMetadata, base string, head string, diff gitrepo.DiffSummary, coverage signals.PreflightCoverage, policy config.PreflightConfig, personal signals.PersonalPreflightContext, analyzerFindings []signals.AnalyzerFinding, tooling signals.ToolingReport, limitations []string, now time.Time) signals.PreflightReport {
-	summary := diff.FileSummary
-	changed := changedFiles(diff.Files, policy.RiskyPaths)
+// Build creates a V2 preflight report.
+func Build(input BuildInput) signals.PreflightReport {
+	summary := input.Diff.FileSummary
+	changed := changedFiles(input.Diff.Files, input.Policy.RiskyPaths)
 	summary.RiskyFiles = riskyFileCount(changed)
-	analyzerFindings = nonNilAnalyzerFindings(analyzerFindings)
-	totalLines := gitrepo.TotalChangedLines(diff.Files)
+	analyzerFindings := nonNilAnalyzerFindings(input.AnalyzerFindings)
+	totalLines := gitrepo.TotalChangedLines(input.Diff.Files)
 	risk := "low"
 	var why []string
 	var focus []string
@@ -40,7 +46,7 @@ func BuildWithPersonalAndAnalyzers(repo signals.RepoMetadata, base string, head 
 		risk = "unknown"
 		why = append(why, "No changed files were found between base and head.")
 	}
-	sizeItem := sizeRubric(summary.TotalFiles, totalLines, policy)
+	sizeItem := sizeRubric(summary.TotalFiles, totalLines, input.Policy)
 	rubric = append(rubric, sizeItem)
 	switch sizeItem.Status {
 	case "fail":
@@ -79,7 +85,7 @@ func BuildWithPersonalAndAnalyzers(repo signals.RepoMetadata, base string, head 
 	case summary.SourceFiles > 0 && summary.TestFiles == 0:
 		status := "warn"
 		severity := "medium"
-		if policy.RequireTestsForSource {
+		if input.Policy.RequireTestsForSource {
 			status = "fail"
 			severity = "high"
 			risk = maxRisk(risk, "high")
@@ -133,7 +139,7 @@ func BuildWithPersonalAndAnalyzers(repo signals.RepoMetadata, base string, head 
 			Recommendation: "Confirm generated or vendor changes are intentional.",
 		})
 	}
-	coverageItem := coverageRubric(coverage, policy)
+	coverageItem := coverageRubric(input.Coverage, input.Policy)
 	rubric = append(rubric, coverageItem)
 	switch coverageItem.Status {
 	case "fail":
@@ -156,7 +162,7 @@ func BuildWithPersonalAndAnalyzers(repo signals.RepoMetadata, base string, head 
 		why = append(why, analyzerItem.Evidence)
 		focus = append(focus, "static, secret, dependency, or vulnerability analyzer findings")
 	}
-	personalItems, personalWhy, personalFocus := personalRubric(changed, summary, totalLines, personal)
+	personalItems, personalWhy, personalFocus := personalRubric(changed, summary, totalLines, input.Personal)
 	for _, item := range personalItems {
 		rubric = append(rubric, item)
 		if item.Status == "warn" || item.Status == "fail" {
@@ -175,30 +181,30 @@ func BuildWithPersonalAndAnalyzers(repo signals.RepoMetadata, base string, head 
 	if summary.TestFiles > 0 {
 		testEvidence = fmt.Sprintf("%d test files changed.", summary.TestFiles)
 	}
-	if coverage.Status == "available" {
-		testEvidence += fmt.Sprintf(" Changed-line coverage is %.1f%% (%d/%d executable changed lines).", coverage.Percent, coverage.CoveredLines, coverage.TotalLines)
-	} else if coverage.Reason != "" {
-		testEvidence += " " + coverage.Reason
+	if input.Coverage.Status == "available" {
+		testEvidence += fmt.Sprintf(" Changed-line coverage is %.1f%% (%d/%d executable changed lines).", input.Coverage.Percent, input.Coverage.CoveredLines, input.Coverage.TotalLines)
+	} else if input.Coverage.Reason != "" {
+		testEvidence += " " + input.Coverage.Reason
 	}
-	limitations = append(limitations, "Optional analyzer findings depend on installed external tools and bounded scan time.")
+	limitations := append(input.Limitations, "Optional analyzer findings depend on installed external tools and bounded scan time.")
 	return signals.PreflightReport{
 		Version:           2,
-		GeneratedAt:       now,
-		Repo:              repo,
-		Base:              base,
-		Head:              head,
+		GeneratedAt:       input.Now,
+		Repo:              input.Repo,
+		Base:              input.Base,
+		Head:              input.Head,
 		RiskLevel:         risk,
 		Why:               uniqueStrings(why),
 		ChangedFiles:      changed,
 		FileSummary:       summary,
 		TotalChangedLines: totalLines,
-		Coverage:          coverage,
+		Coverage:          input.Coverage,
 		AnalyzerFindings:  analyzerFindings,
 		Rubric:            rubric,
 		TestEvidence:      testEvidence,
-		Tooling:           tooling,
+		Tooling:           input.Tooling,
 		ReviewerFocus:     uniqueStrings(focus),
-		PersonalContext:   nonEmptyPersonalContext(personal),
+		PersonalContext:   nonEmptyPersonalContext(input.Personal),
 		Limitations:       uniqueStrings(limitations),
 		Privacy: signals.PrivacySummary{
 			PublicSafe:       false,
@@ -282,7 +288,7 @@ func Coverage(paths []string, format string, repoPath string, files []gitrepo.Ch
 func changedFiles(files []gitrepo.ChangedFile, riskyPatterns []string) []signals.PreflightChangedFile {
 	out := make([]signals.PreflightChangedFile, 0, len(files))
 	for _, file := range files {
-		class := gitrepo.ClassifyPath(file.Path)
+		class := fileclass.ClassifyPath(file.Path)
 		out = append(out, signals.PreflightChangedFile{
 			Path:       file.Path,
 			Additions:  file.Additions,

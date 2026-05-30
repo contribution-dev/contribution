@@ -46,3 +46,52 @@ test("collects unstaged modified files without truncating path names", () => {
   assert(result.files.includes("CHANGELOG.md"));
   assert(!result.files.includes("HANGELOG.md"));
 });
+
+test("throws for an invalid explicit base", () => {
+  const repo = mkdtempSync(path.join(tmpdir(), "contribution-changed-files-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repo, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "test@example.test"], {
+    cwd: repo,
+  });
+  execFileSync("git", ["config", "user.name", "Test User"], { cwd: repo });
+  writeFileSync(path.join(repo, "README.md"), "# Test\n");
+  execFileSync("git", ["add", "README.md"], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "initial"], {
+    cwd: repo,
+    stdio: "ignore",
+  });
+
+  assert.throws(
+    () => getChangedFiles({ cwd: repo, explicitBase: "missing-ref" }),
+    /git diff --name-only/,
+  );
+});
+
+test("collects worktree paths with spaces and rename arrows", () => {
+  const repo = mkdtempSync(path.join(tmpdir(), "contribution-changed-files-"));
+  execFileSync("git", ["init", "-b", "main"], { cwd: repo, stdio: "ignore" });
+  execFileSync("git", ["config", "user.email", "test@example.test"], {
+    cwd: repo,
+  });
+  execFileSync("git", ["config", "user.name", "Test User"], { cwd: repo });
+  writeFileSync(path.join(repo, "old -> name.md"), "# Old\n");
+  execFileSync("git", ["add", "old -> name.md"], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "initial"], {
+    cwd: repo,
+    stdio: "ignore",
+  });
+  writeFileSync(path.join(repo, "README.md"), "# Test\n");
+  execFileSync("git", ["add", "README.md"], { cwd: repo });
+  execFileSync("git", ["commit", "-m", "add readme"], {
+    cwd: repo,
+    stdio: "ignore",
+  });
+  execFileSync("git", ["mv", "old -> name.md", "new -> name.md"], {
+    cwd: repo,
+  });
+
+  const result = getChangedFiles({ cwd: repo });
+
+  assert(result.files.includes("new -> name.md"));
+  assert(!result.files.includes("old -> name.md"));
+});

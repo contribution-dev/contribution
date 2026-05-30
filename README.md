@@ -25,7 +25,7 @@ source scripts/codex-env.sh
 
 ```bash
 pnpm install
-pnpm tools:preflight
+pnpm tools:check
 pnpm checks:changed
 ```
 
@@ -102,6 +102,9 @@ pnpm review:status
 `review:status` includes worker health; an active queue item with no running
 worker is reported as unhealthy after the warmup threshold. Review artifacts are
 local-only under `.code-reviews/`.
+
+To intentionally bypass local Git hooks for an emergency commit or push, use
+Git's standard `--no-verify` flag and record the skipped validation in the PR.
 
 ## License
 

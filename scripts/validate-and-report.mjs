@@ -58,13 +58,7 @@ function main() {
   run("go", ["vet", "./..."]);
   run("go", ["test", "./..."]);
   run("go", ["test", "-race", "./..."]);
-  run("go", [
-    "build",
-    "-trimpath",
-    "-o",
-    "bin/contribution",
-    "./cmd/contribution",
-  ]);
+  run("pnpm", ["build"]);
   run("pnpm", ["dogfood:smoke"]);
   run("pnpm", ["dogfood:real"]);
   run("pnpm", ["lint:go"]);

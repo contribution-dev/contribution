@@ -143,6 +143,64 @@ func TestFetchMergedPRsDegradesForMissingInputsAndHTTPStatus(t *testing.T) {
 	}
 }
 
+func TestFetchPREnrichmentPaginates(t *testing.T) {
+	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		w.Header().Set("Content-Type", "application/json")
+		page := r.URL.Query().Get("page")
+		switch {
+		case r.URL.Path == "/repos/owner/repo/pulls/7/files":
+			if page == "1" {
+				_, _ = w.Write([]byte(`[` + strings.TrimSuffix(strings.Repeat(`{"filename":"internal/page-one.go"},`, 100), ",") + `]`))
+				return
+			}
+			_, _ = w.Write([]byte(`[{"filename":"internal/page-two.go"}]`))
+		case r.URL.Path == "/repos/owner/repo/pulls/7/reviews":
+			if page == "1" {
+				_, _ = w.Write([]byte(`[` + strings.TrimSuffix(strings.Repeat(`{"state":"APPROVED"},`, 100), ",") + `]`))
+				return
+			}
+			_, _ = w.Write([]byte(`[{"state":"CHANGES_REQUESTED"}]`))
+		case r.URL.Path == "/repos/owner/repo/commits/abcdef/check-runs":
+			if page == "1" {
+				_, _ = w.Write([]byte(`{"check_runs":[` + strings.TrimSuffix(strings.Repeat(`{"conclusion":"success"},`, 100), ",") + `]}`))
+				return
+			}
+			_, _ = w.Write([]byte(`{"check_runs":[{"conclusion":"failure"}]}`))
+		default:
+			t.Fatalf("unexpected path %s", r.URL.Path)
+		}
+	}))
+	defer server.Close()
+	restoreGitHubTestClient(server.URL)
+	defer restoreGitHubTestClient("")
+
+	files, err := fetchPRFiles(context.Background(), "owner", "repo", "token", 7)
+	if err != nil {
+		t.Fatalf("fetchPRFiles() error = %v", err)
+	}
+	if len(files) != 101 || files[100] != "internal/page-two.go" {
+		last := ""
+		if len(files) > 0 {
+			last = files[len(files)-1]
+		}
+		t.Fatalf("files = len %d last %q, want second page", len(files), last)
+	}
+	reviews, err := fetchPRReviews(context.Background(), "owner", "repo", "token", 7)
+	if err != nil {
+		t.Fatalf("fetchPRReviews() error = %v", err)
+	}
+	if reviews.total != 101 || reviews.requestedChanges != 1 || reviews.approvals != 100 {
+		t.Fatalf("reviews = %+v, want paginated counts", reviews)
+	}
+	checks, err := fetchCheckRuns(context.Background(), "owner", "repo", "token", "abcdef")
+	if err != nil {
+		t.Fatalf("fetchCheckRuns() error = %v", err)
+	}
+	if checks.total != 101 || checks.successful != 100 || checks.failed != 1 {
+		t.Fatalf("checks = %+v, want paginated counts", checks)
+	}
+}
+
 func TestFetchMergedPRsReturnsMalformedJSONError(t *testing.T) {
 	server := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, _ *http.Request) {
 		_, _ = w.Write([]byte(`not json`))

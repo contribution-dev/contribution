@@ -3,7 +3,7 @@ import { execFileSync } from "node:child_process";
 export const CHANGED_FILES_DIFF_FILTER = "ACMRD";
 
 function runGit(args, options = {}) {
-  const { trim = true, ...execOptions } = options;
+  const { allowFailure = false, trim = true, ...execOptions } = options;
   try {
     const output = execFileSync("git", args, {
       encoding: "utf8",
@@ -11,25 +11,41 @@ function runGit(args, options = {}) {
       ...execOptions,
     });
     return trim ? output.trim() : output;
-  } catch {
-    return "";
+  } catch (error) {
+    if (allowFailure) {
+      return "";
+    }
+    const detail =
+      typeof error?.message === "string" && error.message
+        ? `: ${error.message}`
+        : "";
+    throw new Error(`git ${args.join(" ")} failed${detail}`);
   }
 }
 
 function collectWorktreeFiles(cwd) {
-  const output = runGit(["status", "--porcelain"], { cwd, trim: false });
-  return output
-    .split("\n")
-    .filter((line) => line.trim().length > 0)
-    .map((line) => {
-      const renamed = line.match(/^R.\s+(.+)\s+->\s+(.+)$/);
-      if (renamed) {
-        return renamed[2];
-      }
-      return line.slice(3).trim();
-    })
-    .map((file) => file.replaceAll("\\", "/"))
-    .filter(Boolean);
+  const output = runGit(["status", "--porcelain=v1", "-z"], {
+    cwd,
+    trim: false,
+    allowFailure: true,
+  });
+  const records = output.split("\0").filter(Boolean);
+  const files = [];
+  for (let i = 0; i < records.length; i++) {
+    const record = records[i];
+    if (record.length < 4) {
+      continue;
+    }
+    const status = record.slice(0, 2);
+    const file = record.slice(3).replaceAll("\\", "/");
+    if (file) {
+      files.push(file);
+    }
+    if (status.includes("R") || status.includes("C")) {
+      i++;
+    }
+  }
+  return files;
 }
 
 function unique(values) {
@@ -37,7 +53,12 @@ function unique(values) {
 }
 
 function hasRef(cwd, ref) {
-  return runGit(["rev-parse", "--verify", "--quiet", ref], { cwd }).length > 0;
+  return (
+    runGit(["rev-parse", "--verify", "--quiet", ref], {
+      cwd,
+      allowFailure: true,
+    }).length > 0
+  );
 }
 
 function getHeadRef(cwd, explicitHead) {
@@ -51,17 +72,23 @@ export function resolveBaseRef(cwd, explicitBase, headRef) {
 
   const upstream = runGit(
     ["rev-parse", "--abbrev-ref", "--symbolic-full-name", "@{upstream}"],
-    { cwd },
+    { cwd, allowFailure: true },
   );
   if (upstream) {
-    const base = runGit(["merge-base", upstream, headRef], { cwd });
+    const base = runGit(["merge-base", upstream, headRef], {
+      cwd,
+      allowFailure: true,
+    });
     if (base) {
       return { baseRef: base, collapsedFromNoHistory: false };
     }
   }
 
   if (hasRef(cwd, "refs/remotes/origin/main")) {
-    const base = runGit(["merge-base", "origin/main", headRef], { cwd });
+    const base = runGit(["merge-base", "origin/main", headRef], {
+      cwd,
+      allowFailure: true,
+    });
     if (base) {
       return { baseRef: base, collapsedFromNoHistory: false };
     }

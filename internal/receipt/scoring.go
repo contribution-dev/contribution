@@ -1,17 +1,18 @@
-// Package scoring turns normalized evidence into artifact labels and coaching.
-package scoring
+// Package receipt turns normalized evidence into artifact labels and coaching.
+package receipt
 
 import (
 	"fmt"
 	"strings"
 	"time"
 
+	"github.com/contribution-dev/contribution/internal/fileclass"
 	gitrepo "github.com/contribution-dev/contribution/internal/git"
 	"github.com/contribution-dev/contribution/internal/github"
 	"github.com/contribution-dev/contribution/internal/signals"
 )
 
-// Input is the deterministic evidence available to V1 scoring.
+// Input is the deterministic evidence available to the V1 receipt engine.
 type Input struct {
 	Repo               signals.RepoMetadata
 	History            gitrepo.History
@@ -792,7 +793,7 @@ func prDurability(pr github.PullRequest, evidence prDurabilityEvidence) string {
 
 func classifyPaths(paths []string) (sourceFiles int, testFiles int, riskyFiles int) {
 	for _, path := range paths {
-		class := gitrepo.ClassifyPath(path)
+		class := fileclass.ClassifyPath(path)
 		if class.IsSource {
 			sourceFiles++
 		}
@@ -851,7 +852,7 @@ func artifactFromCommit(commit gitrepo.Commit, card signals.PRQualityCard) signa
 func sourcePaths(files []gitrepo.ChangedFile) []string {
 	paths := make([]string, 0, len(files))
 	for _, file := range files {
-		class := gitrepo.ClassifyPath(file.Path)
+		class := fileclass.ClassifyPath(file.Path)
 		if class.IsSource {
 			paths = append(paths, file.Path)
 		}
@@ -865,7 +866,7 @@ func sourcePaths(files []gitrepo.ChangedFile) []string {
 func sourcePathStrings(files []string) []string {
 	paths := make([]string, 0, len(files))
 	for _, file := range files {
-		class := gitrepo.ClassifyPath(file)
+		class := fileclass.ClassifyPath(file)
 		if class.IsSource {
 			paths = append(paths, file)
 		}

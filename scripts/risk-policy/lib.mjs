@@ -42,7 +42,7 @@ function globToRegex(pattern) {
 }
 
 export function normalizePath(value) {
-  return value.replaceAll("\\", "/").replace(/^.\//, "");
+  return value.replaceAll("\\", "/").replace(/^\.\//, "");
 }
 
 export function pathMatchesGlob(value, pattern) {

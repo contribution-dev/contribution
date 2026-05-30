@@ -111,10 +111,7 @@ export function buildFullCommands(mode) {
     ["go", ["vet", "./..."]],
     ["go", ["test", "./..."]],
     ["go", ["test", "-race", "./..."]],
-    [
-      "go",
-      ["build", "-trimpath", "-o", "bin/contribution", "./cmd/contribution"],
-    ],
+    ["pnpm", ["build"]],
   ];
 }
 

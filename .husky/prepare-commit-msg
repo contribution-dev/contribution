@@ -1,4 +1,0 @@
-#!/bin/sh
-# Commit message auto-generation is intentionally disabled.
-# We rely on native commit UI generation instead.
-exit 0

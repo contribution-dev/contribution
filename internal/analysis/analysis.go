@@ -15,8 +15,8 @@ import (
 	coveragepkg "github.com/contribution-dev/contribution/internal/coverage"
 	gitrepo "github.com/contribution-dev/contribution/internal/git"
 	"github.com/contribution-dev/contribution/internal/github"
+	"github.com/contribution-dev/contribution/internal/receipt"
 	"github.com/contribution-dev/contribution/internal/report"
-	"github.com/contribution-dev/contribution/internal/scoring"
 	"github.com/contribution-dev/contribution/internal/signals"
 	"github.com/contribution-dev/contribution/internal/tools"
 )
@@ -148,7 +148,7 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 		limitations = append(limitations, "Review burden is unavailable without imported PR review metadata.")
 	}
 
-	score := scoring.Build(scoring.Input{
+	receiptResult := receipt.Build(receipt.Input{
 		Repo:               repo.Metadata(opts.PublicSafe),
 		History:            history,
 		PriorHistory:       priorHistory,
@@ -167,7 +167,7 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 		AITools:            cfg.AIUsage.SelfReportedTools,
 		AIModes:            cfg.AIUsage.SelfReportedModes,
 	})
-	limitations = append(limitations, score.Limitations...)
+	limitations = append(limitations, receiptResult.Limitations...)
 	analysis := signals.AnalysisReport{
 		Version:     1,
 		GeneratedAt: start,
@@ -187,11 +187,11 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 		Coverage:         coverageSummary,
 		AnalyzerFindings: analyzerFindings,
 		Signals:          allSignals,
-		PRCards:          score.Cards,
-		WeaknessMap:      score.WeaknessMap,
-		Trends:           score.Trends,
-		DeepDives:        score.DeepDives,
-		Profile:          score.Profile,
+		PRCards:          receiptResult.Cards,
+		WeaknessMap:      receiptResult.WeaknessMap,
+		Trends:           receiptResult.Trends,
+		DeepDives:        receiptResult.DeepDives,
+		Profile:          receiptResult.Profile,
 		SetupActions:     buildSetupActions(repo, cfgWarnings, metadata, coverageSummary, cfg.Coverage, tooling, tokenAvailable, !opts.NoExternalTools, sinceDays),
 		Limitations:      uniqueStrings(limitations),
 		Privacy: signals.PrivacySummary{

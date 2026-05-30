@@ -39,8 +39,13 @@ const CONTRACT_SENSITIVE_DOMAINS = [
     pathPatterns: [
       /^cmd\//,
       /^internal\/cli\//,
+      /^internal\/coverage\//,
+      /^internal\/fileclass\//,
+      /^internal\/friend\//,
       /^internal\/config\//,
       /^internal\/git\//,
+      /^internal\/preflight\//,
+      /^internal\/receipt\//,
       /^internal\/report\//,
       /^\.goreleaser\.yml$/,
       /^README\.md$/,
@@ -61,6 +66,27 @@ const CONTRACT_SENSITIVE_DOMAINS = [
 function matchesDomain(domain, file) {
   const normalized = normalizePath(file);
   return domain.pathPatterns.some((pattern) => pattern.test(normalized));
+}
+
+export function isCliContractPath(file) {
+  return matchesDomain(CONTRACT_SENSITIVE_DOMAINS[0], file);
+}
+
+export function isCliContractCoveragePath(file) {
+  const normalized = normalizePath(file);
+  if (/^internal\/.*_test\.go$/u.test(normalized)) {
+    return true;
+  }
+  return [
+    "scripts/dogfood-cli.mjs",
+    "scripts/check-cli-contract-coverage.mjs",
+    "scripts/lib/contract-sensitive-domains.mjs",
+    "docs/cli-contract.md",
+    "docs/reference/architecture.md",
+    ".github/workflows/ci.yml",
+    ".github/workflows/release.yml",
+    "docs/tooling-validation.md",
+  ].includes(normalized);
 }
 
 export function getContractSensitiveDomains() {

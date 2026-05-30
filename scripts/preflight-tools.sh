@@ -169,11 +169,8 @@ check_durable_review_workers() {
   watchdog_running="$(launchctl_status_count "$launchctl_status" "watchdog" "running")"
 
   if [ "$codex_installed" -lt "$expected_codex_workers" ] || [ "$codex_running" -lt "$expected_codex_workers" ] || [ "$remediation_running" -lt 1 ] || [ "$watchdog_running" -lt 1 ]; then
-    warn "durable review workers missing or stopped. Attempting automatic repair."
-    "$REPO_ROOT/scripts/codex-review-launchctl" install --lane all >/dev/null 2>&1 || {
-      fail "durable review worker auto-repair failed. Run 'pnpm review:recover'."
-      return
-    }
+    fail "durable review workers missing or stopped. Run 'pnpm review:recover' to install or repair them."
+    return
   fi
 
   pass "durable review workers installed"
@@ -208,7 +205,7 @@ To keep tooling available in every shell session, add this to ~/.zshrc:
   source $REPO_ROOT/scripts/codex-env.sh
 
 Then rerun:
-  pnpm tools:preflight
+  pnpm tools:check
 EOF
   exit "$status"
 fi

@@ -1,4 +1,0 @@
-#!/bin/sh
-# Commit message validation is intentionally disabled.
-# We rely on native commit UI generation and user-entered messages.
-exit 0

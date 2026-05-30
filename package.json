@@ -8,7 +8,7 @@
     "pnpm": ">=11.4.0"
   },
   "scripts": {
-    "build": "scripts/with-tools go build -trimpath -o bin/contribution ./cmd/contribution",
+    "build": "scripts/with-tools scripts/build-cli",
     "lint": "pnpm lint:scripts && pnpm lint:go && pnpm format:check",
     "lint:go": "scripts/with-tools golangci-lint run",
     "lint:scripts": "scripts/with-tools node scripts/check-js-syntax.mjs",
@@ -29,9 +29,9 @@
     "vuln": "scripts/with-tools govulncheck ./...",
     "ci:local": "pnpm agents:check && pnpm lint:scripts && pnpm test:scripts && pnpm format:check && pnpm typecheck && pnpm test && pnpm test:race && pnpm build && pnpm dogfood:smoke && pnpm lint:go",
     "agents:check": "scripts/with-tools node scripts/check-install-prereqs.mjs && scripts/with-tools node scripts/check-agents-drift.mjs && scripts/with-tools node scripts/check-workflow-parity.mjs",
-    "tools:preflight": "scripts/with-tools bash scripts/preflight-tools.sh",
+    "tools:check": "scripts/with-tools bash scripts/preflight-tools.sh",
+    "tools:preflight": "pnpm tools:check",
     "tools:install:optional": "scripts/with-tools bash scripts/install-optional-tools.sh",
-    "tools:optional:install": "pnpm tools:install:optional",
     "tools:optional:check": "scripts/with-tools bash scripts/install-optional-tools.sh --check",
     "validate:final": "scripts/with-tools node scripts/validate-and-report.mjs",
     "validate:final:skip-install": "scripts/with-tools node scripts/validate-and-report.mjs --skip-install",

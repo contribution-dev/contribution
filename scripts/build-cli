@@ -1,0 +1,8 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+GO_BIN="${GO:-go}"
+BINARY="${BINARY:-contribution}"
+
+mkdir -p bin
+"$GO_BIN" build -trimpath -o "bin/$BINARY" ./cmd/contribution

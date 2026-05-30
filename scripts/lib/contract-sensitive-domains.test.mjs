@@ -3,6 +3,7 @@ import assert from "node:assert/strict";
 import {
   getContractCoverageValidationCommands,
   getContractFastValidationCommands,
+  hasContractSensitiveDomainChanges,
 } from "./contract-sensitive-domains.mjs";
 
 test("contract validation commands can read changed files from a file list", () => {
@@ -38,4 +39,19 @@ test("docs-only contract coverage commands can read from a file list", () => {
       },
     ],
   );
+});
+
+test("CLI contract matching covers all command behavior packages", () => {
+  for (const file of [
+    "internal/preflight/preflight.go",
+    "internal/coverage/parser.go",
+    "internal/friend/friend.go",
+    "internal/fileclass/classify.go",
+    "internal/receipt/scoring.go",
+  ]) {
+    assert.equal(
+      hasContractSensitiveDomainChanges([file], "cli-contract"),
+      true,
+    );
+  }
 });

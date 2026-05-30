@@ -262,69 +262,84 @@ func derefTime(value *time.Time) time.Time {
 }
 
 func fetchPRFiles(ctx context.Context, owner, repo, token string, number int) ([]string, error) {
-	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/files?per_page=100", githubAPIBaseURL, owner, repo, number)
-	var raw []struct {
-		Filename string `json:"filename"`
-	}
-	if err := githubGetJSON(ctx, token, url, &raw); err != nil {
-		return nil, fmt.Errorf("GitHub PR #%d changed-file metadata unavailable: %w", number, err)
-	}
-	files := make([]string, 0, len(raw))
-	for _, item := range raw {
-		if strings.TrimSpace(item.Filename) != "" {
-			files = append(files, item.Filename)
+	var files []string
+	for page := 1; ; page++ {
+		url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/files?per_page=100&page=%d", githubAPIBaseURL, owner, repo, number, page)
+		var raw []struct {
+			Filename string `json:"filename"`
+		}
+		if err := githubGetJSON(ctx, token, url, &raw); err != nil {
+			return nil, fmt.Errorf("GitHub PR #%d changed-file metadata unavailable: %w", number, err)
+		}
+		for _, item := range raw {
+			if strings.TrimSpace(item.Filename) != "" {
+				files = append(files, item.Filename)
+			}
+		}
+		if len(raw) < 100 {
+			break
 		}
 	}
 	return files, nil
 }
 
 func fetchPRReviews(ctx context.Context, owner, repo, token string, number int) (reviewSummary, error) {
-	url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/reviews?per_page=100", githubAPIBaseURL, owner, repo, number)
-	var raw []struct {
-		State string `json:"state"`
-	}
-	if err := githubGetJSON(ctx, token, url, &raw); err != nil {
-		return reviewSummary{}, fmt.Errorf("GitHub PR #%d review metadata unavailable: %w", number, err)
-	}
 	var summary reviewSummary
-	for _, item := range raw {
-		state := strings.ToUpper(strings.TrimSpace(item.State))
-		if state == "" {
-			continue
+	for page := 1; ; page++ {
+		url := fmt.Sprintf("%s/repos/%s/%s/pulls/%d/reviews?per_page=100&page=%d", githubAPIBaseURL, owner, repo, number, page)
+		var raw []struct {
+			State string `json:"state"`
 		}
-		summary.total++
-		switch state {
-		case "CHANGES_REQUESTED":
-			summary.requestedChanges++
-		case "APPROVED":
-			summary.approvals++
+		if err := githubGetJSON(ctx, token, url, &raw); err != nil {
+			return reviewSummary{}, fmt.Errorf("GitHub PR #%d review metadata unavailable: %w", number, err)
+		}
+		for _, item := range raw {
+			state := strings.ToUpper(strings.TrimSpace(item.State))
+			if state == "" {
+				continue
+			}
+			summary.total++
+			switch state {
+			case "CHANGES_REQUESTED":
+				summary.requestedChanges++
+			case "APPROVED":
+				summary.approvals++
+			}
+		}
+		if len(raw) < 100 {
+			break
 		}
 	}
 	return summary, nil
 }
 
 func fetchCheckRuns(ctx context.Context, owner, repo, token, sha string) (checkSummary, error) {
-	url := fmt.Sprintf("%s/repos/%s/%s/commits/%s/check-runs?per_page=100", githubAPIBaseURL, owner, repo, sha)
-	var raw struct {
-		CheckRuns []struct {
-			Conclusion string `json:"conclusion"`
-		} `json:"check_runs"`
-	}
-	if err := githubGetJSON(ctx, token, url, &raw); err != nil {
-		return checkSummary{}, fmt.Errorf("GitHub checks for %s unavailable: %w", shortSHA(sha), err)
-	}
 	var summary checkSummary
-	for _, item := range raw.CheckRuns {
-		conclusion := strings.ToLower(strings.TrimSpace(item.Conclusion))
-		if conclusion == "" {
-			continue
+	for page := 1; ; page++ {
+		url := fmt.Sprintf("%s/repos/%s/%s/commits/%s/check-runs?per_page=100&page=%d", githubAPIBaseURL, owner, repo, sha, page)
+		var raw struct {
+			CheckRuns []struct {
+				Conclusion string `json:"conclusion"`
+			} `json:"check_runs"`
 		}
-		summary.total++
-		switch conclusion {
-		case "success", "neutral", "skipped":
-			summary.successful++
-		default:
-			summary.failed++
+		if err := githubGetJSON(ctx, token, url, &raw); err != nil {
+			return checkSummary{}, fmt.Errorf("GitHub checks for %s unavailable: %w", shortSHA(sha), err)
+		}
+		for _, item := range raw.CheckRuns {
+			conclusion := strings.ToLower(strings.TrimSpace(item.Conclusion))
+			if conclusion == "" {
+				continue
+			}
+			summary.total++
+			switch conclusion {
+			case "success", "neutral", "skipped":
+				summary.successful++
+			default:
+				summary.failed++
+			}
+		}
+		if len(raw.CheckRuns) < 100 {
+			break
 		}
 	}
 	return summary, nil

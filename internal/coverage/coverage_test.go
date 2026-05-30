@@ -175,6 +175,21 @@ end_of_record
 	}
 }
 
+func TestParseFilesReportsScannerErrors(t *testing.T) {
+	repo := t.TempDir()
+	cover := filepath.Join(repo, "coverage.out")
+	longLine := "mode: set\n" + strings.Repeat("x", maxCoverageLineBytes+1)
+	if err := os.WriteFile(cover, []byte(longLine), 0o600); err != nil {
+		t.Fatal(err)
+	}
+
+	_, err := ParseFiles([]string{cover}, FormatGo, repo)
+
+	if err == nil || !strings.Contains(err.Error(), "parse go coverage") {
+		t.Fatalf("ParseFiles() error = %v, want scanner parse error", err)
+	}
+}
+
 func TestChangedLineCoverageUnknownWhenNoRecordsMatch(t *testing.T) {
 	report := Report{Files: map[string]File{
 		"src/app.ts": {Lines: map[int]bool{1: true}},

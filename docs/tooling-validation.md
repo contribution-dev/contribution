@@ -6,8 +6,8 @@ This repo uses Go for product code and Node/pnpm for repository automation.
 
 - Product code builds with Go 1.26.3.
 - Repository automation runs on Node.js 24 LTS with pnpm 11.4.0.
-  `pnpm tools:preflight` enforces Node.js `>=24.16.0 <25`, pnpm `>=11.4.0`,
-  and Go `>=1.26.3`.
+  `pnpm tools:check` enforces Node.js `>=24.16.0 <25`, pnpm `>=11.4.0`, and
+  Go `>=1.26.3`.
 - `scripts/with-tools` sources `scripts/codex-env.sh`, which uses `.nvmrc`
   through `fnm` when `fnm` is installed. Prefer `scripts/with-tools pnpm ...`
   in shells that are not already on the repo's Node version.
@@ -22,7 +22,7 @@ This repo uses Go for product code and Node/pnpm for repository automation.
   them without reinstalling. The CLI checks repo-local `.tools/` paths after
   `PATH`; use `scripts/with-tools ...` or source `scripts/codex-env.sh` when
   you also want the shell and package scripts on the repo toolchain. The
-  `pnpm tools:preflight` command reports missing analyzer tools with that
+  `pnpm tools:check` command reports missing analyzer tools with that
   bootstrap command.
 - For AGENTS or policy-doc changes, run `pnpm agents:check`.
 - Use `pnpm validate:final` for full-gate verification or release-sensitive
@@ -43,8 +43,8 @@ This repo uses Go for product code and Node/pnpm for repository automation.
 - Review severity parsing and rank comparisons are centralized in
   `scripts/lib/review-severity.mjs`; control-plane and risk-policy scripts
   should import that helper instead of carrying local rank tables.
-- On macOS, `pnpm tools:preflight` is the normal bootstrap and recovery
-  entrypoint for durable review workers.
+- On macOS, `pnpm tools:check` verifies durable review workers without changing
+  launchd state.
 - `pnpm review:status` is the default operator status view. It includes a
   worker-health line; an active queue item with no running Codex worker is
   `unhealthy` after the warmup threshold and should be followed by
@@ -86,8 +86,8 @@ pnpm built-in command, not a repo script.
 ## Benchmarks
 
 Use `pnpm bench` to run the repository benchmark suite. Benchmarks currently
-cover Git inventory, scoring, report bundle generation, and preflight report
-construction.
+cover Git inventory, receipt generation, report bundle generation, and
+preflight report construction.
 
 ## Changed-aware commands
 

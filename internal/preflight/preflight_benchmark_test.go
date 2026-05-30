@@ -10,7 +10,7 @@ import (
 	"github.com/contribution-dev/contribution/internal/signals"
 )
 
-func BenchmarkBuildWithPersonal(b *testing.B) {
+func BenchmarkBuild(b *testing.B) {
 	diff := gitrepo.DiffSummary{
 		FileSummary: signals.FileSummary{
 			TotalFiles:  80,
@@ -41,18 +41,17 @@ func BenchmarkBuildWithPersonal(b *testing.B) {
 	b.ReportAllocs()
 	b.ResetTimer()
 	for i := 0; i < b.N; i++ {
-		report := BuildWithPersonal(
-			signals.RepoMetadata{ID: "local:bench", Name: "bench"},
-			"main",
-			"HEAD",
-			diff,
-			signals.PreflightCoverage{Status: "available", CoveredLines: 650, TotalLines: 900, Percent: 72.2},
-			config.PreflightConfig{MaxFiles: 40, MaxLines: 800, RequireTestsForSource: true, ChangedLineCoverageMin: 80},
-			personal,
-			signals.ToolingReport{},
-			nil,
-			now,
-		)
+		report := Build(BuildInput{
+			Repo:     signals.RepoMetadata{ID: "local:bench", Name: "bench"},
+			Base:     "main",
+			Head:     "HEAD",
+			Diff:     diff,
+			Coverage: signals.PreflightCoverage{Status: "available", CoveredLines: 650, TotalLines: 900, Percent: 72.2},
+			Policy:   config.PreflightConfig{MaxFiles: 40, MaxLines: 800, RequireTestsForSource: true, ChangedLineCoverageMin: 80},
+			Personal: personal,
+			Tooling:  signals.ToolingReport{},
+			Now:      now,
+		})
 		if report.Version != 2 {
 			b.Fatalf("Version = %d, want 2", report.Version)
 		}

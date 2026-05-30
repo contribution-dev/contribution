@@ -34,7 +34,6 @@ import {
 
 export { ZERO_SHA, computeOutgoingShas, parseRefUpdates };
 
-export const REVIEW_DISMISSALS_SCHEMA_VERSION = 1;
 export const REVIEW_OPERATOR_STATE_SCHEMA_VERSION = 1;
 export const REVIEWED_SHAS_SCHEMA_VERSION = 5;
 const REVIEWED_LANES = ["codex"];

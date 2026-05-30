@@ -26,8 +26,7 @@ help:
 		'  ci         Run the local CI gate'
 
 build:
-	mkdir -p bin
-	$(GO) build -trimpath -o bin/$(BINARY) ./cmd/contribution
+	scripts/build-cli
 
 test:
 	$(GO) test $(PKG)

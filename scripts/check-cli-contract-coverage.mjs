@@ -2,13 +2,13 @@
 
 import { readFileSync } from "node:fs";
 import { getChangedFiles } from "./lib/changed-files.mjs";
+import {
+  isCliContractCoveragePath,
+  isCliContractPath,
+} from "./lib/contract-sensitive-domains.mjs";
 
 function normalizePath(value) {
   return String(value ?? "").replaceAll("\\", "/");
-}
-
-function hasAnyPrefix(file, prefixes) {
-  return prefixes.some((prefix) => file.startsWith(prefix));
 }
 
 function parseArgs(argv) {
@@ -62,43 +62,6 @@ function readFilesFromList(path) {
     .filter(Boolean);
 }
 
-function isCliFacingPath(file) {
-  if (
-    hasAnyPrefix(file, [
-      "cmd/contribution/",
-      "internal/cli/",
-      "internal/report/",
-      "internal/git/",
-      "internal/config/",
-    ])
-  ) {
-    return true;
-  }
-  return [
-    ".goreleaser.yml",
-    "README.md",
-    "docs/prd-cli.md",
-    "docs/product-architecture.md",
-    "docs/cli-contract.md",
-    "docs/reference/architecture.md",
-  ].includes(file);
-}
-
-function isCoveragePath(file) {
-  if (/^internal\/.*_test\.go$/u.test(file)) {
-    return true;
-  }
-  return [
-    "scripts/dogfood-cli.mjs",
-    "scripts/check-cli-contract-coverage.mjs",
-    "docs/cli-contract.md",
-    "docs/reference/architecture.md",
-    ".github/workflows/ci.yml",
-    ".github/workflows/release.yml",
-    "docs/tooling-validation.md",
-  ].includes(file);
-}
-
 function main() {
   const args = parseArgs(process.argv.slice(2));
   if (args.files.length > 0 && args.filesFrom) {
@@ -111,14 +74,14 @@ function main() {
         ? readFilesFromList(args.filesFrom)
         : getChangedFiles({ explicitBase: args.base }).files;
   const normalized = files.map(normalizePath).filter(Boolean);
-  const cliFacing = normalized.filter(isCliFacingPath);
+  const cliFacing = normalized.filter(isCliContractPath);
 
   if (cliFacing.length === 0) {
     console.log("CLI contract coverage check passed: no CLI-facing changes.");
     return;
   }
 
-  const coverage = normalized.filter(isCoveragePath);
+  const coverage = normalized.filter(isCliContractCoveragePath);
   if (coverage.length > 0) {
     console.log(
       `CLI contract coverage check passed: ${coverage.length} coverage artifact(s) changed.`,

@@ -198,4 +198,4 @@ install_osv_scanner
 install_trivy
 check_tools
 
-printf '\nOptional analyzer install step finished. Run `pnpm tools:preflight` to verify availability.\n'
+printf '\nOptional analyzer install step finished. Run `pnpm tools:check` to verify availability.\n'

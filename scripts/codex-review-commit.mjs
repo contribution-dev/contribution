@@ -201,10 +201,75 @@ function stripAnsiControl(value) {
   );
 }
 
+function findJsonObjectEnd(text, start) {
+  let depth = 0;
+  let inString = false;
+  let escaped = false;
+  for (let index = start; index < text.length; index += 1) {
+    const char = text[index];
+    if (inString) {
+      if (escaped) {
+        escaped = false;
+      } else if (char === "\\") {
+        escaped = true;
+      } else if (char === '"') {
+        inString = false;
+      }
+      continue;
+    }
+    if (char === '"') {
+      inString = true;
+      continue;
+    }
+    if (char === "{") {
+      depth += 1;
+      continue;
+    }
+    if (char === "}") {
+      depth -= 1;
+      if (depth === 0) {
+        return index;
+      }
+    }
+  }
+  return -1;
+}
+
+function parseReviewOutputCandidate(candidate) {
+  try {
+    const parsed = JSON.parse(candidate);
+    if (isReviewOutputPayload(parsed)) {
+      return formatReviewOutputPayload(parsed);
+    }
+  } catch {}
+  return "";
+}
+
 export function extractCodexReviewOutput(outputText) {
-  const lines = String(outputText ?? "")
+  const transcript = stripAnsiControl(String(outputText ?? ""));
+  const schemaPattern = /"schema_version"\s*:\s*\d+/gu;
+  const schemaMatches = [...transcript.matchAll(schemaPattern)];
+  for (let index = schemaMatches.length - 1; index >= 0; index -= 1) {
+    const match = schemaMatches[index];
+    const start = transcript.lastIndexOf("{", match.index);
+    if (start < 0) {
+      continue;
+    }
+    const end = findJsonObjectEnd(transcript, start);
+    if (end < 0) {
+      continue;
+    }
+    const recovered = parseReviewOutputCandidate(
+      transcript.slice(start, end + 1),
+    );
+    if (recovered) {
+      return recovered;
+    }
+  }
+
+  const lines = transcript
     .split(/[\r\n]+/u)
-    .map((line) => stripAnsiControl(line).trim())
+    .map((line) => line.trim())
     .filter(Boolean);
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const line = lines[index];
@@ -218,12 +283,10 @@ export function extractCodexReviewOutput(outputText) {
       start = line.lastIndexOf("{", start - 1)
     ) {
       const candidate = line.slice(start, end + 1);
-      try {
-        const parsed = JSON.parse(candidate);
-        if (isReviewOutputPayload(parsed)) {
-          return formatReviewOutputPayload(parsed);
-        }
-      } catch {}
+      const recovered = parseReviewOutputCandidate(candidate);
+      if (recovered) {
+        return recovered;
+      }
     }
   }
   return "";

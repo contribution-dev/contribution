@@ -174,12 +174,20 @@ test("commit review recovers final JSON from codex stdout", () => {
       "42,000",
       '{"schema_version":2,"summary":"final","findings":[{"severity":"major"}]}',
     ].join("\r");
+    const singleLineTranscript = [
+      'codex {"schema_version":2,"summary":"early","findings":[]}',
+      'tokens used 42,000 {"schema_version":2,"summary":"final","findings":[{"severity":"major"}]}',
+    ].join(" ");
     assert.equal(
       extractCodexReviewOutput(transcript),
       '{\n  "schema_version": 2,\n  "summary": "final",\n  "findings": [\n    {\n      "severity": "major"\n    }\n  ]\n}\n',
     );
     assert.equal(
       extractCodexReviewOutput(carriageTranscript),
+      '{\n  "schema_version": 2,\n  "summary": "final",\n  "findings": [\n    {\n      "severity": "major"\n    }\n  ]\n}\n',
+    );
+    assert.equal(
+      extractCodexReviewOutput(singleLineTranscript),
       '{\n  "schema_version": 2,\n  "summary": "final",\n  "findings": [\n    {\n      "severity": "major"\n    }\n  ]\n}\n',
     );
     assert.equal(

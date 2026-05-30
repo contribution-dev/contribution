@@ -4,7 +4,10 @@ import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { processLineReferencesRepoRoot } from "./codex-review-status";
-import { codexExecSucceeded } from "./codex-review-commit.mjs";
+import {
+  codexExecSucceeded,
+  extractCodexReviewOutput,
+} from "./codex-review-commit.mjs";
 
 test("hooks enqueue commit review and gate pushes", () => {
   const postCommit = readFileSync(".husky/post-commit", "utf8");
@@ -142,6 +145,30 @@ test("commit review accepts final output despite non-zero codex exit", () => {
       }),
       false,
     );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
+});
+
+test("commit review recovers final JSON from codex stdout", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "contribution-codex-output-"));
+  try {
+    const outputPath = path.join(dir, "review.json");
+    const transcript = [
+      "codex",
+      '{"schema_version":2,"summary":"early","findings":[]}',
+      "tokens used",
+      '{"schema_version":2,"summary":"final","findings":[{"severity":"major"}]}',
+    ].join("\n");
+    assert.equal(
+      extractCodexReviewOutput(transcript),
+      '{\n  "schema_version": 2,\n  "summary": "final",\n  "findings": [\n    {\n      "severity": "major"\n    }\n  ]\n}\n',
+    );
+    assert.equal(
+      codexExecSucceeded({ code: 1, outputPath, outputText: transcript }),
+      true,
+    );
+    assert.match(readFileSync(outputPath, "utf8"), /"summary": "final"/);
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }

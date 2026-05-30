@@ -7,6 +7,7 @@ import {
   readFileSync,
   rmSync,
   symlinkSync,
+  writeFileSync,
 } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
@@ -186,14 +187,63 @@ function hasUsableCodexOutput(outputPath) {
   }
 }
 
+function isReviewOutputPayload(value) {
+  return (
+    value &&
+    typeof value === "object" &&
+    !Array.isArray(value) &&
+    Number(value.schema_version) > 0 &&
+    Array.isArray(value.findings)
+  );
+}
+
+export function extractCodexReviewOutput(outputText) {
+  const lines = String(outputText ?? "")
+    .split(/\r?\n/u)
+    .map((line) => line.trim())
+    .filter(Boolean);
+  for (let index = lines.length - 1; index >= 0; index -= 1) {
+    const line = lines[index];
+    if (!line.startsWith("{") || !line.endsWith("}")) {
+      continue;
+    }
+    try {
+      const parsed = JSON.parse(line);
+      if (isReviewOutputPayload(parsed)) {
+        return `${JSON.stringify(parsed, null, 2)}\n`;
+      }
+    } catch {}
+  }
+  return "";
+}
+
+function recoverCodexReviewOutput(outputPath, outputText) {
+  if (hasUsableCodexOutput(outputPath)) {
+    return true;
+  }
+  const recovered = extractCodexReviewOutput(outputText);
+  if (!recovered) {
+    return false;
+  }
+  try {
+    writeFileSync(outputPath, recovered);
+    return true;
+  } catch {
+    return false;
+  }
+}
+
 export function codexExecSucceeded({
   spawnError = null,
   timedOut = false,
   code = null,
   outputPath = "",
+  outputText = "",
 } = {}) {
   return (
-    !spawnError && !timedOut && (code === 0 || hasUsableCodexOutput(outputPath))
+    !spawnError &&
+    !timedOut &&
+    (code === 0 || recoverCodexReviewOutput(outputPath, outputText))
   );
 }
 
@@ -497,6 +547,7 @@ async function runCodexExec({
           timedOut,
           code,
           outputPath,
+          outputText,
         }),
         errorCode,
         outputText,

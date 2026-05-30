@@ -48,10 +48,11 @@ This repo uses Go for product code and Node/pnpm for repository automation.
   tools, and runtime rules disabled. The review prompt injects the applicable
   repo instructions, so local agent skills, config, plugins, and MCP auth state
   must not affect gate evidence generation.
-- If Codex exits non-zero after writing the requested final output file, the
-  review wrapper still parses that file as the source of truth. A valid schema
-  response is review evidence; malformed output is reported as invalid output
-  instead of a generic subprocess failure.
+- If Codex exits non-zero after producing the requested final JSON, the review
+  wrapper still parses that response as the source of truth, whether it was
+  written to the `-o` file or recovered from stdout. A valid schema response is
+  review evidence; malformed output is reported as invalid output instead of a
+  generic subprocess failure.
 - Risk-policy finding limits use a bounded default when `MAX_FINDINGS` or
   `--max-findings` is missing, invalid, or too large, so malformed inputs must
   not suppress all actionable review findings.

@@ -1059,20 +1059,6 @@ export async function executePushGate({
       break;
     }
 
-    // Only evaluate pushed tip SHAs. Older outgoing commits are superseded by tip state.
-    if (!pushTipShas.has(sha)) {
-      continue;
-    }
-
-    const waitResult = await waitForReview({
-      reviewsDir,
-      sha,
-      timeoutMs,
-    });
-    if (waitResult.waited) {
-      runningWaited += 1;
-    }
-
     const scopeBranches = getScopeBranchesForSha(sha);
     const branchStates = await Promise.all(
       scopeBranches.map((branchName) => getBranchState(branchName)),
@@ -1088,6 +1074,44 @@ export async function executePushGate({
       }
     }
     let state = await readReviewState({
+      reviewsDir,
+      sha,
+      minSeverity,
+      dismissedSignatures,
+    });
+
+    // Only pushed tips require fresh, complete review evidence. Older outgoing
+    // commits still block when they already have unresolved findings, but stale
+    // missing/infra/partial state should not stall the final push.
+    if (!pushTipShas.has(sha)) {
+      const threshold = parseMinSeverity(minSeverity);
+      if (
+        state.hasReportArtifact &&
+        state.findingsCount > 0 &&
+        severityRank(state.worstSeverity) >= severityRank(threshold)
+      ) {
+        actionable += 1;
+        blocked.push({
+          sha,
+          status: state.reviewStatus || "unknown",
+          severity: state.worstSeverity,
+          findings: state.findingsCount,
+          reason: `severity-threshold-${threshold}`,
+        });
+      }
+      continue;
+    }
+
+    const waitResult = await waitForReview({
+      reviewsDir,
+      sha,
+      timeoutMs,
+    });
+    if (waitResult.waited) {
+      runningWaited += 1;
+    }
+
+    state = await readReviewState({
       reviewsDir,
       sha,
       minSeverity,

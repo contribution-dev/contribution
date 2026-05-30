@@ -34,9 +34,9 @@ This repo uses Go for product code and Node/pnpm for repository automation.
 
 - `post-commit` enqueues every local commit for Codex review.
 - `pre-push` waits for required review evidence on pushed branch tips and
-  blocks unresolved major or blocker findings. Older outgoing commits are
-  superseded by tip state; they can still be reviewed asynchronously without
-  blocking the push gate.
+  blocks unresolved major or blocker findings. Older outgoing commits do not
+  require fresh complete review evidence before push, but any already-known
+  unresolved major or blocker finding on them still blocks the gate.
 - Codex review is the only active review lane. Do not add dormant lane plumbing
   without a runnable producer, gate, and tests.
 - Review state is canonical under `.code-reviews` with Codex queue jobs in
@@ -56,7 +56,8 @@ This repo uses Go for product code and Node/pnpm for repository automation.
   review evidence; malformed output is reported as invalid output instead of a
   generic subprocess failure. Each retry attempt clears the pass output file
   before spawning Codex so stale output from an earlier attempt cannot satisfy
-  the gate.
+  the gate, and stdout recovery handles newline or carriage-return transcript
+  framing.
 - Risk-policy finding limits use a bounded default when `MAX_FINDINGS` or
   `--max-findings` is missing, invalid, or too large, so malformed inputs must
   not suppress all actionable review findings.

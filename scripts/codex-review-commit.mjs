@@ -203,23 +203,28 @@ function stripAnsiControl(value) {
 
 export function extractCodexReviewOutput(outputText) {
   const lines = String(outputText ?? "")
-    .split(/\r?\n/u)
+    .split(/[\r\n]+/u)
     .map((line) => stripAnsiControl(line).trim())
     .filter(Boolean);
   for (let index = lines.length - 1; index >= 0; index -= 1) {
     const line = lines[index];
-    const start = line.indexOf("{");
     const end = line.lastIndexOf("}");
-    if (start < 0 || end <= start) {
+    if (end < 0) {
       continue;
     }
-    const candidate = line.slice(start, end + 1);
-    try {
-      const parsed = JSON.parse(candidate);
-      if (isReviewOutputPayload(parsed)) {
-        return formatReviewOutputPayload(parsed);
-      }
-    } catch {}
+    for (
+      let start = line.lastIndexOf("{", end);
+      start >= 0;
+      start = line.lastIndexOf("{", start - 1)
+    ) {
+      const candidate = line.slice(start, end + 1);
+      try {
+        const parsed = JSON.parse(candidate);
+        if (isReviewOutputPayload(parsed)) {
+          return formatReviewOutputPayload(parsed);
+        }
+      } catch {}
+    }
   }
   return "";
 }

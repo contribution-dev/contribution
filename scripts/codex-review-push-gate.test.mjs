@@ -30,7 +30,7 @@ function cleanReviewState(overrides = {}) {
   };
 }
 
-test("push gate skips blocking non-tip outgoing commits", async () => {
+test("push gate blocks known non-tip findings without waiting on review completion", async () => {
   const repoRoot = await mkdtemp(path.join(tmpdir(), "push-gate-repo-"));
   const reviewsDir = path.join(repoRoot, ".code-reviews");
   try {
@@ -56,6 +56,45 @@ test("push gate skips blocking non-tip outgoing commits", async () => {
               blocking: true,
               worstSeverity: "blocker",
               findingsCount: 1,
+            })
+          : cleanReviewState(),
+    });
+
+    assert.equal(result.summary.shas, 2);
+    assert.equal(result.summary.blocked, 1);
+    assert.equal(result.blocked[0].sha, SHA_A);
+  } finally {
+    await rm(repoRoot, { recursive: true, force: true });
+  }
+});
+
+test("push gate skips incomplete non-tip reviews without findings", async () => {
+  const repoRoot = await mkdtemp(path.join(tmpdir(), "push-gate-repo-"));
+  const reviewsDir = path.join(repoRoot, ".code-reviews");
+  try {
+    const result = await executePushGate({
+      repoRoot,
+      reviewsDir,
+      stdinText: "",
+      pushContext: {
+        outgoingShas: [SHA_A, SHA_B],
+        pushTipShas: [SHA_B],
+        headBranchName: "feature",
+        pushedBranchNames: ["feature"],
+        shaBranches: {
+          [SHA_A]: ["feature"],
+          [SHA_B]: ["feature"],
+        },
+      },
+      waitForReview: async () => ({ waited: false, timedOut: false }),
+      readReviewState: async ({ sha }) =>
+        sha === SHA_A
+          ? cleanReviewState({
+              actionable: true,
+              incomplete: true,
+              blocking: true,
+              reviewStatus: "partial_success",
+              failureReason: "exec_failed",
             })
           : cleanReviewState(),
     });

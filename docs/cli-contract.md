@@ -33,6 +33,18 @@ lives in Go tests and `scripts/dogfood-cli.mjs`.
   not publish profiles, render OpenGraph images, call X or Discord APIs, track
   social mentions, run reply workers, or store hosted social state.
 
+## Install and Invocation
+
+- The documented source install path is
+  `go install github.com/contribution-dev/contribution/cmd/contribution@latest`.
+  Source installs may report development linker metadata, but
+  `contribution version` must still be a valid install verification command.
+- `contribution` is installed once on the user's machine and can run against any
+  local Git repository. Commands that inspect the current worktree, such as
+  `doctor` and `preflight --worktree`, expect to run inside the target Git repo.
+- Commands with an explicit repo option, such as `analyze --repo`, must work
+  from outside the target repository when given a local repo path.
+
 ## Commands
 
 | Command           | Contract                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Required coverage                                       |

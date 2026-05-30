@@ -9,16 +9,44 @@ social APIs, or store hosted state.
 
 ## Install
 
-Install the CLI directly from GitHub with Go:
+First, check whether Go is installed:
+
+```bash
+go version
+```
+
+Expected output looks like:
+
+```text
+go version go1.26.3 darwin/arm64
+```
+
+If you see `command not found: go`, install Go first. On macOS with Homebrew:
+
+```bash
+brew install go
+```
+
+Or use the official installer for your platform from
+[go.dev/doc/install](https://go.dev/doc/install). After installing Go, open a
+new terminal and rerun `go version`.
+
+Then install the CLI directly from GitHub:
 
 ```bash
 go install github.com/contribution-dev/contribution/cmd/contribution@latest
 ```
 
-Make sure Go's install directory is on your `PATH`:
+Make sure Go's binary install directory is on your `PATH`:
 
 ```bash
 export PATH="$(go env GOPATH)/bin:$PATH"
+```
+
+To make that persistent in zsh:
+
+```bash
+echo 'export PATH="$(go env GOPATH)/bin:$PATH"' >> ~/.zshrc
 ```
 
 Verify the install:

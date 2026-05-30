@@ -3,6 +3,7 @@
 import { readdir, stat } from "node:fs/promises";
 import { spawnSync } from "node:child_process";
 import path from "node:path";
+import { pathToFileURL } from "node:url";
 import { collectLiveBacklogArtifacts } from "./lib/codex-review-backlog-artifacts.mjs";
 import {
   collectLaneReportOutcomes,
@@ -106,6 +107,30 @@ function readProcessLines(columns) {
   return [];
 }
 
+function processArgumentTokens(line) {
+  const args = String(line ?? "")
+    .trim()
+    .replace(/^\d+\s+\S+\s+/, "");
+  return args.split(/\s+/).filter(Boolean);
+}
+
+export function processLineReferencesRepoRoot(line, repoRoot) {
+  const repoRootValue = String(repoRoot ?? "").trim();
+  if (!repoRootValue) {
+    return false;
+  }
+  const normalizedRepoRoot = path.resolve(repoRootValue);
+  const repoProcessPaths = [
+    path.join(normalizedRepoRoot, "scripts", "codex-review-worker"),
+    path.join(normalizedRepoRoot, "scripts", "codex-review-commit"),
+    path.join(normalizedRepoRoot, "scripts", "codex-review-launchctl"),
+    path.join(normalizedRepoRoot, ".code-reviews"),
+  ];
+  return processArgumentTokens(line).some((token) =>
+    repoProcessPaths.some((repoProcessPath) => token === repoProcessPath),
+  );
+}
+
 function processSnapshot(
   repoRoot,
   filterSha = "",
@@ -117,7 +142,9 @@ function processSnapshot(
     ) {
       return false;
     }
-    if (requireRepoRoot && !line.includes(repoRoot)) return false;
+    if (requireRepoRoot && !processLineReferencesRepoRoot(line, repoRoot)) {
+      return false;
+    }
     if (!filterSha) return true;
     return line.includes(filterSha);
   });
@@ -432,7 +459,11 @@ async function main() {
   } while (true);
 }
 
-main().catch((error) => {
-  console.error(`[codex-review-status] Failed: ${error.message}`);
-  process.exit(1);
-});
+if (
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1] ?? "")).href
+) {
+  main().catch((error) => {
+    console.error(`[codex-review-status] Failed: ${error.message}`);
+    process.exit(1);
+  });
+}

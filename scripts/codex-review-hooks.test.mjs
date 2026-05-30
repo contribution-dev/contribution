@@ -1,6 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
+import { processLineReferencesRepoRoot } from "./codex-review-status";
 
 test("hooks enqueue commit review and gate pushes", () => {
   const postCommit = readFileSync(".husky/post-commit", "utf8");
@@ -42,7 +43,7 @@ test("review status reports active-without-worker health", () => {
 
 test("review status process fallback is scoped to the repo root", () => {
   const status = readFileSync("scripts/codex-review-status", "utf8");
-  assert.match(status, /requireRepoRoot && !line\.includes\(repoRoot\)/);
+  assert.match(status, /processLineReferencesRepoRoot\(line, repoRoot\)/);
   assert.match(
     status,
     /processSnapshot\(repoRoot, filterSha, \{\s+requireRepoRoot: true,/,
@@ -50,6 +51,31 @@ test("review status process fallback is scoped to the repo root", () => {
   assert.match(
     status,
     /hasRunningLaunchctlWorkers\(launchctlLines\)\s+\? launchctlLines\s+: repoWorkerProcesses/,
+  );
+});
+
+test("review status repo process matching rejects sibling path prefixes", () => {
+  const repoRoot = "/Users/gabe/Sites/contribution";
+  assert.equal(
+    processLineReferencesRepoRoot(
+      `123 00:01 /node ${repoRoot}/scripts/codex-review-worker --lane codex --reviews-dir ${repoRoot}/.code-reviews`,
+      repoRoot,
+    ),
+    true,
+  );
+  assert.equal(
+    processLineReferencesRepoRoot(
+      `124 00:01 /node ${repoRoot}-website/scripts/codex-review-worker --lane codex --reviews-dir ${repoRoot}-website/.code-reviews`,
+      repoRoot,
+    ),
+    false,
+  );
+  assert.equal(
+    processLineReferencesRepoRoot(
+      `125 00:01 /SkyComputerUseClient turn-ended {"cwd":"${repoRoot}","message":"codex-review-worker --lane codex"}`,
+      repoRoot,
+    ),
+    false,
   );
 });
 

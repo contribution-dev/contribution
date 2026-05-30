@@ -106,13 +106,18 @@ function readProcessLines(columns) {
   return [];
 }
 
-function processSnapshot(filterSha = "") {
+function processSnapshot(
+  repoRoot,
+  filterSha = "",
+  { requireRepoRoot = false } = {},
+) {
   const lines = readProcessLines("pid=,etime=,args=").filter((line) => {
     if (
       !/codex-review-worker|codex-review-commit|git push|launchctl/.test(line)
     ) {
       return false;
     }
+    if (requireRepoRoot && !line.includes(repoRoot)) return false;
     if (!filterSha) return true;
     return line.includes(filterSha);
   });
@@ -299,10 +304,13 @@ async function renderStatus(
   const stale = await collectStaleActiveJobs(reviewsDir);
   const reports = await recentReports(reviewsDir, filterSha);
   const launchctlLines = readLaunchctlWorkerStatus(repoRoot);
-  const workerProcesses = processSnapshot(filterSha);
+  const workerProcesses = processSnapshot(repoRoot, filterSha);
+  const repoWorkerProcesses = processSnapshot(repoRoot, filterSha, {
+    requireRepoRoot: true,
+  });
   const workerCountLines = hasRunningLaunchctlWorkers(launchctlLines)
     ? launchctlLines
-    : workerProcesses;
+    : repoWorkerProcesses;
   const processLines =
     !filterSha && workerProcesses.length === 0 && launchctlLines.length > 0
       ? launchctlLines

@@ -40,6 +40,19 @@ test("review status reports active-without-worker health", () => {
   assert.match(status, /run_pnpm_review_recover/);
 });
 
+test("review status process fallback is scoped to the repo root", () => {
+  const status = readFileSync("scripts/codex-review-status", "utf8");
+  assert.match(status, /requireRepoRoot && !line\.includes\(repoRoot\)/);
+  assert.match(
+    status,
+    /processSnapshot\(repoRoot, filterSha, \{\s+requireRepoRoot: true,/,
+  );
+  assert.match(
+    status,
+    /hasRunningLaunchctlWorkers\(launchctlLines\)\s+\? launchctlLines\s+: repoWorkerProcesses/,
+  );
+});
+
 test("review package scripts use the repo tool bootstrap", () => {
   const pkg = JSON.parse(readFileSync("package.json", "utf8"));
   for (const name of [

@@ -128,6 +128,8 @@ test("commit review accepts final output despite non-zero codex exit", () => {
       '{"schema_version":2,"summary":"","findings":[]}\n',
     );
     assert.equal(codexExecSucceeded({ code: 1, outputPath }), true);
+    writeFileSync(outputPath, "not json\n");
+    assert.equal(codexExecSucceeded({ code: 1, outputPath }), false);
     assert.equal(codexExecSucceeded({ code: 1, outputPath: "" }), false);
     assert.equal(
       codexExecSucceeded({ code: 0, outputPath: path.join(dir, "missing") }),
@@ -148,6 +150,11 @@ test("commit review accepts final output despite non-zero codex exit", () => {
   } finally {
     rmSync(dir, { recursive: true, force: true });
   }
+});
+
+test("commit review clears stale output before each codex attempt", () => {
+  const commitReview = readFileSync("scripts/codex-review-commit.mjs", "utf8");
+  assert.match(commitReview, /rmSync\(outputPath,\s*{\s*force:\s*true\s*}\)/);
 });
 
 test("commit review recovers final JSON from codex stdout", () => {

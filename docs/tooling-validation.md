@@ -52,7 +52,9 @@ This repo uses Go for product code and Node/pnpm for repository automation.
   wrapper still parses that response as the source of truth, whether it was
   written to the `-o` file or recovered from stdout. A valid schema response is
   review evidence; malformed output is reported as invalid output instead of a
-  generic subprocess failure.
+  generic subprocess failure. Each retry attempt clears the pass output file
+  before spawning Codex so stale output from an earlier attempt cannot satisfy
+  the gate.
 - Risk-policy finding limits use a bounded default when `MAX_FINDINGS` or
   `--max-findings` is missing, invalid, or too large, so malformed inputs must
   not suppress all actionable review findings.

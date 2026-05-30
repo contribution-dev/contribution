@@ -179,14 +179,6 @@ function createIsolatedCodexHome(env) {
   };
 }
 
-function hasUsableCodexOutput(outputPath) {
-  try {
-    return readFileSync(outputPath, "utf8").trim() !== "";
-  } catch {
-    return false;
-  }
-}
-
 function isReviewOutputPayload(value) {
   return (
     value &&
@@ -195,6 +187,10 @@ function isReviewOutputPayload(value) {
     Number(value.schema_version) > 0 &&
     Array.isArray(value.findings)
   );
+}
+
+function formatReviewOutputPayload(value) {
+  return `${JSON.stringify(value, null, 2)}\n`;
 }
 
 function stripAnsiControl(value) {
@@ -221,11 +217,33 @@ export function extractCodexReviewOutput(outputText) {
     try {
       const parsed = JSON.parse(candidate);
       if (isReviewOutputPayload(parsed)) {
-        return `${JSON.stringify(parsed, null, 2)}\n`;
+        return formatReviewOutputPayload(parsed);
       }
     } catch {}
   }
   return "";
+}
+
+function normalizeCodexReviewOutput(outputText) {
+  const trimmed = String(outputText ?? "").trim();
+  if (!trimmed) {
+    return "";
+  }
+  try {
+    const parsed = JSON.parse(trimmed);
+    if (isReviewOutputPayload(parsed)) {
+      return formatReviewOutputPayload(parsed);
+    }
+  } catch {}
+  return extractCodexReviewOutput(trimmed);
+}
+
+function hasUsableCodexOutput(outputPath) {
+  try {
+    return normalizeCodexReviewOutput(readFileSync(outputPath, "utf8")) !== "";
+  } catch {
+    return false;
+  }
 }
 
 function recoverCodexReviewOutput(outputPath, outputText) {
@@ -476,6 +494,9 @@ async function runCodexExec({
 }) {
   return await new Promise((resolve) => {
     const isolatedCodexHome = createIsolatedCodexHome(env);
+    if (outputPath) {
+      rmSync(outputPath, { force: true });
+    }
     const args = [
       "-a",
       "never",

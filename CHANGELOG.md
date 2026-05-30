@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Discover repo-local optional analyzer tools from `.tools/` during `doctor`,
+  `analyze`, and `preflight`, keep zero-PR GitHub metadata runs at local-only
+  confidence, and make `pnpm review:queue:backlog` a read-only status command
+  when run without action flags.
 - Add `preflight --run-coverage` to run the configured `coverage.command`
   without shell expansion before importing changed-line coverage.
 - Add pinned `pnpm tools:install:optional` and `pnpm tools:optional:check`

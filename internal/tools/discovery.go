@@ -5,7 +5,9 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
+	"path/filepath"
 	"strings"
 	"time"
 
@@ -14,6 +16,15 @@ import (
 
 // Discover checks runtime tools and records graceful degradation.
 func Discover(ctx context.Context, includeOptional bool, createdAt time.Time) signals.ToolingReport {
+	return discover(ctx, includeOptional, createdAt, "")
+}
+
+// DiscoverForRepo checks runtime tools, including repo-local optional tools.
+func DiscoverForRepo(ctx context.Context, includeOptional bool, createdAt time.Time, repoPath string) signals.ToolingReport {
+	return discover(ctx, includeOptional, createdAt, repoPath)
+}
+
+func discover(ctx context.Context, includeOptional bool, createdAt time.Time, repoPath string) signals.ToolingReport {
 	defs := []struct {
 		name     string
 		required bool
@@ -22,10 +33,10 @@ func Discover(ctx context.Context, includeOptional bool, createdAt time.Time) si
 	}{
 		{name: "git", required: true, args: []string{"--version"}, fix: "Install git and ensure it is on PATH."},
 		{name: "scc", args: []string{"--version"}, fix: "Install scc for richer language inventory."},
-		{name: "semgrep", args: []string{"--version"}, fix: "Install semgrep for static analysis signals."},
-		{name: "gitleaks", args: []string{"version"}, fix: "Install gitleaks for secret scanning signals."},
-		{name: "osv-scanner", args: []string{"--version"}, fix: "Install osv-scanner for dependency vulnerability signals."},
-		{name: "trivy", args: []string{"--version"}, fix: "Install trivy for filesystem or container vulnerability signals."},
+		{name: "semgrep", args: []string{"--version"}, fix: optionalToolFix("semgrep")},
+		{name: "gitleaks", args: []string{"version"}, fix: optionalToolFix("gitleaks")},
+		{name: "osv-scanner", args: []string{"--version"}, fix: optionalToolFix("osv-scanner")},
+		{name: "trivy", args: []string{"--version"}, fix: optionalToolFix("trivy")},
 	}
 	report := signals.ToolingReport{GeneratedAt: createdAt.UTC()}
 	for _, def := range defs {
@@ -39,7 +50,7 @@ func Discover(ctx context.Context, includeOptional bool, createdAt time.Time) si
 			report.Limitations = append(report.Limitations, fmt.Sprintf("%s was skipped; related signals are unavailable.", def.name))
 			continue
 		}
-		availability := checkTool(ctx, def.name, def.args, def.required)
+		availability := checkTool(ctx, def.name, def.args, def.required, repoPath, repoToolPaths(repoPath)...)
 		if !availability.Available {
 			availability.Reason = strings.TrimSpace(availability.Reason)
 			if availability.Reason == "" {
@@ -81,11 +92,11 @@ func Signals(repoID string, tooling signals.ToolingReport, createdAt time.Time) 
 	return out
 }
 
-func checkTool(parent context.Context, name string, args []string, required bool) signals.ToolAvailability {
+func checkTool(parent context.Context, name string, args []string, required bool, repoPath string, extraDirs ...string) signals.ToolAvailability {
 	availability := signals.ToolAvailability{Name: name, Required: required}
-	path, err := exec.LookPath(name)
+	path, err := findToolPath(name, extraDirs...)
 	if err != nil {
-		availability.Reason = "not found on PATH"
+		availability.Reason = err.Error()
 		return availability
 	}
 	ctx, cancel := context.WithTimeout(parent, 3*time.Second)
@@ -93,6 +104,7 @@ func checkTool(parent context.Context, name string, args []string, required bool
 	// #nosec G204 -- path comes from exec.LookPath for a fixed tool name in the local definition list.
 	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command -- tool names come from the fixed definitions above, not user input.
 	cmd := exec.CommandContext(ctx, path, args...)
+	cmd.Env = toolCommandEnv(os.Environ(), repoPath)
 	out, err := cmd.CombinedOutput()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		availability.Reason = "version command timed out"
@@ -107,7 +119,77 @@ func checkTool(parent context.Context, name string, args []string, required bool
 	}
 	availability.Available = true
 	availability.Version = firstLine(string(out))
+	availability.Path = path
 	return availability
+}
+
+func findToolPath(name string, extraDirs ...string) (string, error) {
+	if path, err := exec.LookPath(name); err == nil {
+		return path, nil
+	}
+	for _, dir := range extraDirs {
+		if dir == "" {
+			continue
+		}
+		path := filepath.Join(dir, name)
+		info, err := os.Stat(path)
+		if err != nil || info.IsDir() || info.Mode().Perm()&0o111 == 0 {
+			continue
+		}
+		return path, nil
+	}
+	if len(nonEmptyDirs(extraDirs)) > 0 {
+		return "", fmt.Errorf("not found on PATH or repo-local .tools")
+	}
+	return "", fmt.Errorf("not found on PATH")
+}
+
+func repoToolPaths(repoPath string) []string {
+	repoPath = strings.TrimSpace(repoPath)
+	if repoPath == "" {
+		return nil
+	}
+	return []string{
+		filepath.Join(repoPath, ".tools", "bin"),
+		filepath.Join(repoPath, ".tools", "go", "bin"),
+	}
+}
+
+func nonEmptyDirs(dirs []string) []string {
+	out := make([]string, 0, len(dirs))
+	for _, dir := range dirs {
+		if strings.TrimSpace(dir) != "" {
+			out = append(out, dir)
+		}
+	}
+	return out
+}
+
+func optionalToolFix(name string) string {
+	return fmt.Sprintf("Run `pnpm tools:install:optional` to install %s, then use `scripts/with-tools` or source `scripts/codex-env.sh` so repo-local tools are available.", name)
+}
+
+func toolCommandEnv(base []string, repoPath string) []string {
+	repoPath = strings.TrimSpace(repoPath)
+	if repoPath == "" {
+		return base
+	}
+	env := append([]string{}, base...)
+	env = appendEnvDefault(env, "SEMGREP_LOG_FILE", filepath.Join(repoPath, ".tools", "semgrep", "semgrep.log"))
+	env = appendEnvDefault(env, "SEMGREP_SETTINGS_FILE", filepath.Join(repoPath, ".tools", "semgrep", "settings.yml"))
+	env = appendEnvDefault(env, "SEMGREP_VERSION_CACHE_PATH", filepath.Join(repoPath, ".tools", "semgrep", "semgrep_version"))
+	env = appendEnvDefault(env, "TRIVY_CACHE_DIR", filepath.Join(repoPath, ".tools", "trivy-cache"))
+	return env
+}
+
+func appendEnvDefault(env []string, name string, value string) []string {
+	prefix := name + "="
+	for _, entry := range env {
+		if strings.HasPrefix(entry, prefix) {
+			return env
+		}
+	}
+	return append(env, prefix+value)
 }
 
 func firstLine(value string) string {

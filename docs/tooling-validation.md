@@ -19,8 +19,11 @@ This repo uses Go for product code and Node/pnpm for repository automation.
 - Use `pnpm tools:install:optional` when optional analyzer findings should be
   available locally. It installs pinned Semgrep, Gitleaks, OSV Scanner, and
   Trivy versions into `.tools/`; use `pnpm tools:optional:check` to verify
-  them without reinstalling. `pnpm tools:preflight` reports missing analyzer
-  tools with that bootstrap command.
+  them without reinstalling. The CLI checks repo-local `.tools/` paths after
+  `PATH`; use `scripts/with-tools ...` or source `scripts/codex-env.sh` when
+  you also want the shell and package scripts on the repo toolchain. The
+  `pnpm tools:preflight` command reports missing analyzer tools with that
+  bootstrap command.
 - For AGENTS or policy-doc changes, run `pnpm agents:check`.
 - Use `pnpm validate:final` for full-gate verification or release-sensitive
   changes.
@@ -46,6 +49,9 @@ This repo uses Go for product code and Node/pnpm for repository automation.
   worker-health line; an active queue item with no running Codex worker is
   `unhealthy` after the warmup threshold and should be followed by
   `pnpm review:recover`.
+- `pnpm review:queue:backlog` prints the current parked-backlog status by
+  default. Pass `--freeze-existing-pending`, `--enqueue-after`, or `--clear`
+  only when intentionally changing backlog admission state.
 - `pnpm review:recover` repairs launchd workers. Bootstrap failures include
   plist lint, launchctl status, and recent launchd log diagnostics when
   available.

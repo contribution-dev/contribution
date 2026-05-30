@@ -80,7 +80,7 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 	}
 	outputDir := filepath.Join(outputRoot, timestamp(start))
 
-	tooling := tools.Discover(ctx, !opts.NoExternalTools, start)
+	tooling := tools.DiscoverForRepo(ctx, !opts.NoExternalTools, start, repo.Path)
 	if err := writeLine(out, "Git history: collecting"); err != nil {
 		return "", err
 	}
@@ -144,7 +144,7 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 		limitations = append(limitations, metadata.Reason)
 	}
 	limitations = append(limitations, metadata.Limitations...)
-	if !metadata.Available {
+	if !metadata.Available || len(metadata.PRs) == 0 {
 		limitations = append(limitations, "Review burden is unavailable without imported PR review metadata.")
 	}
 
@@ -192,7 +192,7 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 		Trends:           score.Trends,
 		DeepDives:        score.DeepDives,
 		Profile:          score.Profile,
-		SetupActions:     buildSetupActions(repo, cfgWarnings, metadata, coverageSummary, cfg.Coverage, tooling, tokenAvailable, !opts.NoExternalTools),
+		SetupActions:     buildSetupActions(repo, cfgWarnings, metadata, coverageSummary, cfg.Coverage, tooling, tokenAvailable, !opts.NoExternalTools, sinceDays),
 		Limitations:      uniqueStrings(limitations),
 		Privacy: signals.PrivacySummary{
 			PublicSafe:                         opts.PublicSafe,
@@ -259,7 +259,7 @@ func classifyAnalyzerFindingScopes(findings []signals.AnalyzerFinding, history g
 	return findings
 }
 
-func buildSetupActions(repo gitrepo.Repo, cfgWarnings []string, metadata github.Metadata, coverage signals.CoverageSummary, coverageConfig config.CoverageConfig, tooling signals.ToolingReport, tokenAvailable bool, allowExternalToolChecks bool) []signals.SetupAction {
+func buildSetupActions(repo gitrepo.Repo, cfgWarnings []string, metadata github.Metadata, coverage signals.CoverageSummary, coverageConfig config.CoverageConfig, tooling signals.ToolingReport, tokenAvailable bool, allowExternalToolChecks bool, sinceDays int) []signals.SetupAction {
 	var actions []signals.SetupAction
 	for _, warning := range cfgWarnings {
 		if strings.Contains(warning, "No .contribution.yml") {
@@ -273,7 +273,8 @@ func buildSetupActions(repo gitrepo.Repo, cfgWarnings []string, metadata github.
 			break
 		}
 	}
-	if !tokenAvailable && repo.GitHubOwner != "" && repo.GitHubRepo != "" {
+	switch {
+	case !tokenAvailable && repo.GitHubOwner != "" && repo.GitHubRepo != "":
 		command := "contribution analyze --repo . --github-token env:GITHUB_TOKEN --format all"
 		if allowExternalToolChecks && github.GHTokenAvailable() {
 			command = "contribution analyze --repo . --github-token gh --format all"
@@ -285,13 +286,21 @@ func buildSetupActions(repo gitrepo.Repo, cfgWarnings []string, metadata github.
 			Why:              "GitHub metadata adds PR file lists, review burden, requested changes, and check-run evidence. That raises confidence beyond local commit heuristics.",
 			ConfidenceImpact: "high",
 		})
-	} else if tokenAvailable && !metadata.Available && repo.GitHubOwner != "" && repo.GitHubRepo != "" {
+	case tokenAvailable && !metadata.Available && repo.GitHubOwner != "" && repo.GitHubRepo != "":
 		actions = append(actions, signals.SetupAction{
 			ID:               "fix_github_metadata",
 			Label:            "Fix GitHub metadata access",
 			Command:          "contribution doctor",
 			Why:              "A token was configured, but metadata was not available. Checking token scope and repo access would restore review-burden evidence.",
 			ConfidenceImpact: "high",
+		})
+	case tokenAvailable && metadata.Available && len(metadata.PRs) == 0 && sinceDays < 365 && repo.GitHubOwner != "" && repo.GitHubRepo != "":
+		actions = append(actions, signals.SetupAction{
+			ID:               "widen_github_metadata_window",
+			Label:            "Widen GitHub metadata window",
+			Command:          "contribution analyze --repo . --github-token gh --since 365d --format all",
+			Why:              "GitHub was queried successfully but returned no merged PRs in the current window, so review-burden evidence is still unavailable.",
+			ConfidenceImpact: "medium",
 		})
 	}
 	if coverage.Status != "available" {

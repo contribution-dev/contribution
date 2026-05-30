@@ -16,6 +16,7 @@ function usage() {
   console.log(`Usage: scripts/codex-review-queue-backlog [options]
 
 Options:
+  --status                    Print current parked-backlog status without changing it
   --freeze-existing-pending   Park current pending SHAs and allow only later enqueues
   --enqueue-after <iso>       Explicit cutoff timestamp (ISO-8601)
   --reason <text>             Optional reason label
@@ -32,6 +33,7 @@ export function parseArgs(argv) {
     enqueueAfter: "",
     reason: "",
     clear: false,
+    status: false,
     lane: "codex",
     reviewsDir: "",
   };
@@ -53,6 +55,9 @@ export function parseArgs(argv) {
         break;
       case "--clear":
         args.clear = true;
+        break;
+      case "--status":
+        args.status = true;
         break;
       case "--lane":
         args.lane = String(next ?? "codex")
@@ -80,10 +85,19 @@ export function parseArgs(argv) {
   if (args.clear && (args.freezeExistingPending || args.enqueueAfter)) {
     throw new Error("--clear cannot be combined with cutoff options");
   }
+  if (
+    args.status &&
+    (args.clear || args.freezeExistingPending || args.enqueueAfter)
+  ) {
+    throw new Error("--status cannot be combined with mutating options");
+  }
   if (!args.clear && !args.freezeExistingPending && !args.enqueueAfter) {
-    throw new Error(
-      "Specify --freeze-existing-pending, --enqueue-after, or --clear",
-    );
+    if (args.reason) {
+      throw new Error(
+        "--reason requires --freeze-existing-pending or --enqueue-after",
+      );
+    }
+    args.status = true;
   }
 
   return args;
@@ -101,7 +115,7 @@ async function main() {
 
   if (args.clear) {
     await clearReviewQueueBacklog(reviewsDir, args.lane);
-  } else {
+  } else if (!args.status) {
     const enqueueAfter = args.enqueueAfter || new Date().toISOString();
     await setReviewQueueBacklog(reviewsDir, {
       lane: args.lane,

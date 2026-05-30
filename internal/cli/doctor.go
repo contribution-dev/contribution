@@ -24,7 +24,15 @@ func newDoctorCommand(out io.Writer) *cobra.Command {
 			ctx, cancel := context.WithTimeout(cmd.Context(), 30*time.Second)
 			defer cancel()
 			now := time.Now().UTC()
-			tooling := tools.Discover(ctx, true, now)
+			repo, repoErr := gitrepo.Resolve(ctx, ".")
+			repoPath := ""
+			if repoErr == nil {
+				defer func() {
+					_ = repo.Close()
+				}()
+				repoPath = repo.Path
+			}
+			tooling := tools.DiscoverForRepo(ctx, true, now, repoPath)
 			var buf bytes.Buffer
 			fmt.Fprintln(&buf, "Contribution.dev doctor")
 			fmt.Fprintln(&buf)
@@ -54,13 +62,9 @@ func newDoctorCommand(out io.Writer) *cobra.Command {
 			}
 			var nextSteps []string
 			coverageStepAdded := false
-			repo, err := gitrepo.Resolve(ctx, ".")
-			if err != nil {
-				fmt.Fprintf(&buf, "Repo state: unavailable (%v)\n", err)
+			if repoErr != nil {
+				fmt.Fprintf(&buf, "Repo state: unavailable (%v)\n", repoErr)
 			} else {
-				defer func() {
-					_ = repo.Close()
-				}()
 				fmt.Fprintf(&buf, "Repo state: ok (%s on %s)\n", repo.Name, repo.DefaultBranch)
 				cfg, warnings, cfgErr := config.Load(repo.Path)
 				if cfgErr != nil {
@@ -109,8 +113,8 @@ func newDoctorCommand(out io.Writer) *cobra.Command {
 			for _, step := range uniqueDoctorSteps(nextSteps) {
 				fmt.Fprintf(&buf, "- %s\n", step)
 			}
-			_, err = out.Write(buf.Bytes())
-			return err
+			_, writeErr := out.Write(buf.Bytes())
+			return writeErr
 		},
 	}
 }

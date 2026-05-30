@@ -85,7 +85,7 @@ func newPreflightCommand(out io.Writer) *cobra.Command {
 			if err != nil {
 				return err
 			}
-			tooling := tools.Discover(ctx, !noExternalTools, start)
+			tooling := tools.DiscoverForRepo(ctx, !noExternalTools, start, repo.Path)
 			limitations := append([]string{}, cfgWarnings...)
 			limitations = append(limitations, coverageInputLimitations...)
 			limitations = append(limitations, tooling.Limitations...)

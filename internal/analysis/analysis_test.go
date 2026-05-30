@@ -207,6 +207,49 @@ func TestRunMarkdownWritesCanonicalAnalysisWhenGitHubFetchFails(t *testing.T) {
 	}
 }
 
+func TestRunWithZeroGitHubPRsSuggestsWiderWindow(t *testing.T) {
+	requireGit(t)
+	withFixedNow(t, time.Date(2026, 2, 3, 4, 5, 7, 0, time.UTC))
+	oldFetch := fetchMergedPRs
+	fetchMergedPRs = func(_ context.Context, owner string, repo string, token string, maxPRs int) (github.Metadata, error) {
+		if owner != "owner" || repo != "repo" || token != "literal-token" || maxPRs != 20 {
+			t.Fatalf("FetchMergedPRs args = owner=%q repo=%q token=%q maxPRs=%d", owner, repo, token, maxPRs)
+		}
+		return github.Metadata{Available: true, Reason: "GitHub returned no merged PRs in the requested window."}, nil
+	}
+	t.Cleanup(func() {
+		fetchMergedPRs = oldFetch
+	})
+
+	repoPath := newAnalysisRepo(t)
+	runGit(t, repoPath, "remote", "add", "origin", "https://github.com/owner/repo.git")
+	outputRoot := t.TempDir()
+	var stdout bytes.Buffer
+	outputDir, err := Run(context.Background(), &stdout, Options{
+		Repo:            repoPath,
+		Output:          outputRoot,
+		Format:          "json",
+		GitHubToken:     "literal-token",
+		NoExternalTools: true,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+
+	analysis, err := report.ReadAnalysis(filepath.Join(outputDir, "analysis.json"))
+	if err != nil {
+		t.Fatalf("ReadAnalysis() error = %v", err)
+	}
+	if analysis.Profile.Confidence == signals.ConfidenceHigh || analysis.WeaknessMap.Confidence == signals.ConfidenceHigh {
+		t.Fatalf("confidence = profile %q weakness %q, want not high without imported PRs", analysis.Profile.Confidence, analysis.WeaknessMap.Confidence)
+	}
+	assertContains(t, analysis.Limitations, "GitHub returned no merged PRs in the requested window.")
+	assertContains(t, analysis.Limitations, "Review burden is unavailable without imported PR review metadata.")
+	if !hasSetupAction(analysis.SetupActions, "widen_github_metadata_window") {
+		t.Fatalf("setup actions = %+v, want widen_github_metadata_window", analysis.SetupActions)
+	}
+}
+
 func withFixedNow(t *testing.T, value time.Time) {
 	t.Helper()
 	oldNow := nowUTC
@@ -285,6 +328,15 @@ func assertContains(t *testing.T, values []string, needle string) {
 func hasSignalType(values []signals.Signal, signalType string) bool {
 	for _, value := range values {
 		if value.Type == signalType {
+			return true
+		}
+	}
+	return false
+}
+
+func hasSetupAction(values []signals.SetupAction, id string) bool {
+	for _, value := range values {
+		if value.ID == id {
 			return true
 		}
 	}

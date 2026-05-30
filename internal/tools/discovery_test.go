@@ -33,6 +33,26 @@ func TestDiscoverReportsRequiredToolAndSkippedOptionalTools(t *testing.T) {
 	}
 }
 
+func TestDiscoverForRepoFindsRepoLocalOptionalTools(t *testing.T) {
+	bin := t.TempDir()
+	writeFakeTool(t, bin, "git", "git version 2.0.0\n", 0)
+	t.Setenv("PATH", bin)
+
+	repo := t.TempDir()
+	repoBin := filepath.Join(repo, ".tools", "bin")
+	if err := os.MkdirAll(repoBin, 0o700); err != nil {
+		t.Fatalf("mkdir repo bin: %v", err)
+	}
+	writeFakeTool(t, repoBin, "semgrep", "1.164.0\n", 0)
+
+	got := DiscoverForRepo(context.Background(), true, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), repo)
+
+	semgrep := findTool(t, got.Tools, "semgrep")
+	if !semgrep.Available || semgrep.Version != "1.164.0" {
+		t.Fatalf("semgrep availability = %+v, want repo-local optional tool", semgrep)
+	}
+}
+
 func TestSignalsReflectRequiredToolFailure(t *testing.T) {
 	report := Discover(context.Background(), false, time.Now())
 	report.Tools = report.Tools[:0]
@@ -44,6 +64,23 @@ func TestSignalsReflectRequiredToolFailure(t *testing.T) {
 	}
 	if got[0].Severity != "high" || got[0].Direction != "negative" || got[0].Value != 0 {
 		t.Fatalf("signal = %+v, want high negative unavailable required tool", got[0])
+	}
+}
+
+func TestToolCommandEnvAddsRepoLocalAnalyzerDefaults(t *testing.T) {
+	repo := t.TempDir()
+
+	got := toolCommandEnv([]string{"PATH=/bin"}, repo)
+
+	for _, want := range []string{
+		"SEMGREP_LOG_FILE=" + filepath.Join(repo, ".tools", "semgrep", "semgrep.log"),
+		"SEMGREP_SETTINGS_FILE=" + filepath.Join(repo, ".tools", "semgrep", "settings.yml"),
+		"SEMGREP_VERSION_CACHE_PATH=" + filepath.Join(repo, ".tools", "semgrep", "semgrep_version"),
+		"TRIVY_CACHE_DIR=" + filepath.Join(repo, ".tools", "trivy-cache"),
+	} {
+		if !containsEnv(got, want) {
+			t.Fatalf("tool env missing %q in %v", want, got)
+		}
 	}
 }
 
@@ -76,4 +113,13 @@ func findTool(t *testing.T, tools []signals.ToolAvailability, name string) signa
 	}
 	t.Fatalf("tool %q not found in %+v", name, tools)
 	return signals.ToolAvailability{}
+}
+
+func containsEnv(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
 }

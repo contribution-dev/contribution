@@ -81,15 +81,50 @@ func TestEnrichedConfidenceCanBeHigh(t *testing.T) {
 		})
 	}
 	out := Build(Input{
-		Repo:      signals.RepoMetadata{DefaultBranch: "main"},
-		History:   history,
-		GitHub:    github.Metadata{Available: true},
+		Repo:    signals.RepoMetadata{DefaultBranch: "main"},
+		History: history,
+		GitHub: github.Metadata{Available: true, PRs: []github.PullRequest{{
+			Number:       1,
+			ChangedFiles: 1,
+			Additions:    2,
+			Files:        []string{"internal/app.go"},
+		}}},
 		Inventory: signals.FileSummary{TotalFiles: 1, SourceFiles: 1},
 		SinceDays: 90,
 		MaxCards:  20,
 	})
 	if out.WeaknessMap.Confidence != signals.ConfidenceHigh {
 		t.Fatalf("weakness confidence = %q, want high", out.WeaknessMap.Confidence)
+	}
+}
+
+func TestZeroPRGitHubMetadataDoesNotRaiseConfidence(t *testing.T) {
+	history := gitrepo.History{FileTouchCount: map[string]int{}}
+	for i := 0; i < 12; i++ {
+		history.Commits = append(history.Commits, gitrepo.Commit{
+			SHA:   "abcdef1234567890",
+			Date:  time.Now(),
+			Files: []gitrepo.ChangedFile{{Path: "internal/app.go", Additions: 2}},
+		})
+	}
+
+	out := Build(Input{
+		Repo:      signals.RepoMetadata{DefaultBranch: "main"},
+		History:   history,
+		GitHub:    github.Metadata{Available: true, Reason: "GitHub returned no merged PRs in the requested window."},
+		Inventory: signals.FileSummary{TotalFiles: 1, SourceFiles: 1},
+		SinceDays: 90,
+		MaxCards:  20,
+	})
+
+	if out.WeaknessMap.Confidence != signals.ConfidenceMedium {
+		t.Fatalf("weakness confidence = %q, want medium", out.WeaknessMap.Confidence)
+	}
+	if out.Profile.Confidence != signals.ConfidenceMedium {
+		t.Fatalf("profile confidence = %q, want medium", out.Profile.Confidence)
+	}
+	if len(out.Limitations) == 0 || !strings.Contains(out.Limitations[0], "review burden remains unavailable") {
+		t.Fatalf("limitations = %+v, want review burden limitation", out.Limitations)
 	}
 }
 

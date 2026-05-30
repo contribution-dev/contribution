@@ -2,6 +2,10 @@ package cli
 
 import (
 	"bytes"
+	"os"
+	"os/exec"
+	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 )
@@ -55,6 +59,77 @@ func TestVersionCommandUsesFallbacks(t *testing.T) {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("version fallback output missing %q: %q", want, stdout)
 		}
+	}
+}
+
+func TestInitCommandCreatesConfigAndIsIdempotent(t *testing.T) {
+	setupGitPath(t)
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-b", "trunk")
+	runGit(t, repo, "config", "user.email", "cli@example.test")
+	runGit(t, repo, "config", "user.name", "CLI Test")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("# fixture\n"), 0o600); err != nil {
+		t.Fatalf("write readme: %v", err)
+	}
+	runGit(t, repo, "add", "README.md")
+	runGit(t, repo, "commit", "-m", "initial fixture")
+	chdir(t, repo)
+
+	stdout, stderr, err := executeForTest([]string{"init"}, BuildInfo{})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, "Created ") || !strings.Contains(stdout, "Next:") {
+		t.Fatalf("init stdout = %q, want creation guidance", stdout)
+	}
+	configPath := filepath.Join(repo, ".contribution.yml")
+	// #nosec G304 -- test reads the generated config path inside a private temp repo.
+	data, err := os.ReadFile(configPath)
+	if err != nil {
+		t.Fatalf("read config: %v", err)
+	}
+	if !strings.Contains(string(data), "default_branch: trunk") {
+		t.Fatalf("config missing detected branch:\n%s", string(data))
+	}
+
+	stdout, stderr, err = executeForTest([]string{"init"}, BuildInfo{})
+	if err != nil {
+		t.Fatalf("second Execute() error = %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("second stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, ".contribution.yml already exists") {
+		t.Fatalf("second init stdout = %q, want idempotent message", stdout)
+	}
+}
+
+func TestDoctorUsesRepoLocalOptionalTools(t *testing.T) {
+	setupGitPath(t)
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-b", "main")
+	repoBin := filepath.Join(repo, ".tools", "bin")
+	if err := os.MkdirAll(repoBin, 0o700); err != nil {
+		t.Fatalf("mkdir repo bin: %v", err)
+	}
+	writeFakeExecutable(t, repoBin, "semgrep", "1.164.0\n")
+	chdir(t, repo)
+
+	stdout, stderr, err := executeForTest([]string{"doctor"}, BuildInfo{})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, "- semgrep: ok (optional) 1.164.0") {
+		t.Fatalf("doctor stdout missing repo-local semgrep:\n%s", stdout)
+	}
+	if !strings.Contains(stdout, "scripts/with-tools") {
+		t.Fatalf("doctor stdout missing repo-local tool bootstrap guidance:\n%s", stdout)
 	}
 }
 
@@ -203,4 +278,62 @@ func executeForTest(args []string, info BuildInfo) (string, string, error) {
 	cmd.SetArgs(args)
 	err := cmd.Execute()
 	return stdout.String(), stderr.String(), err
+}
+
+func setupGitPath(t *testing.T) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("shell git path fixture is unix-only")
+	}
+	gitPath, err := exec.LookPath("git")
+	if err != nil {
+		t.Skip("git not available")
+	}
+	bin := t.TempDir()
+	if err := os.Symlink(gitPath, filepath.Join(bin, "git")); err != nil {
+		t.Fatalf("symlink git: %v", err)
+	}
+	t.Setenv("PATH", bin)
+}
+
+func runGit(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	// #nosec G204 -- test helper invokes the fixed git binary with fixture arguments.
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	out, err := cmd.CombinedOutput()
+	if err != nil {
+		t.Fatalf("git %s failed: %v\n%s", strings.Join(args, " "), err, string(out))
+	}
+}
+
+func chdir(t *testing.T, dir string) {
+	t.Helper()
+	old, err := os.Getwd()
+	if err != nil {
+		t.Fatalf("getwd: %v", err)
+	}
+	if err := os.Chdir(dir); err != nil {
+		t.Fatalf("chdir: %v", err)
+	}
+	t.Cleanup(func() {
+		_ = os.Chdir(old)
+	})
+}
+
+func writeFakeExecutable(t *testing.T, bin string, name string, stdout string) {
+	t.Helper()
+	path := filepath.Join(bin, name)
+	body := "#!/bin/sh\nprintf '%s' " + quoteShell(stdout) + "\n"
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write fake %s: %v", name, err)
+	}
+	// #nosec G302 -- test fake tools must be executable inside a private temp dir.
+	if err := os.Chmod(path, 0o700); err != nil {
+		t.Fatalf("chmod fake %s: %v", name, err)
+	}
+}
+
+func quoteShell(value string) string {
+	return "'" + strings.ReplaceAll(value, "'", "'\\''") + "'"
 }

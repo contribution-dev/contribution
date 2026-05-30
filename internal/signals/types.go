@@ -81,6 +81,7 @@ type ToolAvailability struct {
 	Available bool   `json:"available"`
 	Version   string `json:"version,omitempty"`
 	Reason    string `json:"reason,omitempty"`
+	Path      string `json:"-"`
 }
 
 // ToolingReport summarizes required and optional runtime tooling.

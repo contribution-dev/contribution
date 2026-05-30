@@ -98,6 +98,9 @@ func associatedPRCommitSHAs(prs []github.PullRequest) map[string]bool {
 
 func buildLimitations(input Input, cards []signals.PRQualityCard) []string {
 	var limitations []string
+	if input.GitHub.Available && len(input.GitHub.PRs) == 0 {
+		limitations = append(limitations, "GitHub metadata was queried but no merged PRs were imported, so review burden remains unavailable.")
+	}
 	if input.GitHub.Available && len(input.GitHub.PRs) > 0 {
 		var localCards int
 		for _, card := range cards {
@@ -360,7 +363,7 @@ func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMa
 	}
 
 	confidence := signals.ConfidenceMedium
-	if input.GitHub.Available && len(input.History.Commits) >= 10 {
+	if input.GitHub.Available && len(input.GitHub.PRs) > 0 && len(input.History.Commits) >= 10 {
 		confidence = signals.ConfidenceHigh
 	}
 	if len(input.History.Commits) < 3 {

@@ -40,8 +40,10 @@ type analyzerRun struct {
 // RunAnalyzers executes available optional analyzers and normalizes findings.
 func RunAnalyzers(parent context.Context, repoPath string, repoID string, tooling signals.ToolingReport, createdAt time.Time) ([]signals.AnalyzerFinding, []signals.Signal, []string) {
 	available := map[string]bool{}
+	toolPaths := map[string]string{}
 	for _, tool := range tooling.Tools {
 		available[tool.Name] = tool.Available
+		toolPaths[tool.Name] = tool.Path
 	}
 	defs := []analyzerDefinition{
 		{name: "semgrep", label: "semgrep", args: []string{"--config", "auto", "--json", "--quiet", "."}, parse: parseSemgrepFindings},
@@ -70,7 +72,7 @@ func RunAnalyzers(parent context.Context, repoPath string, repoID string, toolin
 			run.cleanup()
 			continue
 		}
-		out, err := runAnalyzer(parent, run.dir, def.name, run.args)
+		out, err := runAnalyzer(parent, run.dir, repoPath, def.name, toolPaths[def.name], run.args)
 		run.cleanup()
 		parsed := limitAnalyzerFindings(def.parse(out), 20)
 		findings = append(findings, parsed...)
@@ -234,17 +236,21 @@ func shouldSkipWorktreeSecretPath(path string) bool {
 	return false
 }
 
-func runAnalyzer(parent context.Context, repoPath string, name string, args []string) ([]byte, error) {
-	path, err := exec.LookPath(name)
-	if err != nil {
-		return nil, err
+func runAnalyzer(parent context.Context, repoPath string, envRepoPath string, name string, path string, args []string) ([]byte, error) {
+	if path == "" {
+		resolved, err := exec.LookPath(name)
+		if err != nil {
+			return nil, err
+		}
+		path = resolved
 	}
 	ctx, cancel := context.WithTimeout(parent, analyzerTimeout)
 	defer cancel()
-	// #nosec G204 -- path comes from exec.LookPath for fixed optional analyzer names.
+	// #nosec G204 -- path comes from discovery or exec.LookPath for fixed optional analyzer names.
 	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command -- analyzer names come from the fixed definitions above, not user input.
 	cmd := exec.CommandContext(ctx, path, args...)
 	cmd.Dir = repoPath
+	cmd.Env = toolCommandEnv(os.Environ(), envRepoPath)
 	out, err := cmd.CombinedOutput()
 	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
 		return out, fmt.Errorf("timed out after %s", analyzerTimeout)

@@ -117,7 +117,10 @@ export async function defaultIsReviewInProgress({ reviewsDir, sha }) {
   const snapshot = snapshotProcessTable();
   const processTable = snapshot.processTable;
   const processListText = Array.from(processTable.values()).join("\n");
-  if (queueState.status === "active" && !queueState.stale) {
+  if (
+    (queueState.status === "pending" || queueState.status === "active") &&
+    !queueState.stale
+  ) {
     return true;
   }
   if (isReviewProcessRunningForSha(sha, processListText)) {
@@ -1055,11 +1058,6 @@ export async function executePushGate({
   for (const sha of shas) {
     if (!shouldContinue()) {
       break;
-    }
-
-    // Only evaluate pushed tip SHAs. Older outgoing commits are superseded by tip state.
-    if (!pushTipShas.has(sha)) {
-      continue;
     }
 
     const waitResult = await waitForReview({

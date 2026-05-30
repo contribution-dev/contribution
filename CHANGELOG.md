@@ -17,6 +17,8 @@ All notable changes to this project will be documented in this file.
   output for active jobs with no worker.
 - Scope `review:status` process-fallback worker counts to the current repo so
   unrelated checkout workers cannot mask unhealthy active jobs.
+- Evaluate every outgoing commit in the pre-push review gate and wait on fresh
+  pending review jobs before allowing a push.
 - Add single-player preflight and coverage polish: `preflight --worktree` now
   checks staged, unstaged, and untracked local changes; `analyze` and
   `preflight` auto-import an existing configured coverage artifact; and public

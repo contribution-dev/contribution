@@ -17,6 +17,7 @@ import (
 	"github.com/contribution-dev/contribution/internal/github"
 	"github.com/contribution-dev/contribution/internal/publicsafe"
 	"github.com/contribution-dev/contribution/internal/receipt"
+	"github.com/contribution-dev/contribution/internal/repoguide"
 	"github.com/contribution-dev/contribution/internal/report"
 	"github.com/contribution-dev/contribution/internal/signals"
 	"github.com/contribution-dev/contribution/internal/tools"
@@ -305,19 +306,11 @@ func buildSetupActions(repo gitrepo.Repo, cfgWarnings []string, metadata github.
 		})
 	}
 	if coverage.Status != "available" {
-		command := "go test ./... -coverprofile=coverage.out && contribution analyze --repo . --coverage coverage.out --coverage-format go --format all"
-		if coverageConfig.Command != "" && coverageConfig.Path != "" {
-			format := coverageConfig.Format
-			if format == "" {
-				format = "auto"
-			}
-			command = fmt.Sprintf("%s && contribution analyze --repo . --coverage %s --coverage-format %s --format all", coverageConfig.Command, coverageConfig.Path, format)
-		}
 		actions = append(actions, signals.SetupAction{
 			ID:               "import_coverage",
 			Label:            "Import coverage evidence",
-			Command:          command,
-			Why:              "Coverage import lets the report distinguish test-file presence from executable-line coverage. Reuse the same coverage artifact with preflight for changed-line coverage on behavior diffs.",
+			Command:          repoguide.CoverageAnalyzeCommand(repo.Path, coverageConfig),
+			Why:              repoguide.CoverageWhy(repo.Path),
 			ConfidenceImpact: "medium",
 		})
 	}

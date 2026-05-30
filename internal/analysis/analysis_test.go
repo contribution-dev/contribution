@@ -250,6 +250,40 @@ func TestRunWithZeroGitHubPRsSuggestsWiderWindow(t *testing.T) {
 	}
 }
 
+func TestRunSuggestsLCOVCoverageForPackageRepo(t *testing.T) {
+	requireGit(t)
+	withFixedNow(t, time.Date(2026, 3, 4, 5, 6, 9, 0, time.UTC))
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
+
+	repoPath := newPackageAnalysisRepo(t)
+	outputRoot := t.TempDir()
+	var stdout bytes.Buffer
+	outputDir, err := Run(context.Background(), &stdout, Options{
+		Repo:            repoPath,
+		Output:          outputRoot,
+		Format:          "json",
+		NoExternalTools: true,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	analysis, err := report.ReadAnalysis(filepath.Join(outputDir, "analysis.json"))
+	if err != nil {
+		t.Fatalf("ReadAnalysis() error = %v", err)
+	}
+	action, ok := findSetupAction(analysis.SetupActions, "import_coverage")
+	if !ok {
+		t.Fatalf("setup actions = %+v, want import_coverage", analysis.SetupActions)
+	}
+	if !strings.Contains(action.Command, "coverage/lcov.info") || !strings.Contains(action.Command, "--coverage-format lcov") {
+		t.Fatalf("coverage setup command = %q, want LCOV guidance", action.Command)
+	}
+	if strings.Contains(action.Command, "go test ./...") {
+		t.Fatalf("coverage setup command = %q, want no Go test guidance for package repo", action.Command)
+	}
+}
+
 func withFixedNow(t *testing.T, value time.Time) {
 	t.Helper()
 	oldNow := nowUTC
@@ -268,6 +302,21 @@ func newAnalysisRepo(t *testing.T) string {
 	writeTestFile(t, repoPath, "README.md", "# fixture\n")
 	writeTestFile(t, repoPath, "internal/app.go", "package app\n\nfunc value() int { return 1 }\n")
 	writeTestFile(t, repoPath, "internal/app_test.go", "package app\n\nfunc TestValue() {}\n")
+	runGit(t, repoPath, "add", ".")
+	runGit(t, repoPath, "commit", "-m", "initial fixture")
+	return repoPath
+}
+
+func newPackageAnalysisRepo(t *testing.T) string {
+	t.Helper()
+	repoPath := t.TempDir()
+	runGit(t, repoPath, "init", "-b", "main")
+	runGit(t, repoPath, "config", "user.email", "dogfood@example.test")
+	runGit(t, repoPath, "config", "user.name", "Dogfood User")
+	writeTestFile(t, repoPath, "README.md", "# package fixture\n")
+	writeTestFile(t, repoPath, "package.json", `{"scripts":{"test":"vitest --coverage"}}`+"\n")
+	writeTestFile(t, repoPath, "src/app.ts", "export function value() { return 1 }\n")
+	writeTestFile(t, repoPath, "src/app.test.ts", "import { value } from './app'\nvalue()\n")
 	runGit(t, repoPath, "add", ".")
 	runGit(t, repoPath, "commit", "-m", "initial fixture")
 	return repoPath
@@ -335,12 +384,17 @@ func hasSignalType(values []signals.Signal, signalType string) bool {
 }
 
 func hasSetupAction(values []signals.SetupAction, id string) bool {
+	_, ok := findSetupAction(values, id)
+	return ok
+}
+
+func findSetupAction(values []signals.SetupAction, id string) (signals.SetupAction, bool) {
 	for _, value := range values {
 		if value.ID == id {
-			return true
+			return value, true
 		}
 	}
-	return false
+	return signals.SetupAction{}, false
 }
 
 func TestClassifyAnalyzerFindingScopes(t *testing.T) {

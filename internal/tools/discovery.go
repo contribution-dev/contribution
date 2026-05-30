@@ -166,7 +166,7 @@ func nonEmptyDirs(dirs []string) []string {
 }
 
 func optionalToolFix(name string) string {
-	return fmt.Sprintf("Run `pnpm tools:install:optional` to install %s, then use `scripts/with-tools` or source `scripts/codex-env.sh` so repo-local tools are available.", name)
+	return fmt.Sprintf("Install %s and ensure it is on PATH, or place it in repo-local .tools/bin.", name)
 }
 
 func toolCommandEnv(base []string, repoPath string) []string {

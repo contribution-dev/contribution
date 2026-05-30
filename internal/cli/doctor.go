@@ -11,6 +11,7 @@ import (
 	"github.com/contribution-dev/contribution/internal/config"
 	gitrepo "github.com/contribution-dev/contribution/internal/git"
 	"github.com/contribution-dev/contribution/internal/github"
+	"github.com/contribution-dev/contribution/internal/repoguide"
 	"github.com/contribution-dev/contribution/internal/tools"
 	"github.com/spf13/cobra"
 )
@@ -106,7 +107,7 @@ func newDoctorCommand(out io.Writer) *cobra.Command {
 				nextSteps = append(nextSteps, "Set `GITHUB_TOKEN` or pass `--github-token gh` after `gh auth login` to include PR metadata.")
 			}
 			if !coverageStepAdded {
-				nextSteps = append(nextSteps, "Run `go test ./... -coverprofile=coverage.out` and pass `--coverage coverage.out --coverage-format go`, or configure coverage.command and use `preflight --run-coverage`.")
+				nextSteps = append(nextSteps, repoguide.CoverageDoctorStep(repoPath))
 			}
 			fmt.Fprintln(&buf)
 			fmt.Fprintln(&buf, "Next steps:")

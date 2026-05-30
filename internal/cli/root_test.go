@@ -129,8 +129,37 @@ func TestDoctorUsesRepoLocalOptionalTools(t *testing.T) {
 	if !strings.Contains(stdout, "- semgrep: ok (optional) 1.164.0") {
 		t.Fatalf("doctor stdout missing repo-local semgrep:\n%s", stdout)
 	}
-	if !strings.Contains(stdout, "scripts/with-tools") {
-		t.Fatalf("doctor stdout missing repo-local tool bootstrap guidance:\n%s", stdout)
+	if !strings.Contains(stdout, "Install gitleaks and ensure it is on PATH") {
+		t.Fatalf("doctor stdout missing generic optional-tool guidance:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "scripts/with-tools") || strings.Contains(stdout, "pnpm tools:install:optional") {
+		t.Fatalf("doctor stdout contains contribution-repo-only optional-tool guidance:\n%s", stdout)
+	}
+}
+
+func TestDoctorSuggestsLCOVForPackageRepo(t *testing.T) {
+	setupGitPath(t)
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-b", "main")
+	if err := os.WriteFile(filepath.Join(repo, "package.json"), []byte(`{"scripts":{"test":"vitest --coverage"}}`+"\n"), 0o600); err != nil {
+		t.Fatalf("write package.json: %v", err)
+	}
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "initial fixture")
+	chdir(t, repo)
+
+	stdout, stderr, err := executeForTest([]string{"doctor"}, BuildInfo{})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, "coverage/lcov.info") || !strings.Contains(stdout, "--coverage-format lcov") {
+		t.Fatalf("doctor stdout missing LCOV guidance for package repo:\n%s", stdout)
+	}
+	if strings.Contains(stdout, "go test ./... -coverprofile=coverage.out") {
+		t.Fatalf("doctor stdout contains Go coverage guidance for package repo:\n%s", stdout)
 	}
 }
 

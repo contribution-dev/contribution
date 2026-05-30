@@ -55,6 +55,18 @@ Verify the install:
 contribution version
 ```
 
+If that prints `command not found: contribution`, your current shell still
+cannot see Go's binary install directory. Run:
+
+```bash
+export PATH="$(go env GOPATH)/bin:$PATH"
+command -v contribution
+contribution version
+```
+
+If that works, make the `PATH` update persistent with the `~/.zshrc` command
+above, then open a new terminal.
+
 A source install may print `contribution dev`, `commit: none`, and
 `date: unknown`. That still confirms the binary is installed; release artifacts
 include linker-provided version metadata.

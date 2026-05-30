@@ -1,7 +1,14 @@
 #!/usr/bin/env node
 
 import { spawn, spawnSync } from "node:child_process";
-import { mkdtempSync, readFileSync, rmSync } from "node:fs";
+import {
+  existsSync,
+  mkdtempSync,
+  readFileSync,
+  rmSync,
+  symlinkSync,
+} from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { pathToFileURL } from "node:url";
@@ -142,6 +149,33 @@ function codexAuthenticated(env, repoRoot) {
     env,
   });
   return result.status === 0;
+}
+
+function resolveCodexHome(env) {
+  const explicit = String(env.CODEX_HOME ?? "").trim();
+  if (explicit) return explicit;
+  const home = String(env.HOME ?? process.env.HOME ?? "").trim();
+  return home ? path.join(home, ".codex") : "";
+}
+
+function createIsolatedCodexHome(env) {
+  const sourceHome = resolveCodexHome(env);
+  const sourceAuthPath = sourceHome ? path.join(sourceHome, "auth.json") : "";
+  const isolatedHome = mkdtempSync(
+    path.join(tmpdir(), "contribution-codex-home-"),
+  );
+  try {
+    if (sourceAuthPath && existsSync(sourceAuthPath)) {
+      symlinkSync(sourceAuthPath, path.join(isolatedHome, "auth.json"));
+    }
+  } catch (error) {
+    rmSync(isolatedHome, { force: true, recursive: true });
+    throw error;
+  }
+  return {
+    path: isolatedHome,
+    cleanup: () => rmSync(isolatedHome, { force: true, recursive: true }),
+  };
 }
 
 export function determinePassModes(context) {
@@ -361,14 +395,45 @@ async function runCodexExec({
   model = "",
 }) {
   return await new Promise((resolve) => {
-    const args = ["-a", "never", "-s", "workspace-write"];
+    const isolatedCodexHome = createIsolatedCodexHome(env);
+    const args = [
+      "-a",
+      "never",
+      "-s",
+      "workspace-write",
+      "--disable",
+      "plugins",
+      "--disable",
+      "apps",
+      "--disable",
+      "browser_use",
+      "--disable",
+      "browser_use_external",
+      "--disable",
+      "computer_use",
+      "--disable",
+      "multi_agent",
+    ];
     if (model) {
       args.push("--model", model);
     }
-    args.push("exec", "--output-schema", schemaPath, "-o", outputPath, "-");
+    args.push(
+      "exec",
+      "--ignore-user-config",
+      "--ignore-rules",
+      "--ephemeral",
+      "--output-schema",
+      schemaPath,
+      "-o",
+      outputPath,
+      "-",
+    );
     const child = spawn("codex", args, {
       cwd: repoRoot,
-      env,
+      env: {
+        ...env,
+        CODEX_HOME: isolatedCodexHome.path,
+      },
       stdio: ["pipe", "pipe", "pipe"],
     });
     let stdoutText = "";
@@ -390,6 +455,7 @@ async function runCodexExec({
       if (killTimer) {
         clearTimeout(killTimer);
       }
+      isolatedCodexHome.cleanup();
       const outputText = [stdoutText, stderrText]
         .filter(Boolean)
         .join("\n")

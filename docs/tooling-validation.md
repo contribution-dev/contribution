@@ -43,6 +43,11 @@ This repo uses Go for product code and Node/pnpm for repository automation.
 - Review severity parsing and rank comparisons are centralized in
   `scripts/lib/review-severity.mjs`; control-plane and risk-policy scripts
   should import that helper instead of carrying local rank tables.
+- Commit-scoped Codex reviews run as isolated non-interactive subprocesses with
+  a temporary `CODEX_HOME` containing only the auth link, plus user plugins, app
+  tools, and runtime rules disabled. The review prompt injects the applicable
+  repo instructions, so local agent skills, config, plugins, and MCP auth state
+  must not affect gate evidence generation.
 - Risk-policy finding limits use a bounded default when `MAX_FINDINGS` or
   `--max-findings` is missing, invalid, or too large, so malformed inputs must
   not suppress all actionable review findings.

@@ -87,6 +87,32 @@ test("review status repo process matching rejects sibling path prefixes", () => 
   );
 });
 
+test("commit review subprocess is isolated from user plugins and rules", () => {
+  const commitReview = readFileSync("scripts/codex-review-commit.mjs", "utf8");
+  assert.match(
+    commitReview,
+    /mkdtempSync\(\s*path\.join\(tmpdir\(\), "contribution-codex-home-"\)/,
+  );
+  assert.match(
+    commitReview,
+    /symlinkSync\(sourceAuthPath, path\.join\(isolatedHome, "auth\.json"\)\)/,
+  );
+  assert.match(commitReview, /CODEX_HOME: isolatedCodexHome\.path/);
+  for (const feature of [
+    "plugins",
+    "apps",
+    "browser_use",
+    "browser_use_external",
+    "computer_use",
+    "multi_agent",
+  ]) {
+    assert.match(commitReview, new RegExp(`"--disable",\\s+"${feature}"`));
+  }
+  assert.match(commitReview, /"--ignore-user-config"/);
+  assert.match(commitReview, /"--ignore-rules"/);
+  assert.match(commitReview, /"--ephemeral"/);
+});
+
 test("review package scripts use the repo tool bootstrap", () => {
   const pkg = JSON.parse(readFileSync("package.json", "utf8"));
   for (const name of [

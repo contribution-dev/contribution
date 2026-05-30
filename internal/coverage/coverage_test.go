@@ -1,8 +1,10 @@
 package coverage
 
 import (
+	"context"
 	"os"
 	"path/filepath"
+	"runtime"
 	"strings"
 	"testing"
 
@@ -77,6 +79,42 @@ func TestResolveInputsWarnsWhenConfiguredCoverageMissing(t *testing.T) {
 	}
 	if len(warnings) != 1 || !strings.Contains(warnings[0], "Configured coverage path coverage.out was not found") {
 		t.Fatalf("warnings = %v, want missing configured coverage warning", warnings)
+	}
+}
+
+func TestSplitCommandRejectsShellSyntax(t *testing.T) {
+	if _, err := SplitCommand("go test ./... -coverprofile=coverage.out"); err != nil {
+		t.Fatalf("SplitCommand() error = %v", err)
+	}
+	if got, err := SplitCommand(`go test "./..." -coverprofile=coverage.out`); err != nil || got[2] != "./..." {
+		t.Fatalf("SplitCommand() = %#v/%v, want quoted argument", got, err)
+	}
+	for _, command := range []string{
+		"go test ./... && rm -rf /",
+		"go test ./... > coverage.out",
+		"go test ./...\nrm -rf /",
+	} {
+		if _, err := SplitCommand(command); err == nil {
+			t.Fatalf("SplitCommand(%q) error = nil, want rejection", command)
+		}
+	}
+}
+
+func TestRunCommandExecutesRepoLocalCoverageScript(t *testing.T) {
+	if runtime.GOOS == "windows" {
+		t.Skip("shell fixture uses POSIX sh")
+	}
+	repo := t.TempDir()
+	script := filepath.Join(repo, "write-coverage.sh")
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf 'mode: set\\n' > coverage.out\n"), 0o700); err != nil {
+		t.Fatalf("write coverage script: %v", err)
+	}
+
+	if err := RunCommand(context.Background(), repo, "./write-coverage.sh"); err != nil {
+		t.Fatalf("RunCommand() error = %v", err)
+	}
+	if _, err := os.Stat(filepath.Join(repo, "coverage.out")); err != nil {
+		t.Fatalf("coverage artifact was not written: %v", err)
 	}
 }
 

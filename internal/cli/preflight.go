@@ -27,6 +27,7 @@ func newPreflightCommand(out io.Writer) *cobra.Command {
 	var failOnRisk string
 	var worktree bool
 	var noExternalTools bool
+	var runCoverage bool
 	cmd := &cobra.Command{
 		Use:   "preflight",
 		Short: "Analyze the current diff before review.",
@@ -70,6 +71,14 @@ func newPreflightCommand(out io.Writer) *cobra.Command {
 			}
 			if err != nil {
 				return err
+			}
+			if runCoverage {
+				if cfg.Coverage.Command == "" {
+					return fmt.Errorf("--run-coverage requires coverage.command in %s", config.FileName)
+				}
+				if err := coveragepkg.RunCommand(ctx, repo.Path, cfg.Coverage.Command); err != nil {
+					return err
+				}
 			}
 			effectiveCoveragePaths, effectiveCoverageFormat, coverageInputLimitations := coveragepkg.ResolveInputs(coveragePaths, coverageFormat, repo.Path, cfg.Coverage.Path, cfg.Coverage.Format)
 			coverage, err := preflightpkg.Coverage(effectiveCoveragePaths, effectiveCoverageFormat, repo.Path, diff.Files)
@@ -122,5 +131,6 @@ func newPreflightCommand(out io.Writer) *cobra.Command {
 	cmd.Flags().StringVar(&failOnRisk, "fail-on-risk", "never", "Exit nonzero for risk: never, medium, or high.")
 	cmd.Flags().BoolVar(&worktree, "worktree", false, "Compare base against current tracked and untracked worktree changes.")
 	cmd.Flags().BoolVar(&noExternalTools, "no-external-tools", false, "Skip optional external analyzer checks.")
+	cmd.Flags().BoolVar(&runCoverage, "run-coverage", false, "Run configured coverage.command before importing coverage.")
 	return cmd
 }

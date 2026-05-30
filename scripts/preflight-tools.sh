@@ -188,8 +188,13 @@ check_required_version "go" "Install Go 1.26.3." "1.26.3" "" go version
 check_required_tool "git" "Install Git."
 check_optional_command "golangci-lint" "Install golangci-lint for local lint parity." golangci-lint --version
 check_optional_command "govulncheck" "Install govulncheck with 'go install golang.org/x/vuln/cmd/govulncheck@latest'." govulncheck -version
+check_optional_command "scc" "Install scc for richer language inventory." scc --version
 check_optional_command "gh CLI" "Install GitHub CLI for PR/check automation." gh --version
 check_optional_command "gh auth" "Run 'gh auth login' to enable GitHub operations." gh auth status
+check_optional_command "semgrep" "Run 'pnpm tools:install:optional' for repo-local analyzer tools." semgrep --version
+check_optional_command "gitleaks" "Run 'pnpm tools:install:optional' for repo-local analyzer tools." gitleaks version
+check_optional_command "osv-scanner" "Run 'pnpm tools:install:optional' for repo-local analyzer tools." osv-scanner --version
+check_optional_command "trivy" "Run 'pnpm tools:install:optional' for repo-local analyzer tools." trivy --version
 check_optional_command "codex CLI" "Install Codex CLI." codex --version
 check_optional_command "codex auth" "Run 'codex login' for Codex review workflows." codex login status
 check_durable_review_workers

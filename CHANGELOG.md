@@ -4,6 +4,14 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Add `preflight --run-coverage` to run the configured `coverage.command`
+  without shell expansion before importing changed-line coverage.
+- Add pinned `pnpm tools:install:optional` and `pnpm tools:optional:check`
+  flows for Semgrep, Gitleaks, OSV Scanner, and Trivy; `pnpm tools:preflight`
+  now points missing analyzer tools at that bootstrap path.
+- Add bounded Gitleaks worktree scanning over Git-visible files so uncommitted
+  tracked and non-ignored untracked secrets can be reported without scanning
+  ignored/generated directories.
 - Add single-player preflight and coverage polish: `preflight --worktree` now
   checks staged, unstaged, and untracked local changes; `analyze` and
   `preflight` auto-import an existing configured coverage artifact; and public

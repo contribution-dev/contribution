@@ -77,7 +77,7 @@ func newDoctorCommand(out io.Writer) *cobra.Command {
 							if format == "" {
 								format = "auto"
 							}
-							nextSteps = append(nextSteps, fmt.Sprintf("Run `%s` and pass `--coverage %s --coverage-format %s` to add coverage evidence.", cfg.Coverage.Command, cfg.Coverage.Path, format))
+							nextSteps = append(nextSteps, fmt.Sprintf("Run `contribution preflight --base %s --worktree --run-coverage` to generate %s with `%s` and import it as %s coverage.", repo.DefaultBranch, cfg.Coverage.Path, cfg.Coverage.Command, format))
 							coverageStepAdded = true
 						}
 					}
@@ -102,7 +102,7 @@ func newDoctorCommand(out io.Writer) *cobra.Command {
 				nextSteps = append(nextSteps, "Set `GITHUB_TOKEN` or pass `--github-token gh` after `gh auth login` to include PR metadata.")
 			}
 			if !coverageStepAdded {
-				nextSteps = append(nextSteps, "Run `go test ./... -coverprofile=coverage.out` and pass `--coverage coverage.out --coverage-format go` to add coverage evidence.")
+				nextSteps = append(nextSteps, "Run `go test ./... -coverprofile=coverage.out` and pass `--coverage coverage.out --coverage-format go`, or configure coverage.command and use `preflight --run-coverage`.")
 			}
 			fmt.Fprintln(&buf)
 			fmt.Fprintln(&buf, "Next steps:")

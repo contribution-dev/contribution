@@ -34,7 +34,7 @@ Run the CLI locally:
 ```bash
 scripts/with-tools go run ./cmd/contribution analyze --repo . --output /tmp/contribution-report --format all --no-external-tools
 scripts/with-tools go run ./cmd/contribution preflight --base main --head HEAD --output /tmp/contribution-preflight --format all
-scripts/with-tools go run ./cmd/contribution preflight --base main --worktree --output /tmp/contribution-preflight --format all
+scripts/with-tools go run ./cmd/contribution preflight --base main --worktree --run-coverage --output /tmp/contribution-preflight --format all
 ```
 
 For higher-confidence personal dogfooding, import coverage and GitHub metadata
@@ -44,6 +44,14 @@ coverage artifact exists, `analyze` and `preflight` import it automatically:
 ```bash
 go test ./... -coverprofile=coverage.out
 scripts/with-tools go run ./cmd/contribution analyze --repo . --coverage coverage.out --coverage-format go --github-token gh --format all
+```
+
+Optional scanner evidence comes from locally installed tools. For this repo,
+install pinned repo-local analyzer versions into `.tools/` with:
+
+```bash
+pnpm tools:install:optional
+pnpm tools:optional:check
 ```
 
 Core product commands:
@@ -58,9 +66,11 @@ Core product commands:
   recent-vs-prior trend comparison for solo dogfooding.
 - `contribution preflight` writes V2 current-diff readiness artifacts with
   changed-line ranges, optional Go/LCOV coverage from flags or configured
-  artifacts, bounded optional analyzer findings for changed files, policy
-  rubric evidence, recent personal pattern checks, and a `--worktree` mode for
-  staged, unstaged, and untracked local changes.
+  artifacts, `--run-coverage` for generating configured coverage before import,
+  bounded optional analyzer findings for changed files, policy rubric evidence,
+  recent personal pattern checks, `--no-external-tools` for fast local-only
+  runs, and a `--worktree` mode for staged, unstaged, and untracked local
+  changes.
 - `contribution packet` writes a public-safe V2 friend-review packet.
 - `contribution import-feedback` imports public-safe friend feedback exports.
 - `contribution export-profile` writes only public-safe web profile artifacts.

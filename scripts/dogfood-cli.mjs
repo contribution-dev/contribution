@@ -134,6 +134,12 @@ function writeRepoFile(repo, relativePath, content) {
   writeFileSync(target, content);
 }
 
+function writeExecutableRepoFile(repo, relativePath, content) {
+  const target = path.join(repo, relativePath);
+  mkdirSync(path.dirname(target), { recursive: true });
+  writeFileSync(target, content, { mode: 0o700 });
+}
+
 function git(repo, args) {
   return run("git", args, { cwd: repo });
 }
@@ -950,10 +956,15 @@ function runSmoke(binary, tempRoot, options = {}) {
 
   const preflightRepoInfo = createGitRepo(tempRoot, "preflight-repo");
   writeRepoFile(preflightRepoInfo.repo, ".gitignore", "coverage.out\n");
+  writeExecutableRepoFile(
+    preflightRepoInfo.repo,
+    "write-coverage.sh",
+    "#!/bin/sh\nprintf 'mode: set\\ninternal/auth/session.go:3.1,3.50 1 1\\n' > coverage.out\n",
+  );
   writeRepoFile(
     preflightRepoInfo.repo,
     ".contribution.yml",
-    "version: 1\ncoverage:\n  path: coverage.out\n  format: go\n",
+    "version: 1\ncoverage:\n  command: ./write-coverage.sh\n  path: coverage.out\n  format: go\n",
   );
   commitAll(preflightRepoInfo.repo, "configure contribution");
   writeRepoFile(
@@ -969,11 +980,6 @@ function runSmoke(binary, tempRoot, options = {}) {
     "package auth\n\nfunc ValidateSession() bool { return true }\n",
   );
   const preflightCoverage = path.join(preflightRepoInfo.repo, "coverage.out");
-  writeRepoFile(
-    preflightRepoInfo.repo,
-    "coverage.out",
-    "mode: set\ninternal/auth/session.go:3.1,3.50 1 1\n",
-  );
   const preflightRoot = path.join(tempRoot, "preflight-output");
   const preflight = runCli(
     binary,
@@ -982,6 +988,7 @@ function runSmoke(binary, tempRoot, options = {}) {
       "--base",
       preflightBase,
       "--worktree",
+      "--run-coverage",
       "--output",
       preflightRoot,
       "--format",
@@ -1011,6 +1018,10 @@ function runSmoke(binary, tempRoot, options = {}) {
   assert(
     preflightJSON.file_summary?.risky_files > 0,
     "preflight risky file count missing",
+  );
+  assert(
+    existsSync(preflightCoverage),
+    `preflight did not run configured coverage command at ${preflightCoverage}`,
   );
   assert(
     preflightJSON.coverage?.status === "available",

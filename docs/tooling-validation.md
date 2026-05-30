@@ -16,6 +16,11 @@ This repo uses Go for product code and Node/pnpm for repository automation.
 
 - For code changes, use the smallest changed-aware command that covers the
   task. Default to `pnpm checks:changed`.
+- Use `pnpm tools:install:optional` when optional analyzer findings should be
+  available locally. It installs pinned Semgrep, Gitleaks, OSV Scanner, and
+  Trivy versions into `.tools/`; use `pnpm tools:optional:check` to verify
+  them without reinstalling. `pnpm tools:preflight` reports missing analyzer
+  tools with that bootstrap command.
 - For AGENTS or policy-doc changes, run `pnpm agents:check`.
 - Use `pnpm validate:final` for full-gate verification or release-sensitive
   changes.
@@ -87,7 +92,8 @@ changes.
 ## CLI dogfood
 
 - `pnpm dogfood:smoke` builds the real CLI and exercises it against temporary
-  Git repos under `/tmp/contribution-*`, including V2 preflight coverage,
+  Git repos under `/tmp/contribution-*`, including V2 preflight coverage command
+  execution,
   analyze-time coverage import, preflight analyzer-finding schema coverage,
   recent-vs-prior trend comparison schema coverage, packet, feedback-import
   flows, personal preflight context, and public-safe report quality checks.

@@ -5,6 +5,7 @@ import (
 	"encoding/json"
 	"errors"
 	"fmt"
+	"os"
 	"os/exec"
 	"path/filepath"
 	"strings"
@@ -15,6 +16,24 @@ import (
 )
 
 const analyzerTimeout = 20 * time.Second
+const gitleaksWorktreeMaxFiles = 2000
+const gitleaksWorktreeMaxFileBytes = 1024 * 1024
+const gitleaksWorktreeMaxTotalBytes = 20 * 1024 * 1024
+
+type analyzerDefinition struct {
+	name    string
+	label   string
+	args    []string
+	parse   func([]byte) []signals.AnalyzerFinding
+	prepare func(context.Context, string, []string) (analyzerRun, []string)
+}
+
+type analyzerRun struct {
+	dir     string
+	args    []string
+	cleanup func()
+	skip    bool
+}
 
 // RunAnalyzers executes available optional analyzers and normalizes findings.
 func RunAnalyzers(parent context.Context, repoPath string, repoID string, tooling signals.ToolingReport, createdAt time.Time) ([]signals.AnalyzerFinding, []signals.Signal, []string) {
@@ -22,15 +41,12 @@ func RunAnalyzers(parent context.Context, repoPath string, repoID string, toolin
 	for _, tool := range tooling.Tools {
 		available[tool.Name] = tool.Available
 	}
-	defs := []struct {
-		name  string
-		args  []string
-		parse func([]byte) []signals.AnalyzerFinding
-	}{
-		{name: "semgrep", args: []string{"--config", "auto", "--json", "--quiet", "."}, parse: parseSemgrepFindings},
-		{name: "gitleaks", args: []string{"git", "--redact", "--report-format", "json", "--exit-code", "0", "--no-banner", "--log-level", "error", "."}, parse: parseGitleaksFindings},
-		{name: "osv-scanner", args: []string{"--format", "json", "."}, parse: parseOSVFindings},
-		{name: "trivy", args: []string{"fs", "--format", "json", "--quiet", "--scanners", "vuln,secret,misconfig", "--skip-dirs", ".git", "--skip-dirs", ".tools", "--skip-dirs", "node_modules", "--skip-dirs", "dist", "."}, parse: parseTrivyFindings},
+	defs := []analyzerDefinition{
+		{name: "semgrep", label: "semgrep", args: []string{"--config", "auto", "--json", "--quiet", "."}, parse: parseSemgrepFindings},
+		{name: "gitleaks", label: "gitleaks history", args: []string{"git", "--redact", "--report-format", "json", "--exit-code", "0", "--no-banner", "--log-level", "error", "."}, parse: parseGitleaksFindings},
+		{name: "gitleaks", label: "gitleaks worktree", args: []string{"dir", "--redact", "--report-format", "json", "--exit-code", "0", "--no-banner", "--log-level", "error", "."}, parse: parseGitleaksFindings, prepare: prepareGitleaksWorktreeRun},
+		{name: "osv-scanner", label: "osv-scanner", args: []string{"--format", "json", "."}, parse: parseOSVFindings},
+		{name: "trivy", label: "trivy", args: []string{"fs", "--format", "json", "--quiet", "--scanners", "vuln,secret,misconfig", "--skip-dirs", ".git", "--skip-dirs", ".tools", "--skip-dirs", "node_modules", "--skip-dirs", "dist", "."}, parse: parseTrivyFindings},
 	}
 
 	var findings []signals.AnalyzerFinding
@@ -39,11 +55,25 @@ func RunAnalyzers(parent context.Context, repoPath string, repoID string, toolin
 		if !available[def.name] {
 			continue
 		}
-		out, err := runAnalyzer(parent, repoPath, def.name, def.args)
+		run := analyzerRun{dir: repoPath, args: def.args, cleanup: func() {}}
+		if def.prepare != nil {
+			preparedRun, prepareLimitations := def.prepare(parent, repoPath, def.args)
+			limitations = append(limitations, prepareLimitations...)
+			if preparedRun.cleanup == nil {
+				preparedRun.cleanup = func() {}
+			}
+			run = preparedRun
+		}
+		if run.skip {
+			run.cleanup()
+			continue
+		}
+		out, err := runAnalyzer(parent, run.dir, def.name, run.args)
+		run.cleanup()
 		parsed := limitAnalyzerFindings(def.parse(out), 20)
 		findings = append(findings, parsed...)
 		if err != nil && len(parsed) == 0 {
-			limitations = append(limitations, fmt.Sprintf("%s scan unavailable: %s", def.name, truncateAnalyzerText(privacy.RedactSecretLikeText(err.Error()))))
+			limitations = append(limitations, fmt.Sprintf("%s scan unavailable: %s", def.label, truncateAnalyzerText(privacy.RedactSecretLikeText(err.Error()))))
 		}
 	}
 
@@ -61,6 +91,143 @@ func RunAnalyzers(parent context.Context, repoPath string, repoID string, toolin
 		signalsOut = append(signalsOut, sig)
 	}
 	return findings, signalsOut, limitations
+}
+
+func prepareGitleaksWorktreeRun(parent context.Context, repoPath string, args []string) (analyzerRun, []string) {
+	run := analyzerRun{dir: repoPath, args: args, cleanup: func() {}}
+	files, limitations, err := gitVisibleFiles(parent, repoPath)
+	if err != nil {
+		limitations = append(limitations, "gitleaks worktree scan skipped: "+truncateAnalyzerText(privacy.RedactSecretLikeText(err.Error())))
+		run.skip = true
+		return run, limitations
+	}
+	tempDir, copyLimitations, err := copyVisibleFilesForGitleaks(repoPath, files)
+	limitations = append(limitations, copyLimitations...)
+	if err != nil {
+		limitations = append(limitations, "gitleaks worktree scan skipped: "+truncateAnalyzerText(privacy.RedactSecretLikeText(err.Error())))
+		run.skip = true
+		return run, limitations
+	}
+	if tempDir == "" {
+		limitations = append(limitations, "gitleaks worktree scan skipped: no Git-visible files were eligible for bounded scanning.")
+		run.skip = true
+		return run, limitations
+	}
+	run.dir = tempDir
+	run.cleanup = func() {
+		_ = os.RemoveAll(tempDir)
+	}
+	return run, limitations
+}
+
+func gitVisibleFiles(parent context.Context, repoPath string) ([]string, []string, error) {
+	ctx, cancel := context.WithTimeout(parent, 5*time.Second)
+	defer cancel()
+	// #nosec G204 -- executable is fixed and arguments are static.
+	cmd := exec.CommandContext(ctx, "git", "ls-files", "--cached", "--others", "--exclude-standard", "-z")
+	cmd.Dir = repoPath
+	out, err := cmd.Output()
+	if errors.Is(ctx.Err(), context.DeadlineExceeded) {
+		return nil, nil, fmt.Errorf("git ls-files timed out")
+	}
+	if err != nil {
+		return nil, nil, err
+	}
+	raw := strings.Split(string(out), "\x00")
+	files := make([]string, 0, len(raw))
+	var skippedGenerated int
+	var bounded bool
+	for _, item := range raw {
+		path := normalizeAnalyzerPath(item)
+		if path == "" {
+			continue
+		}
+		if shouldSkipWorktreeSecretPath(path) {
+			skippedGenerated++
+			continue
+		}
+		if len(files) >= gitleaksWorktreeMaxFiles {
+			bounded = true
+			continue
+		}
+		files = append(files, path)
+	}
+	var limitations []string
+	if skippedGenerated > 0 {
+		limitations = append(limitations, fmt.Sprintf("gitleaks worktree scan skipped %d generated, tool, dependency, or report path(s).", skippedGenerated))
+	}
+	if bounded {
+		limitations = append(limitations, fmt.Sprintf("gitleaks worktree scan was bounded to %d Git-visible file(s).", len(files)))
+	}
+	return files, limitations, nil
+}
+
+func copyVisibleFilesForGitleaks(repoPath string, files []string) (string, []string, error) {
+	tempDir, err := os.MkdirTemp("", "contribution-gitleaks-worktree-*")
+	if err != nil {
+		return "", nil, err
+	}
+	var copied int
+	var totalBytes int64
+	var skippedLarge int
+	var skippedSpecial int
+	for _, rel := range files {
+		source := filepath.Join(repoPath, filepath.FromSlash(rel))
+		info, err := os.Lstat(source)
+		if err != nil {
+			skippedSpecial++
+			continue
+		}
+		if !info.Mode().IsRegular() {
+			skippedSpecial++
+			continue
+		}
+		if info.Size() > gitleaksWorktreeMaxFileBytes || totalBytes+info.Size() > gitleaksWorktreeMaxTotalBytes {
+			skippedLarge++
+			continue
+		}
+		data, err := os.ReadFile(source)
+		if err != nil {
+			skippedSpecial++
+			continue
+		}
+		target := filepath.Join(tempDir, filepath.FromSlash(rel))
+		if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+			_ = os.RemoveAll(tempDir)
+			return "", nil, err
+		}
+		if err := os.WriteFile(target, data, 0o600); err != nil {
+			_ = os.RemoveAll(tempDir)
+			return "", nil, err
+		}
+		copied++
+		totalBytes += info.Size()
+	}
+	if copied == 0 {
+		_ = os.RemoveAll(tempDir)
+		tempDir = ""
+	}
+	var limitations []string
+	if skippedLarge > 0 {
+		limitations = append(limitations, fmt.Sprintf("gitleaks worktree scan skipped %d large file(s) to stay within scan bounds.", skippedLarge))
+	}
+	if skippedSpecial > 0 {
+		limitations = append(limitations, fmt.Sprintf("gitleaks worktree scan skipped %d non-regular or unreadable file(s).", skippedSpecial))
+	}
+	return tempDir, limitations, nil
+}
+
+func shouldSkipWorktreeSecretPath(path string) bool {
+	path = strings.Trim(filepath.ToSlash(path), "/")
+	if path == "" {
+		return true
+	}
+	for _, prefix := range []string{".git/", ".tools/", "node_modules/", "dist/", "bin/", ".contribution/reports/"} {
+		if path == strings.TrimSuffix(prefix, "/") || strings.HasPrefix(path, prefix) {
+			return true
+		}
+	}
+	return false
 }
 
 func runAnalyzer(parent context.Context, repoPath string, name string, args []string) ([]byte, error) {

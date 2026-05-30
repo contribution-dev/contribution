@@ -2,6 +2,9 @@ package tools
 
 import (
 	"context"
+	"os"
+	"os/exec"
+	"path/filepath"
 	"strings"
 	"testing"
 	"time"
@@ -50,5 +53,76 @@ func TestRunAnalyzersUsesAvailableToolsAndSignals(t *testing.T) {
 	}
 	if !strings.Contains(signalsOut[1].Message, "internal/app.go") {
 		t.Fatalf("signal message = %q", signalsOut[1].Message)
+	}
+}
+
+func TestGitleaksWorktreeScanUsesGitVisibleFiles(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repoPath := t.TempDir()
+	runGitForAnalyzerTest(t, repoPath, "init", "-b", "main")
+	writeAnalyzerTestFile(t, repoPath, ".gitignore", "ignored.txt\n")
+	writeAnalyzerTestFile(t, repoPath, "internal/secret.txt", "api_key = \"synthetic-secret\"\n")
+	writeAnalyzerTestFile(t, repoPath, "ignored.txt", "ignored-secret\n")
+	writeAnalyzerTestFile(t, repoPath, "dist/generated.txt", "generated-secret\n")
+	writeAnalyzerTestFile(t, repoPath, ".tools/cache.txt", "tool-secret\n")
+
+	bin := t.TempDir()
+	writeFakeAnalyzerScript(t, bin, "gitleaks", `#!/bin/sh
+if [ "$1" = "dir" ]; then
+  if [ -e "ignored.txt" ] || [ -e "dist/generated.txt" ] || [ -e ".tools/cache.txt" ]; then
+    printf '%s\n' '[{"RuleID":"unexpected-path","Description":"unexpected copied path","File":"ignored.txt"}]'
+    exit 0
+  fi
+  if [ -f "internal/secret.txt" ]; then
+    printf '%s\n' '[{"RuleID":"generic-api-key","Description":"redacted worktree secret","File":"internal/secret.txt"}]'
+    exit 0
+  fi
+fi
+printf '%s\n' '[]'
+`)
+	t.Setenv("PATH", bin+string(os.PathListSeparator)+os.Getenv("PATH"))
+
+	tooling := signals.ToolingReport{Tools: []signals.ToolAvailability{{Name: "gitleaks", Available: true}}}
+	findings, _, limitations := RunAnalyzers(context.Background(), repoPath, "repo", tooling, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC))
+
+	if len(findings) != 1 {
+		t.Fatalf("findings = %+v, want one worktree finding; limitations=%+v", findings, limitations)
+	}
+	if findings[0].RuleID != "generic-api-key" || findings[0].FilePath != "internal/secret.txt" {
+		t.Fatalf("finding = %+v, want untracked Git-visible secret", findings[0])
+	}
+}
+
+func runGitForAnalyzerTest(t *testing.T, dir string, args ...string) {
+	t.Helper()
+	cmd := exec.Command("git", args...)
+	cmd.Dir = dir
+	if out, err := cmd.CombinedOutput(); err != nil {
+		t.Fatalf("git %s: %v\n%s", strings.Join(args, " "), err, string(out))
+	}
+}
+
+func writeAnalyzerTestFile(t *testing.T, root string, rel string, content string) {
+	t.Helper()
+	target := filepath.Join(root, rel)
+	if err := os.MkdirAll(filepath.Dir(target), 0o700); err != nil {
+		t.Fatalf("mkdir %s: %v", rel, err)
+	}
+	if err := os.WriteFile(target, []byte(content), 0o600); err != nil {
+		t.Fatalf("write %s: %v", rel, err)
+	}
+}
+
+func writeFakeAnalyzerScript(t *testing.T, bin string, name string, body string) {
+	t.Helper()
+	path := filepath.Join(bin, name)
+	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
+		t.Fatalf("write fake %s: %v", name, err)
+	}
+	// #nosec G302 -- test fake tools must be executable inside a private temp dir.
+	if err := os.Chmod(path, 0o700); err != nil {
+		t.Fatalf("chmod fake %s: %v", name, err)
 	}
 }

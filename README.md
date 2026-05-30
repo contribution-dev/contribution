@@ -9,7 +9,11 @@ social APIs, or store hosted state.
 
 ## Install
 
-First, check whether Go is installed:
+Install `contribution` once on your machine, then run it from any Git repo.
+The repo you analyze does not need to be a Go project. Go is only required for
+this source-install path.
+
+First, check whether Go is installed on your machine:
 
 ```bash
 go version
@@ -31,23 +35,27 @@ Or use the official installer for your platform from
 [go.dev/doc/install](https://go.dev/doc/install). After installing Go, open a
 new terminal and rerun `go version`.
 
-Then install the CLI directly from GitHub:
+Then install the CLI directly from GitHub. This installs a `contribution`
+binary into Go's machine-level binary directory, usually `~/go/bin`:
 
 ```bash
 go install github.com/contribution-dev/contribution/cmd/contribution@latest
 ```
 
-Make sure Go's binary install directory is on your `PATH`:
+Make sure Go's binary install directory is on your `PATH` for the current
+terminal:
 
 ```bash
 export PATH="$(go env GOPATH)/bin:$PATH"
 ```
 
-To make that persistent in zsh:
+To make that persistent in zsh, run this once:
 
 ```bash
 echo 'export PATH="$(go env GOPATH)/bin:$PATH"' >> ~/.zshrc
 ```
+
+Then open a new terminal, or run `source ~/.zshrc`.
 
 Verify the install:
 
@@ -65,7 +73,7 @@ contribution version
 ```
 
 If that works, make the `PATH` update persistent with the `~/.zshrc` command
-above, then open a new terminal.
+above. You do not need to repeat this in every repo.
 
 A source install may print `contribution dev`, `commit: none`, and
 `date: unknown`. That still confirms the binary is installed; release artifacts
@@ -75,12 +83,13 @@ Requirements for normal CLI use:
 
 - Go 1.26.3 or newer to install from source
 - Git available on `PATH`
+- A local Git repo to analyze
 - Optional analyzer tools for richer findings; missing optional tools are
   reported by `contribution doctor` and do not block local analysis
 
 ## Quickstart
 
-Start in any Git repo you want to inspect:
+Run `doctor` from inside a Git repo you want to inspect:
 
 ```bash
 cd /path/to/your/repo
@@ -113,6 +122,16 @@ Read the markdown report:
 sed -n '1,160p' /tmp/contribution-report/report.md
 ```
 
+You can also run `analyze` from anywhere by passing a repo path:
+
+```bash
+contribution analyze \
+  --repo /path/to/your/repo \
+  --output /tmp/contribution-report \
+  --format all \
+  --no-external-tools
+```
+
 The default workflow writes artifacts only to the output directory you choose.
 Use `/tmp/contribution-*` while testing so reports do not appear in your Git
 working tree.
@@ -120,7 +139,7 @@ working tree.
 ## Preflight Local Changes
 
 Use `preflight` before review to inspect staged, unstaged, and untracked
-non-ignored files:
+non-ignored files. Run it from the repo whose worktree you want to inspect:
 
 ```bash
 cd /path/to/your/repo
@@ -237,23 +256,36 @@ This flow tests the GitHub install path without using a source checkout:
 ```bash
 mkdir -p /tmp/contribution-clean-test
 cd /tmp/contribution-clean-test
+go version
 go install github.com/contribution-dev/contribution/cmd/contribution@latest
 export PATH="$(go env GOPATH)/bin:$PATH"
 contribution version
 ```
 
-Then run the installed binary against a real repo:
+Then run the installed binary against a real repo. You can analyze by path:
+
+```bash
+contribution analyze \
+  --repo /path/to/your/repo \
+  --output /tmp/contribution-clean-analyze \
+  --format all \
+  --no-external-tools
+```
+
+For `doctor` and `preflight`, `cd` into the target repo first:
 
 ```bash
 cd /path/to/your/repo
 contribution doctor
-contribution analyze --repo . --output /tmp/contribution-clean-analyze --format all --no-external-tools
 contribution preflight --base main --worktree --output /tmp/contribution-clean-preflight --format all --no-external-tools
 ```
 
 Check that:
 
-- The install command is clear and succeeds.
+- The install command is clear and succeeds from a directory that is not the
+  target repo.
+- `contribution` works from any terminal after the Go bin directory is on
+  `PATH`.
 - `doctor` explains missing optional tools without blocking you.
 - `report.md` is specific enough to be useful.
 - Public-safe artifacts do not expose private paths, remotes, commit SHAs,

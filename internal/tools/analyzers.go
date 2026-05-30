@@ -15,10 +15,12 @@ import (
 	"github.com/contribution-dev/contribution/internal/signals"
 )
 
-const analyzerTimeout = 20 * time.Second
-const gitleaksWorktreeMaxFiles = 2000
-const gitleaksWorktreeMaxFileBytes = 1024 * 1024
-const gitleaksWorktreeMaxTotalBytes = 20 * 1024 * 1024
+const (
+	analyzerTimeout               = 20 * time.Second
+	gitleaksWorktreeMaxFiles      = 2000
+	gitleaksWorktreeMaxFileBytes  = 1024 * 1024
+	gitleaksWorktreeMaxTotalBytes = 20 * 1024 * 1024
+)
 
 type analyzerDefinition struct {
 	name    string
@@ -186,6 +188,7 @@ func copyVisibleFilesForGitleaks(repoPath string, files []string) (string, []str
 			skippedLarge++
 			continue
 		}
+		// #nosec G304 -- source comes from normalized Git-visible repo-relative paths.
 		data, err := os.ReadFile(source)
 		if err != nil {
 			skippedSpecial++
@@ -196,6 +199,7 @@ func copyVisibleFilesForGitleaks(repoPath string, files []string) (string, []str
 			_ = os.RemoveAll(tempDir)
 			return "", nil, err
 		}
+		// #nosec G703 -- target stays under a private temp dir using normalized repo-relative paths.
 		if err := os.WriteFile(target, data, 0o600); err != nil {
 			_ = os.RemoveAll(tempDir)
 			return "", nil, err

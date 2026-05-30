@@ -106,8 +106,12 @@ func TestRunCommandExecutesRepoLocalCoverageScript(t *testing.T) {
 	}
 	repo := t.TempDir()
 	script := filepath.Join(repo, "write-coverage.sh")
-	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf 'mode: set\\n' > coverage.out\n"), 0o700); err != nil {
+	if err := os.WriteFile(script, []byte("#!/bin/sh\nprintf 'mode: set\\n' > coverage.out\n"), 0o600); err != nil {
 		t.Fatalf("write coverage script: %v", err)
+	}
+	// #nosec G302 -- test fixture script must be executable inside a private temp dir.
+	if err := os.Chmod(script, 0o700); err != nil {
+		t.Fatalf("chmod coverage script: %v", err)
 	}
 
 	if err := RunCommand(context.Background(), repo, "./write-coverage.sh"); err != nil {

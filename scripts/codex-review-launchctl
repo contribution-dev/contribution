@@ -2,7 +2,16 @@
 
 import crypto from "node:crypto";
 import { execFileSync } from "node:child_process";
-import { mkdir, readFile, readdir, rm, writeFile } from "node:fs/promises";
+import { constants as fsConstants } from "node:fs";
+import {
+  access,
+  mkdir,
+  readFile,
+  readdir,
+  rm,
+  stat,
+  writeFile,
+} from "node:fs/promises";
 import os from "node:os";
 import path from "node:path";
 import {
@@ -416,6 +425,127 @@ function launchctl(...args) {
   });
 }
 
+function commandErrorOutput(error) {
+  return [
+    String(error?.message ?? "").trim(),
+    String(error?.stdout ?? "").trim(),
+    String(error?.stderr ?? "").trim(),
+  ]
+    .filter(Boolean)
+    .join("\n");
+}
+
+function truncateDiagnostic(value, limit = 2500) {
+  const text = String(value ?? "").trim();
+  if (text.length <= limit) return text;
+  return `${text.slice(0, limit)}...`;
+}
+
+function diagnosticCommand(command, args, timeoutMs = 5000) {
+  try {
+    return execFileSync(command, args, {
+      encoding: "utf8",
+      stdio: ["ignore", "pipe", "pipe"],
+      timeout: timeoutMs,
+    }).trim();
+  } catch (error) {
+    return commandErrorOutput(error);
+  }
+}
+
+function plistLintDiagnostic(plistPath) {
+  if (process.platform !== "darwin") return "";
+  return diagnosticCommand("/usr/bin/plutil", ["-lint", plistPath]);
+}
+
+function recentLaunchdDiagnostic() {
+  if (process.platform !== "darwin") return "";
+  return truncateDiagnostic(
+    diagnosticCommand("/usr/bin/log", [
+      "show",
+      "--last",
+      "2m",
+      "--style",
+      "compact",
+      "--predicate",
+      'process == "launchd" || process == "launchctl"',
+    ]),
+  );
+}
+
+async function validateExecutable(filePath, label) {
+  try {
+    await access(filePath, fsConstants.X_OK);
+  } catch {
+    throw new Error(`${label} is not executable: ${filePath}`);
+  }
+}
+
+async function validateReadableFile(filePath, label) {
+  let info;
+  try {
+    info = await stat(filePath);
+  } catch {
+    throw new Error(`${label} is not readable: ${filePath}`);
+  }
+  if (!info.isFile()) {
+    throw new Error(`${label} is not a file: ${filePath}`);
+  }
+  try {
+    await access(filePath, fsConstants.R_OK);
+  } catch {
+    throw new Error(`${label} is not readable: ${filePath}`);
+  }
+}
+
+async function validateLaunchAgentPlan({
+  repoRoot,
+  reviewsDir,
+  plistPath,
+  programPath,
+  scriptPath,
+}) {
+  await mkdir(path.join(reviewsDir, "logs"), { recursive: true, mode: 0o700 });
+  await access(repoRoot, fsConstants.R_OK);
+  await validateExecutable(programPath, "Node executable");
+  await validateReadableFile(scriptPath, "Review worker script");
+  const lint = plistLintDiagnostic(plistPath);
+  if (lint && !lint.includes("OK")) {
+    throw new Error(`plist validation failed for ${plistPath}: ${lint}`);
+  }
+}
+
+function launchctlFailureMessage({
+  operation,
+  domain,
+  label,
+  plistPath,
+  error,
+  status,
+}) {
+  const parts = [
+    `${operation} failed for ${domain}/${label}`,
+    `plist=${plistPath}`,
+    `launchctl=${truncateDiagnostic(commandErrorOutput(error))}`,
+  ];
+  const plistLint = plistLintDiagnostic(plistPath);
+  if (plistLint) {
+    parts.push(`plutil=${truncateDiagnostic(plistLint)}`);
+  }
+  const statusDetails = truncateDiagnostic(status?.details ?? "");
+  if (statusDetails) {
+    parts.push(`status=${statusDetails}`);
+  }
+  const launchdLog = recentLaunchdDiagnostic();
+  if (launchdLog) {
+    parts.push(`recent_launchd_log=${launchdLog}`);
+  }
+  parts.push(
+    "next=run `scripts/codex-review-launchctl status --lane all` and inspect .code-reviews/logs/*.stderr.log",
+  );
+  return parts.join("\n");
+}
+
 function enableLaunchAgent(domain, label) {
   launchctl("enable", `${domain}/${label}`);
 }
@@ -439,11 +569,11 @@ async function launchAgentStatus(domain, label) {
 
 async function ensureLaunchAgentLoaded(domain, label, plistPath) {
   try {
-    enableLaunchAgent(domain, label);
+    launchctl("bootout", `${domain}/${label}`);
   } catch {}
 
   try {
-    launchctl("bootout", `${domain}/${label}`);
+    enableLaunchAgent(domain, label);
   } catch {}
 
   try {
@@ -451,7 +581,16 @@ async function ensureLaunchAgentLoaded(domain, label, plistPath) {
   } catch (error) {
     const status = await launchAgentStatus(domain, label);
     if (!status.running) {
-      throw error;
+      throw new Error(
+        launchctlFailureMessage({
+          operation: "launchctl bootstrap",
+          domain,
+          label,
+          plistPath,
+          error,
+          status,
+        }),
+      );
     }
   }
 
@@ -460,7 +599,16 @@ async function ensureLaunchAgentLoaded(domain, label, plistPath) {
   } catch (error) {
     const status = await launchAgentStatus(domain, label);
     if (!status.running) {
-      throw error;
+      throw new Error(
+        launchctlFailureMessage({
+          operation: "launchctl kickstart",
+          domain,
+          label,
+          plistPath,
+          error,
+          status,
+        }),
+      );
     }
   }
 }
@@ -638,6 +786,17 @@ async function main() {
       }),
       { encoding: "utf8", mode: 0o600 },
     );
+    await validateLaunchAgentPlan({
+      repoRoot,
+      reviewsDir,
+      plistPath: remediationPlistPath,
+      programPath: process.execPath,
+      scriptPath: path.join(
+        repoRoot,
+        "scripts",
+        "codex-review-remediation-worker",
+      ),
+    });
     await ensureLaunchAgentLoaded(
       domain,
       remediationLabel,
@@ -680,6 +839,13 @@ async function main() {
           }),
           { encoding: "utf8", mode: 0o600 },
         );
+        await validateLaunchAgentPlan({
+          repoRoot,
+          reviewsDir,
+          plistPath,
+          programPath: process.execPath,
+          scriptPath: path.join(repoRoot, "scripts", "codex-review-worker"),
+        });
         await ensureLaunchAgentLoaded(domain, label, plistPath);
         console.log(
           `[codex-review-launchctl] installed lane=${lane} worker_slot=${workerSlot} label=${label} plist=${plistPath}`,
@@ -702,6 +868,13 @@ async function main() {
         { encoding: "utf8", mode: 0o600 },
       );
       try {
+        await validateLaunchAgentPlan({
+          repoRoot,
+          reviewsDir,
+          plistPath: watchdogPlistPath,
+          programPath: process.execPath,
+          scriptPath: path.join(repoRoot, "scripts", "codex-review-watchdog"),
+        });
         await ensureLaunchAgentLoaded(domain, watchdogLabel, watchdogPlistPath);
         console.log(
           `[codex-review-launchctl] installed lane=watchdog label=${watchdogLabel} plist=${watchdogPlistPath}`,

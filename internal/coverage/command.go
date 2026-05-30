@@ -25,6 +25,7 @@ func RunCommand(ctx context.Context, repoRoot string, command string) error {
 		return err
 	}
 	// #nosec G204 -- executable comes from explicit local config and is executed without shell expansion.
+	// nosemgrep: go.lang.security.audit.dangerous-exec-command.dangerous-exec-command -- coverage.command is parsed without shell syntax and the executable is resolved before execution.
 	cmd := exec.CommandContext(ctx, executable, args[1:]...)
 	cmd.Dir = repoRoot
 	out, err := cmd.CombinedOutput()

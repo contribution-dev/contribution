@@ -25,6 +25,8 @@ import {
 } from "./codex-review-queue-lib.mjs";
 import { resolveCodexReviewCliContext } from "./lib/codex-review-cli-bootstrap.mjs";
 
+const ACTIVE_WITHOUT_WORKER_WARN_SECONDS = 30;
+
 function usage() {
   console.log(`Usage: scripts/codex-review-status [options]
 
@@ -173,6 +175,29 @@ function workerProcessCount(processLines) {
   return codex;
 }
 
+function workerHealthLine(codexSummary, codexWorkerCount) {
+  const active = Number(codexSummary.active ?? 0);
+  const activeAgeSeconds = Number(codexSummary.oldestActiveAgeSeconds ?? 0);
+  if (active > 0 && codexWorkerCount === 0) {
+    const status =
+      activeAgeSeconds >= ACTIVE_WITHOUT_WORKER_WARN_SECONDS
+        ? "unhealthy"
+        : "warming";
+    return [
+      `status=${status}`,
+      "active_without_worker=1",
+      `active_without_worker_seconds=${activeAgeSeconds}`,
+      `threshold_seconds=${ACTIVE_WITHOUT_WORKER_WARN_SECONDS}`,
+      "recommendation=run_pnpm_review_recover_and_inspect_launchctl_status",
+    ].join(" ");
+  }
+  return [
+    "status=healthy",
+    "active_without_worker=0",
+    `workers=${codexWorkerCount}`,
+  ].join(" ");
+}
+
 function currentHeadSha(repoRoot) {
   const result = spawnSync("git", ["rev-parse", "HEAD"], {
     cwd: repoRoot,
@@ -275,10 +300,9 @@ async function renderStatus(
   const reports = await recentReports(reviewsDir, filterSha);
   const launchctlLines = readLaunchctlWorkerStatus(repoRoot);
   const workerProcesses = processSnapshot(filterSha);
-  const workerCountLines =
-    !filterSha && hasRunningLaunchctlWorkers(launchctlLines)
-      ? launchctlLines
-      : workerProcesses;
+  const workerCountLines = hasRunningLaunchctlWorkers(launchctlLines)
+    ? launchctlLines
+    : workerProcesses;
   const processLines =
     !filterSha && workerProcesses.length === 0 && launchctlLines.length > 0
       ? launchctlLines
@@ -312,6 +336,8 @@ async function renderStatus(
   console.log(
     `codex_backlog_total=${coverage.codexBacklogTotal} codex_active=${coverage.codexActive}`,
   );
+  console.log("[worker-health]");
+  console.log(workerHealthLine(codexSummary, codexWorkerCount));
   console.log("[actionable]");
   console.log(
     `current_tip=${currentTipActionable.length} historical_unowned=${historicalUnownedActionable.length} remediation_owned=${remediationOwnedActionable.length} needs_adjudication=${adjudicationArtifacts.length} total_unowned=${currentTipActionable.length + historicalUnownedActionable.length + adjudicationArtifacts.length}`,

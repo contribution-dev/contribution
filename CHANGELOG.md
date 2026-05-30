@@ -12,6 +12,9 @@ All notable changes to this project will be documented in this file.
 - Add bounded Gitleaks worktree scanning over Git-visible files so uncommitted
   tracked and non-ignored untracked secrets can be reported without scanning
   ignored/generated directories.
+- Harden Codex review launchd recovery with plist/executable validation,
+  repo toolchain bootstrapping, richer diagnostics, and `review:status` health
+  output for active jobs with no worker.
 - Add single-player preflight and coverage polish: `preflight --worktree` now
   checks staged, unstaged, and untracked local changes; `analyze` and
   `preflight` auto-import an existing configured coverage artifact; and public

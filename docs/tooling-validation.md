@@ -42,8 +42,13 @@ This repo uses Go for product code and Node/pnpm for repository automation.
   should import that helper instead of carrying local rank tables.
 - On macOS, `pnpm tools:preflight` is the normal bootstrap and recovery
   entrypoint for durable review workers.
-- `pnpm review:status` is the default operator status view.
-- `pnpm review:recover` repairs launchd workers.
+- `pnpm review:status` is the default operator status view. It includes a
+  worker-health line; an active queue item with no running Codex worker is
+  `unhealthy` after the warmup threshold and should be followed by
+  `pnpm review:recover`.
+- `pnpm review:recover` repairs launchd workers. Bootstrap failures include
+  plist lint, launchctl status, and recent launchd log diagnostics when
+  available.
 
 ## Canonical final validation
 

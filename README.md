@@ -99,7 +99,9 @@ pnpm review:recover
 pnpm review:status
 ```
 
-Review artifacts are local-only under `.code-reviews/`.
+`review:status` includes worker health; an active queue item with no running
+worker is reported as unhealthy after the warmup threshold. Review artifacts are
+local-only under `.code-reviews/`.
 
 ## License
 

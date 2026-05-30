@@ -18,3 +18,38 @@ test("post-push hook uses canonical Codex queue only", () => {
   assert.doesNotMatch(postPush, /queue\/pending/);
   assert.doesNotMatch(postPush, /CODEX_REVIEW_DIR/);
 });
+
+test("launchctl recovery includes validation and diagnostics", () => {
+  const launchctl = readFileSync("scripts/codex-review-launchctl", "utf8");
+  assert.match(launchctl, /validateLaunchAgentPlan/);
+  assert.match(
+    launchctl,
+    /validateReadableFile\(scriptPath, "Review worker script"\)/,
+  );
+  assert.doesNotMatch(launchctl, /validateExecutable\(scriptPath/);
+  assert.match(launchctl, /plutil/);
+  assert.match(launchctl, /recent_launchd_log/);
+  assert.match(launchctl, /launchctl\("bootout"/);
+  assert.match(launchctl, /launchctl\("bootstrap"/);
+});
+
+test("review status reports active-without-worker health", () => {
+  const status = readFileSync("scripts/codex-review-status", "utf8");
+  assert.match(status, /\[worker-health\]/);
+  assert.match(status, /active_without_worker=1/);
+  assert.match(status, /run_pnpm_review_recover/);
+});
+
+test("review package scripts use the repo tool bootstrap", () => {
+  const pkg = JSON.parse(readFileSync("package.json", "utf8"));
+  for (const name of [
+    "review:recover",
+    "review:status",
+    "review:backfill",
+    "review:queue:backlog",
+    "review:remediate:backlog",
+    "review:launchctl",
+  ]) {
+    assert.match(pkg.scripts[name], /^scripts\/with-tools /);
+  }
+});

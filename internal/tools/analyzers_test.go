@@ -97,6 +97,7 @@ printf '%s\n' '[]'
 
 func runGitForAnalyzerTest(t *testing.T, dir string, args ...string) {
 	t.Helper()
+	// #nosec G204 -- test helper invokes git with fixed test-controlled arguments.
 	cmd := exec.Command("git", args...)
 	cmd.Dir = dir
 	if out, err := cmd.CombinedOutput(); err != nil {

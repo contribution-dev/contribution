@@ -1,7 +1,10 @@
 import test from "node:test";
 import assert from "node:assert/strict";
-import { readFileSync } from "node:fs";
+import { mkdtempSync, readFileSync, rmSync, writeFileSync } from "node:fs";
+import { tmpdir } from "node:os";
+import path from "node:path";
 import { processLineReferencesRepoRoot } from "./codex-review-status";
+import { codexExecSucceeded } from "./codex-review-commit.mjs";
 
 test("hooks enqueue commit review and gate pushes", () => {
   const postCommit = readFileSync(".husky/post-commit", "utf8");
@@ -111,6 +114,37 @@ test("commit review subprocess is isolated from user plugins and rules", () => {
   assert.match(commitReview, /"--ignore-user-config"/);
   assert.match(commitReview, /"--ignore-rules"/);
   assert.match(commitReview, /"--ephemeral"/);
+});
+
+test("commit review accepts final output despite non-zero codex exit", () => {
+  const dir = mkdtempSync(path.join(tmpdir(), "contribution-codex-output-"));
+  try {
+    const outputPath = path.join(dir, "review.json");
+    writeFileSync(
+      outputPath,
+      '{"schema_version":2,"summary":"","findings":[]}\n',
+    );
+    assert.equal(codexExecSucceeded({ code: 1, outputPath }), true);
+    assert.equal(codexExecSucceeded({ code: 1, outputPath: "" }), false);
+    assert.equal(
+      codexExecSucceeded({ code: 0, outputPath: path.join(dir, "missing") }),
+      true,
+    );
+    assert.equal(
+      codexExecSucceeded({ code: 1, outputPath, timedOut: true }),
+      false,
+    );
+    assert.equal(
+      codexExecSucceeded({
+        code: 1,
+        outputPath,
+        spawnError: new Error("spawn failed"),
+      }),
+      false,
+    );
+  } finally {
+    rmSync(dir, { recursive: true, force: true });
+  }
 });
 
 test("review package scripts use the repo tool bootstrap", () => {

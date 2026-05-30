@@ -178,6 +178,25 @@ function createIsolatedCodexHome(env) {
   };
 }
 
+function hasUsableCodexOutput(outputPath) {
+  try {
+    return readFileSync(outputPath, "utf8").trim() !== "";
+  } catch {
+    return false;
+  }
+}
+
+export function codexExecSucceeded({
+  spawnError = null,
+  timedOut = false,
+  code = null,
+  outputPath = "",
+} = {}) {
+  return (
+    !spawnError && !timedOut && (code === 0 || hasUsableCodexOutput(outputPath))
+  );
+}
+
 export function determinePassModes(context) {
   const modes = ["general"];
   for (const mode of context.contractReviewModes ?? []) {
@@ -473,7 +492,12 @@ async function runCodexExec({
       }
 
       resolve({
-        ok: !spawnError && !timedOut && code === 0,
+        ok: codexExecSucceeded({
+          spawnError,
+          timedOut,
+          code,
+          outputPath,
+        }),
         errorCode,
         outputText,
       });

@@ -1,11 +1,13 @@
 # contribution
 
-`contribution` is an open-source CLI for private contribution-quality analysis.
-It scans local Git evidence, writes a deterministic contribution report, and
-emits public-safe artifacts that a separate web app can import.
+`contribution` is an open-source CLI for private agentic-readiness analysis. It
+scans local Git evidence, writes a deterministic report, and emits public-safe
+artifacts that a separate web app can import.
 
-The CLI is local-first. It does not upload raw code, publish profiles, call
-social APIs, or store hosted state.
+The CLI is local-first. It helps answer whether a repo is prepared for
+AI-assisted development and which changes would make agents faster, safer, and
+less likely to waste review time. It does not upload raw code, publish
+profiles, call social APIs, or store hosted state.
 
 ## Install
 

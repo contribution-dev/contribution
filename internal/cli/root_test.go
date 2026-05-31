@@ -21,7 +21,7 @@ func TestRootCommandShowsHelp(t *testing.T) {
 		t.Fatalf("Execute() error = %v", err)
 	}
 
-	if got := stdout.String(); !strings.Contains(got, "Analyze contribution quality from local repo evidence.") {
+	if got := stdout.String(); !strings.Contains(got, "Analyze agentic readiness from local repo evidence.") {
 		t.Fatalf("help output missing summary: %q", got)
 	}
 }
@@ -224,6 +224,89 @@ func TestPreflightCommandWritesJSONArtifacts(t *testing.T) {
 	}
 }
 
+func TestProbeCommandWritesCollectorBundle(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-b", "main")
+	runGit(t, repo, "config", "user.email", "cli@example.test")
+	runGit(t, repo, "config", "user.name", "CLI Test")
+	if err := os.WriteFile(filepath.Join(repo, "AGENTS.md"), []byte("# Agent guide\n"), 0o600); err != nil {
+		t.Fatalf("write AGENTS.md: %v", err)
+	}
+	if err := os.WriteFile(filepath.Join(repo, "app.go"), []byte("package app\n"), 0o600); err != nil {
+		t.Fatalf("write app.go: %v", err)
+	}
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "ENG-123 initial fixture")
+
+	outputRoot := t.TempDir()
+	stdout, stderr, err := executeForTest([]string{"probe", "--repo", repo, "--output", outputRoot, "--no-external-tools"}, BuildInfo{})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	for _, want := range []string{"Agentic readiness report", "Bundle: ", "Source coverage: ", "Attribution readiness: "} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("probe stdout missing %q:\n%s", want, stdout)
+		}
+	}
+	bundlePath := lineValue(t, stdout, "Bundle: ")
+	// #nosec G304 -- test reads the artifact path printed by the command under t.TempDir.
+	data, err := os.ReadFile(bundlePath)
+	if err != nil {
+		t.Fatalf("read collector bundle: %v", err)
+	}
+	var bundle map[string]any
+	if err := json.Unmarshal(data, &bundle); err != nil {
+		t.Fatalf("parse collector bundle: %v", err)
+	}
+	if bundle["agentic_readiness"] == nil || bundle["source_coverage"] == nil || bundle["attribution_readiness"] == nil {
+		t.Fatalf("collector bundle missing value-pipeline fields: %+v", bundle)
+	}
+}
+
+func TestWorkUnitStartAndExportCommands(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-b", "main")
+	runGit(t, repo, "config", "user.email", "cli@example.test")
+	runGit(t, repo, "config", "user.name", "CLI Test")
+	if err := os.WriteFile(filepath.Join(repo, "README.md"), []byte("# fixture\n"), 0o600); err != nil {
+		t.Fatalf("write README.md: %v", err)
+	}
+	runGit(t, repo, "add", ".")
+	runGit(t, repo, "commit", "-m", "initial fixture")
+
+	stdout, stderr, err := executeForTest([]string{"work-unit", "start", "--repo", repo, "--goal", "Build onboarding", "--issue", "ENG-456"}, BuildInfo{})
+	if err != nil {
+		t.Fatalf("work-unit start error = %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	markerPath := lineValue(t, stdout, "Marker: ")
+	assertFileExists(t, markerPath)
+
+	outputRoot := t.TempDir()
+	stdout, stderr, err = executeForTest([]string{"work-unit", "export", "--repo", repo, "--output", outputRoot}, BuildInfo{})
+	if err != nil {
+		t.Fatalf("work-unit export error = %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("export stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, "Work units: 1") {
+		t.Fatalf("export stdout = %q, want one marker", stdout)
+	}
+	assertFileExists(t, filepath.Join(outputRoot, "work-units.json"))
+}
+
 func TestInvalidFormatFailsBeforeRepoAccess(t *testing.T) {
 	stdout, stderr, err := executeForTest([]string{"preflight", "--format", "xml"}, BuildInfo{})
 	if err == nil {
@@ -380,6 +463,13 @@ func lineValue(t *testing.T, text string, prefix string) string {
 	}
 	t.Fatalf("missing line prefix %q in:\n%s", prefix, text)
 	return ""
+}
+
+func assertFileExists(t *testing.T, path string) {
+	t.Helper()
+	if _, err := os.Stat(path); err != nil {
+		t.Fatalf("expected file %s to exist: %v", path, err)
+	}
 }
 
 func setupGitPath(t *testing.T) {

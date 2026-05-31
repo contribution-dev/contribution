@@ -137,6 +137,198 @@ type PrivacySummary struct {
 	AuthorEmailsIncluded               bool `json:"author_emails_included"`
 }
 
+// SourceCoverageStatus describes whether a source is usable for this run.
+type SourceCoverageStatus string
+
+const (
+	// SourceCoverageAvailable means direct evidence was available.
+	SourceCoverageAvailable SourceCoverageStatus = "available"
+	// SourceCoveragePartial means evidence exists but does not cover the full question.
+	SourceCoveragePartial SourceCoverageStatus = "partial"
+	// SourceCoverageMissing means the source is absent.
+	SourceCoverageMissing SourceCoverageStatus = "missing"
+	// SourceCoverageNotRequested means the user did not ask the CLI to inspect the source.
+	SourceCoverageNotRequested SourceCoverageStatus = "not_requested"
+	// SourceCoverageRequiresWebConnection means the web app must authenticate the source.
+	SourceCoverageRequiresWebConnection SourceCoverageStatus = "requires_web_connection"
+	// SourceCoverageRequiresAdmin means admin or manager permissions are needed.
+	SourceCoverageRequiresAdmin SourceCoverageStatus = "requires_admin"
+	// SourceCoverageFutureInstrumentation means future telemetry must be emitted before this source can be trusted.
+	SourceCoverageFutureInstrumentation SourceCoverageStatus = "future_instrumentation"
+)
+
+// SourceCoverageItem records one evidence source and what it unlocks.
+type SourceCoverageItem struct {
+	ID         string               `json:"id"`
+	Label      string               `json:"label"`
+	Category   string               `json:"category"`
+	Status     SourceCoverageStatus `json:"status"`
+	Evidence   string               `json:"evidence,omitempty"`
+	Why        string               `json:"why,omitempty"`
+	Unlocks    string               `json:"unlocks,omitempty"`
+	NextAction string               `json:"next_action,omitempty"`
+	Confidence Confidence           `json:"confidence"`
+}
+
+// SourceCoverage summarizes the observable and missing data sources.
+type SourceCoverage struct {
+	GeneratedAt time.Time            `json:"generated_at"`
+	Summary     string               `json:"summary"`
+	Confidence  Confidence           `json:"confidence"`
+	Sources     []SourceCoverageItem `json:"sources"`
+	NextActions []string             `json:"next_actions"`
+}
+
+// DataGap is a missing source that materially limits insight.
+type DataGap struct {
+	ID               string               `json:"id"`
+	Label            string               `json:"label"`
+	Status           SourceCoverageStatus `json:"status"`
+	Why              string               `json:"why"`
+	Unlocks          string               `json:"unlocks"`
+	NextAction       string               `json:"next_action"`
+	ConfidenceImpact string               `json:"confidence_impact"`
+}
+
+// RecommendedConnection is a concrete setup step that increases future coverage.
+type RecommendedConnection struct {
+	ID            string `json:"id"`
+	Label         string `json:"label"`
+	Category      string `json:"category"`
+	Command       string `json:"command,omitempty"`
+	Why           string `json:"why"`
+	Unlocks       string `json:"unlocks"`
+	RequiresAdmin bool   `json:"requires_admin,omitempty"`
+}
+
+// ReadinessComponent is one deterministic part of the agentic readiness score.
+type ReadinessComponent struct {
+	ID         string     `json:"id"`
+	Label      string     `json:"label"`
+	Score      int        `json:"score"`
+	Weight     int        `json:"weight"`
+	Confidence Confidence `json:"confidence"`
+	Evidence   string     `json:"evidence"`
+	NextAction string     `json:"next_action,omitempty"`
+}
+
+// AgenticReadiness answers how prepared the repo is for agentic development.
+type AgenticReadiness struct {
+	Score       int                  `json:"score"`
+	Grade       string               `json:"grade"`
+	Confidence  Confidence           `json:"confidence"`
+	Summary     string               `json:"summary"`
+	Components  []ReadinessComponent `json:"components"`
+	TopActions  []string             `json:"top_actions"`
+	Evidence    []string             `json:"evidence"`
+	Limitations []string             `json:"limitations"`
+}
+
+// AnchorPattern describes an inferred workflow pattern.
+type AnchorPattern struct {
+	ID         string     `json:"id"`
+	Label      string     `json:"label"`
+	Count      int        `json:"count"`
+	Confidence Confidence `json:"confidence"`
+	Evidence   string     `json:"evidence,omitempty"`
+}
+
+// WorkUnitAnchor is one observable anchor for a candidate unit of intent.
+type WorkUnitAnchor struct {
+	Type       string     `json:"type"`
+	ID         string     `json:"id,omitempty"`
+	Label      string     `json:"label,omitempty"`
+	Confidence Confidence `json:"confidence"`
+}
+
+// WorkUnitCandidate is a confidence-scored hypothesis about a coherent intent.
+type WorkUnitCandidate struct {
+	ID          string           `json:"id"`
+	Title       string           `json:"title"`
+	Pattern     string           `json:"pattern"`
+	Confidence  Confidence       `json:"confidence"`
+	Summary     string           `json:"summary"`
+	Anchors     []WorkUnitAnchor `json:"anchors"`
+	Evidence    []string         `json:"evidence,omitempty"`
+	Limitations []string         `json:"limitations,omitempty"`
+}
+
+// AttributionReadiness summarizes whether visible evidence can group work units.
+type AttributionReadiness struct {
+	Pattern         string          `json:"pattern"`
+	Confidence      Confidence      `json:"confidence"`
+	Summary         string          `json:"summary"`
+	Evidence        []string        `json:"evidence"`
+	MissingEvidence []string        `json:"missing_evidence"`
+	NextAction      string          `json:"next_action"`
+	AnchorPatterns  []AnchorPattern `json:"anchor_patterns"`
+}
+
+// AgentArtifactMetadata is metadata-only evidence from explicitly supplied agent artifacts.
+type AgentArtifactMetadata struct {
+	Path               string     `json:"path,omitempty"`
+	Source             string     `json:"source,omitempty"`
+	Status             string     `json:"status"`
+	Reason             string     `json:"reason,omitempty"`
+	SessionFingerprint string     `json:"session_fingerprint,omitempty"`
+	RepoMatched        bool       `json:"repo_matched,omitempty"`
+	Branch             string     `json:"branch,omitempty"`
+	Commit             string     `json:"commit,omitempty"`
+	TokenCount         int        `json:"token_count,omitempty"`
+	CostUSD            float64    `json:"cost_usd,omitempty"`
+	Confidence         Confidence `json:"confidence"`
+}
+
+// WorkUnitMarker is a local, user-created intent marker.
+type WorkUnitMarker struct {
+	Version               int       `json:"version"`
+	ID                    string    `json:"id"`
+	CreatedAt             time.Time `json:"created_at"`
+	RepoRootFingerprint   string    `json:"repo_root_fingerprint"`
+	RepoName              string    `json:"repo_name,omitempty"`
+	Branch                string    `json:"branch,omitempty"`
+	Commit                string    `json:"commit,omitempty"`
+	Goal                  string    `json:"goal"`
+	Issue                 string    `json:"issue,omitempty"`
+	PrivacyClassification string    `json:"privacy_classification"`
+}
+
+// WorkUnitMarkerExport is the export artifact for local work-unit markers.
+type WorkUnitMarkerExport struct {
+	Version     int              `json:"version"`
+	GeneratedAt time.Time        `json:"generated_at"`
+	Repo        RepoMetadata     `json:"repo"`
+	Markers     []WorkUnitMarker `json:"markers"`
+	Privacy     PrivacySummary   `json:"privacy"`
+}
+
+// CollectorGitSummary gives the web app local git evidence without raw diffs.
+type CollectorGitSummary struct {
+	CommitCount      int      `json:"commit_count"`
+	UniqueFiles      int      `json:"unique_files"`
+	HighChurnFiles   []string `json:"high_churn_files,omitempty"`
+	HeadSHAAvailable bool     `json:"head_sha_available"`
+}
+
+// CollectorBundle is the public-safe local probe artifact consumed by the web app.
+type CollectorBundle struct {
+	Version              int                     `json:"version"`
+	GeneratedAt          time.Time               `json:"generated_at"`
+	Repo                 RepoMetadata            `json:"repo"`
+	Git                  CollectorGitSummary     `json:"git"`
+	Tooling              ToolingReport           `json:"tooling"`
+	AgenticReadiness     AgenticReadiness        `json:"agentic_readiness"`
+	SourceCoverage       SourceCoverage          `json:"source_coverage"`
+	DataGaps             []DataGap               `json:"data_gaps"`
+	Recommended          []RecommendedConnection `json:"recommended_connections"`
+	AttributionReadiness AttributionReadiness    `json:"attribution_readiness"`
+	WorkUnitCandidates   []WorkUnitCandidate     `json:"work_unit_candidates"`
+	AgentArtifacts       []AgentArtifactMetadata `json:"agent_artifacts,omitempty"`
+	SetupActions         []SetupAction           `json:"setup_actions"`
+	Limitations          []string                `json:"limitations"`
+	Privacy              PrivacySummary          `json:"privacy"`
+}
+
 // Finding is a human-readable conclusion with evidence and confidence.
 type Finding struct {
 	Label        string     `json:"label"`
@@ -340,24 +532,32 @@ type PreflightChangedFile struct {
 
 // AnalysisReport is the canonical machine-readable V1 output.
 type AnalysisReport struct {
-	Version          int                    `json:"version"`
-	GeneratedAt      time.Time              `json:"generated_at"`
-	Repo             RepoMetadata           `json:"repo"`
-	Config           AnalysisConfigSnapshot `json:"config"`
-	Tooling          ToolingReport          `json:"tooling"`
-	Inventory        FileSummary            `json:"inventory"`
-	Coverage         CoverageSummary        `json:"coverage"`
-	AnalyzerFindings []AnalyzerFinding      `json:"analyzer_findings"`
-	Signals          []Signal               `json:"signals"`
-	PRCards          []PRQualityCard        `json:"pr_quality_cards"`
-	WeaknessMap      WeaknessMap            `json:"weakness_map"`
-	Trends           TrendComparison        `json:"trends"`
-	FollowUp         FollowUpComparison     `json:"follow_up"`
-	DeepDives        AnalysisDeepDives      `json:"deep_dives"`
-	Profile          ProfileSummary         `json:"profile"`
-	SetupActions     []SetupAction          `json:"setup_actions"`
-	Limitations      []string               `json:"limitations"`
-	Privacy          PrivacySummary         `json:"privacy"`
+	Version                int                     `json:"version"`
+	GeneratedAt            time.Time               `json:"generated_at"`
+	Repo                   RepoMetadata            `json:"repo"`
+	Config                 AnalysisConfigSnapshot  `json:"config"`
+	Tooling                ToolingReport           `json:"tooling"`
+	Inventory              FileSummary             `json:"inventory"`
+	Coverage               CoverageSummary         `json:"coverage"`
+	AnalyzerFindings       []AnalyzerFinding       `json:"analyzer_findings"`
+	Signals                []Signal                `json:"signals"`
+	PRCards                []PRQualityCard         `json:"pr_quality_cards"`
+	WeaknessMap            WeaknessMap             `json:"weakness_map"`
+	Trends                 TrendComparison         `json:"trends"`
+	FollowUp               FollowUpComparison      `json:"follow_up"`
+	DeepDives              AnalysisDeepDives       `json:"deep_dives"`
+	Profile                ProfileSummary          `json:"profile"`
+	AgenticReadiness       AgenticReadiness        `json:"agentic_readiness"`
+	SourceCoverage         SourceCoverage          `json:"source_coverage"`
+	DataGaps               []DataGap               `json:"data_gaps"`
+	RecommendedConnections []RecommendedConnection `json:"recommended_connections"`
+	AttributionReadiness   AttributionReadiness    `json:"attribution_readiness"`
+	WorkUnitCandidates     []WorkUnitCandidate     `json:"work_unit_candidates"`
+	AgentArtifacts         []AgentArtifactMetadata `json:"agent_artifacts,omitempty"`
+	SetupActions           []SetupAction           `json:"setup_actions"`
+	Limitations            []string                `json:"limitations"`
+	Privacy                PrivacySummary          `json:"privacy"`
+	PrivacySummary         PrivacySummary          `json:"privacy_summary"`
 }
 
 // ProfileExport is the public-safe profile artifact consumed by a future web app.

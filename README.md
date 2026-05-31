@@ -108,20 +108,23 @@ contribution analyze \
   --no-external-tools
 ```
 
-Expected output files:
+Expected output files inside the timestamped run directory:
 
 ```text
-/tmp/contribution-report/analysis.json
-/tmp/contribution-report/report.md
-/tmp/contribution-report/profile.export.json
-/tmp/contribution-report/share-card.json
-/tmp/contribution-report/tooling.json
+/tmp/contribution-report/<run>/analysis.json
+/tmp/contribution-report/<run>/report.md
+/tmp/contribution-report/<run>/collector.bundle.json
+/tmp/contribution-report/<run>/source-coverage.json
+/tmp/contribution-report/<run>/attribution-readiness.json
+/tmp/contribution-report/<run>/profile.export.json
+/tmp/contribution-report/<run>/share-card.json
+/tmp/contribution-report/<run>/tooling.json
 ```
 
 Read the markdown report:
 
 ```bash
-sed -n '1,160p' /tmp/contribution-report/report.md
+sed -n '1,160p' /tmp/contribution-report/<run>/report.md
 ```
 
 You can also run `analyze` from anywhere by passing a repo path:
@@ -219,10 +222,64 @@ contribution analyze \
 or unavailable GitHub metadata degrades the report instead of failing local
 analysis.
 
+## Web-App Probe Bundle
+
+Use `probe` when the web app asks for a local collector bundle:
+
+```bash
+contribution probe \
+  --repo . \
+  --output /tmp/contribution-probe \
+  --no-external-tools
+```
+
+The probe is public-safe by default and writes JSON artifacts only inside a
+timestamped run directory, including `collector.bundle.json`,
+`source-coverage.json`, `attribution-readiness.json`, and `tooling.json`. It
+does not upload anything.
+
+You can explicitly enrich the probe with metadata-only agent artifacts:
+
+```bash
+contribution probe \
+  --repo . \
+  --output /tmp/contribution-probe \
+  --include-agent-artifacts \
+  --agent-artifact /path/to/metadata.json
+```
+
+The CLI only imports supported metadata fields such as provider, session
+fingerprint, branch, commit, token count, or cost. It does not store prompts,
+completions, transcripts, raw logs, credentials, or raw code.
+
+## Work Unit Markers
+
+Use a local work-unit marker when a branch or PR will not be a clean unit of
+intent:
+
+```bash
+contribution work-unit start --goal "Build onboarding" --issue ENG-123
+```
+
+Markers are written to `.contribution/work-units/` by default and are never
+staged automatically. They contain goal, branch, commit, and optional issue
+metadata so future reports can group agentic work with better confidence.
+
+Export markers when another system asks for them:
+
+```bash
+contribution work-unit export --repo . --output /tmp/contribution-work-units
+```
+
 ## What Gets Written
 
 - `analyze` writes `analysis.json`, `report.md`, `profile.export.json`,
-  `share-card.json`, and `tooling.json`.
+  `share-card.json`, `tooling.json`, `collector.bundle.json`,
+  `source-coverage.json`, and `attribution-readiness.json`.
+- `probe` writes public-safe JSON collector artifacts for web-app import.
+- `work-unit start` writes local intent markers under
+  `.contribution/work-units/` unless another output directory is supplied.
+- `work-unit export` writes `work-units.json`.
 - `preflight` writes `preflight.json` and `preflight.md`.
 - `init` writes `.contribution.yml` in the current repo.
 - Coverage commands may write repo-specific coverage artifacts such as
@@ -240,6 +297,12 @@ contribution doctor
 
 # Analyze a repo with only built-in local evidence.
 contribution analyze --repo . --output /tmp/contribution-report --format all --no-external-tools
+
+# Generate a public-safe collector bundle for the web app.
+contribution probe --repo . --output /tmp/contribution-probe --no-external-tools
+
+# Mark a unit of intent before starting agentic work.
+contribution work-unit start --goal "Build onboarding" --issue ENG-123
 
 # Analyze current worktree changes before review.
 contribution preflight --base main --worktree --output /tmp/contribution-preflight --format all --no-external-tools

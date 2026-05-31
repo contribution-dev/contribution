@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Reposition `analyze` around agentic readiness, add deterministic
+  `agentic_readiness`, `source_coverage`, `data_gaps`,
+  `recommended_connections`, `attribution_readiness`,
+  `work_unit_candidates`, and `privacy_summary` fields, and emit public-safe
+  `collector.bundle.json`, `source-coverage.json`, and
+  `attribution-readiness.json` artifacts for web-app import.
+- Add `probe` for public-safe local collector bundles, metadata-only
+  `--agent-artifact` import with explicit opt-in, and `work-unit start/export`
+  for optional local intent markers that improve future work-unit attribution.
 - Add a `follow_up` report comparison that checks the latest prior local
   `analysis.json`, shows what improved, regressed, resolved, or persisted since
   the last report, and surfaces that loop in markdown and terminal summaries.

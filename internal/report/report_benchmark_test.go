@@ -44,7 +44,7 @@ func BenchmarkWriteAnalysisBundle(b *testing.B) {
 			Strengths:  []signals.Finding{{Label: "Focused scope", Evidence: "Small changes.", Confidence: signals.ConfidenceMedium}},
 		},
 		Profile: signals.ProfileSummary{
-			Headline:           "AI-native contribution profile",
+			Headline:           "Agentic readiness profile",
 			AnalyzedPRs:        1,
 			AnalysisWindowDays: 90,
 			Confidence:         signals.ConfidenceMedium,

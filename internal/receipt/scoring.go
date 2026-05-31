@@ -690,7 +690,7 @@ func buildProfile(input Input, weaknessMap signals.WeaknessMap, comparison signa
 	}
 	return signals.ProfileSummary{
 		DisplayName:        input.DisplayName,
-		Headline:           "AI-native contribution profile",
+		Headline:           "Agentic readiness profile",
 		AnalyzedPRs:        analyzed,
 		AnalysisWindowDays: input.SinceDays,
 		Confidence:         weaknessMap.Confidence,

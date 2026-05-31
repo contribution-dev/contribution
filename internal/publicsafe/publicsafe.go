@@ -20,6 +20,7 @@ type pathReplacement struct {
 var (
 	commitSHAPattern     = regexp.MustCompile(`\b[0-9a-fA-F]{7,40}\b`)
 	pathCandidatePattern = regexp.MustCompile(`(?:[A-Za-z]:)?(?:[./~]?[\w.-]+[/\\])+[\w.@+-]+`)
+	fractionPattern      = regexp.MustCompile(`^\d+/\d+$`)
 )
 
 const publicRepoID = "private-repository"
@@ -50,6 +51,13 @@ func Analysis(analysis signals.AnalysisReport) signals.AnalysisReport {
 	analysis.Profile.ImprovementTrends = findings(analysis.Profile.ImprovementTrends, len(analysis.Profile.ImprovementTrends), pathReplacements)
 	analysis.Profile.Headline = redactCommitLikeText(redactText(analysis.Profile.Headline, pathReplacements))
 	analysis.Profile.DisplayName = redactCommitLikeText(redactText(analysis.Profile.DisplayName, pathReplacements))
+	analysis.AgenticReadiness = agenticReadiness(analysis.AgenticReadiness, pathReplacements)
+	analysis.SourceCoverage = sourceCoverage(analysis.SourceCoverage, pathReplacements)
+	analysis.DataGaps = dataGaps(analysis.DataGaps, pathReplacements)
+	analysis.RecommendedConnections = recommendedConnections(analysis.RecommendedConnections, pathReplacements)
+	analysis.AttributionReadiness = attributionReadiness(analysis.AttributionReadiness, pathReplacements)
+	analysis.WorkUnitCandidates = workUnitCandidates(analysis.WorkUnitCandidates, pathReplacements)
+	analysis.AgentArtifacts = agentArtifacts(analysis.AgentArtifacts, pathReplacements)
 	analysis.SetupActions = setupActions(analysis.SetupActions, pathReplacements)
 	analysis.Limitations = redactStrings(analysis.Limitations, pathReplacements)
 	for i := range analysis.Signals {
@@ -60,6 +68,7 @@ func Analysis(analysis signals.AnalysisReport) signals.AnalysisReport {
 		analysis.Tooling.Tools[i].Reason = redactText(analysis.Tooling.Tools[i].Reason, pathReplacements)
 	}
 	analysis.Tooling.Limitations = redactStrings(analysis.Tooling.Limitations, pathReplacements)
+	analysis.PrivacySummary = analysis.Privacy
 	return analysis
 }
 
@@ -235,6 +244,117 @@ func setupActions(actions []signals.SetupAction, replacements ...[]pathReplaceme
 	return out
 }
 
+func agenticReadiness(value signals.AgenticReadiness, replacements ...[]pathReplacement) signals.AgenticReadiness {
+	value.Summary = redactCommitLikeText(redactText(value.Summary, replacements...))
+	value.Evidence = redactStrings(value.Evidence, replacements...)
+	value.TopActions = redactStrings(value.TopActions, replacements...)
+	value.Limitations = redactStrings(value.Limitations, replacements...)
+	for i := range value.Components {
+		value.Components[i].Label = redactCommitLikeText(redactText(value.Components[i].Label, replacements...))
+		value.Components[i].Evidence = redactCommitLikeText(redactText(value.Components[i].Evidence, replacements...))
+		value.Components[i].NextAction = redactCommitLikeText(redactText(value.Components[i].NextAction, replacements...))
+	}
+	return value
+}
+
+func sourceCoverage(value signals.SourceCoverage, replacements ...[]pathReplacement) signals.SourceCoverage {
+	value.Summary = redactCommitLikeText(redactText(value.Summary, replacements...))
+	value.NextActions = redactStrings(value.NextActions, replacements...)
+	for i := range value.Sources {
+		value.Sources[i].Label = redactCommitLikeText(redactText(value.Sources[i].Label, replacements...))
+		value.Sources[i].Evidence = redactCommitLikeText(redactText(value.Sources[i].Evidence, replacements...))
+		value.Sources[i].Why = redactCommitLikeText(redactText(value.Sources[i].Why, replacements...))
+		value.Sources[i].Unlocks = redactCommitLikeText(redactText(value.Sources[i].Unlocks, replacements...))
+		value.Sources[i].NextAction = redactCommitLikeText(redactText(value.Sources[i].NextAction, replacements...))
+	}
+	return value
+}
+
+func dataGaps(values []signals.DataGap, replacements ...[]pathReplacement) []signals.DataGap {
+	out := make([]signals.DataGap, 0, len(values))
+	for _, value := range values {
+		value.Label = redactCommitLikeText(redactText(value.Label, replacements...))
+		value.Why = redactCommitLikeText(redactText(value.Why, replacements...))
+		value.Unlocks = redactCommitLikeText(redactText(value.Unlocks, replacements...))
+		value.NextAction = redactCommitLikeText(redactText(value.NextAction, replacements...))
+		out = append(out, value)
+	}
+	return out
+}
+
+func recommendedConnections(values []signals.RecommendedConnection, replacements ...[]pathReplacement) []signals.RecommendedConnection {
+	out := make([]signals.RecommendedConnection, 0, len(values))
+	for _, value := range values {
+		value.Label = redactCommitLikeText(redactText(value.Label, replacements...))
+		value.Command = redactCommitLikeText(redactText(value.Command, replacements...))
+		value.Why = redactCommitLikeText(redactText(value.Why, replacements...))
+		value.Unlocks = redactCommitLikeText(redactText(value.Unlocks, replacements...))
+		out = append(out, value)
+	}
+	return out
+}
+
+func attributionReadiness(value signals.AttributionReadiness, replacements ...[]pathReplacement) signals.AttributionReadiness {
+	value.Summary = redactCommitLikeText(redactText(value.Summary, replacements...))
+	value.Evidence = redactStrings(value.Evidence, replacements...)
+	value.MissingEvidence = redactStrings(value.MissingEvidence, replacements...)
+	value.NextAction = redactCommitLikeText(redactText(value.NextAction, replacements...))
+	for i := range value.AnchorPatterns {
+		value.AnchorPatterns[i].Label = redactCommitLikeText(redactText(value.AnchorPatterns[i].Label, replacements...))
+		value.AnchorPatterns[i].Evidence = redactCommitLikeText(redactText(value.AnchorPatterns[i].Evidence, replacements...))
+	}
+	return value
+}
+
+func workUnitCandidates(values []signals.WorkUnitCandidate, replacements ...[]pathReplacement) []signals.WorkUnitCandidate {
+	out := make([]signals.WorkUnitCandidate, 0, len(values))
+	for i, value := range values {
+		value.ID = fmt.Sprintf("work-unit-candidate-%d", i+1)
+		value.Title = fmt.Sprintf("Work unit candidate %d", i+1)
+		value.Summary = redactCommitLikeText(redactText(value.Summary, replacements...))
+		value.Evidence = redactStrings(value.Evidence, replacements...)
+		value.Limitations = redactStrings(value.Limitations, replacements...)
+		for j := range value.Anchors {
+			value.Anchors[j] = workUnitAnchor(value.Anchors[j], replacements...)
+		}
+		out = append(out, value)
+	}
+	return out
+}
+
+func workUnitAnchor(value signals.WorkUnitAnchor, replacements ...[]pathReplacement) signals.WorkUnitAnchor {
+	switch value.Type {
+	case "commit":
+		value.ID = ""
+		value.Label = "commit"
+	case "branch":
+		value.ID = redactCommitLikeText(redactText(value.ID, replacements...))
+		value.Label = redactCommitLikeText(redactText(value.Label, replacements...))
+	case "manual_marker":
+		value.Label = "manual marker"
+	case "issue":
+		value.ID = redactCommitLikeText(redactText(value.ID, replacements...))
+		value.Label = redactCommitLikeText(redactText(value.Label, replacements...))
+	default:
+		value.ID = redactCommitLikeText(redactText(value.ID, replacements...))
+		value.Label = redactCommitLikeText(redactText(value.Label, replacements...))
+	}
+	return value
+}
+
+func agentArtifacts(values []signals.AgentArtifactMetadata, replacements ...[]pathReplacement) []signals.AgentArtifactMetadata {
+	out := make([]signals.AgentArtifactMetadata, 0, len(values))
+	for _, value := range values {
+		value.Path = privacy.RedactPath(redactText(value.Path, replacements...), false)
+		value.Source = redactCommitLikeText(redactText(value.Source, replacements...))
+		value.Reason = redactCommitLikeText(redactText(value.Reason, replacements...))
+		value.Branch = redactCommitLikeText(redactText(value.Branch, replacements...))
+		value.Commit = ""
+		out = append(out, value)
+	}
+	return out
+}
+
 func signal(sig signals.Signal, sourceRepoID string, replacements ...[]pathReplacement) signals.Signal {
 	privateSubjectID := sig.SubjectID
 	if sig.RepoID == sourceRepoID {
@@ -384,6 +504,41 @@ func pathReplacementsForAnalysis(analysis signals.AnalysisReport) []pathReplacem
 	for _, badge := range analysis.Profile.BadgeCandidates {
 		add(badge.ID, badge.Label)
 	}
+	add(analysis.AgenticReadiness.Summary)
+	add(analysis.AgenticReadiness.Evidence...)
+	add(analysis.AgenticReadiness.TopActions...)
+	add(analysis.AgenticReadiness.Limitations...)
+	for _, component := range analysis.AgenticReadiness.Components {
+		add(component.ID, component.Label, component.Evidence, component.NextAction)
+	}
+	add(analysis.SourceCoverage.Summary)
+	add(analysis.SourceCoverage.NextActions...)
+	for _, source := range analysis.SourceCoverage.Sources {
+		add(source.ID, source.Label, source.Category, source.Evidence, source.Why, source.Unlocks, source.NextAction)
+	}
+	for _, gap := range analysis.DataGaps {
+		add(gap.ID, gap.Label, gap.Why, gap.Unlocks, gap.NextAction)
+	}
+	for _, connection := range analysis.RecommendedConnections {
+		add(connection.ID, connection.Label, connection.Category, connection.Command, connection.Why, connection.Unlocks)
+	}
+	add(analysis.AttributionReadiness.Pattern, analysis.AttributionReadiness.Summary, analysis.AttributionReadiness.NextAction)
+	add(analysis.AttributionReadiness.Evidence...)
+	add(analysis.AttributionReadiness.MissingEvidence...)
+	for _, pattern := range analysis.AttributionReadiness.AnchorPatterns {
+		add(pattern.ID, pattern.Label, pattern.Evidence)
+	}
+	for _, candidate := range analysis.WorkUnitCandidates {
+		add(candidate.ID, candidate.Title, candidate.Pattern, candidate.Summary)
+		add(candidate.Evidence...)
+		add(candidate.Limitations...)
+		for _, anchor := range candidate.Anchors {
+			add(anchor.Type, anchor.ID, anchor.Label)
+		}
+	}
+	for _, artifact := range analysis.AgentArtifacts {
+		add(artifact.Path, artifact.Source, artifact.Reason, artifact.Branch, artifact.Commit, artifact.SessionFingerprint)
+	}
 	for _, dive := range analysis.DeepDives.HighChurn {
 		add(dive.Path, dive.NextAction)
 		for _, artifact := range dive.Artifacts {
@@ -434,6 +589,12 @@ func addPathReplacementsFromText(replacements *[]pathReplacement, seen map[strin
 }
 
 func isPathCandidate(value string) bool {
+	if strings.ContainsAny(strings.TrimSpace(value), " \t\n") {
+		return false
+	}
+	if fractionPattern.MatchString(strings.TrimSpace(value)) {
+		return false
+	}
 	return strings.Contains(value, "/") || strings.Contains(value, "\\")
 }
 

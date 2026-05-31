@@ -14,12 +14,18 @@ func TestAnalysisReportJSONContract(t *testing.T) {
 	object := marshalReportContractObject(t, reportContractAnalysisFixture())
 	assertReportContractKeys(t, object, []string{
 		"version",
+		"agentic_readiness",
 		"generated_at",
 		"repo",
 		"config",
 		"tooling",
 		"inventory",
 		"coverage",
+		"source_coverage",
+		"data_gaps",
+		"recommended_connections",
+		"attribution_readiness",
+		"work_unit_candidates",
 		"analyzer_findings",
 		"signals",
 		"pr_quality_cards",
@@ -31,6 +37,7 @@ func TestAnalysisReportJSONContract(t *testing.T) {
 		"setup_actions",
 		"limitations",
 		"privacy",
+		"privacy_summary",
 	})
 	assertReportContractKeys(t, reportContractNestedObject(t, object, "privacy"), reportPrivacyContractKeys())
 	assertReportContractKeys(t, reportContractNestedObject(t, object, "follow_up"), []string{
@@ -87,6 +94,26 @@ func TestShareCardJSONContract(t *testing.T) {
 		"highlights",
 		"confidence",
 		"public_safe",
+	})
+}
+
+func TestCollectorBundleJSONContract(t *testing.T) {
+	object := marshalReportContractObject(t, CollectorBundle(reportContractAnalysisFixture()))
+	assertReportContractKeys(t, object, []string{
+		"version",
+		"generated_at",
+		"repo",
+		"git",
+		"tooling",
+		"agentic_readiness",
+		"source_coverage",
+		"data_gaps",
+		"recommended_connections",
+		"attribution_readiness",
+		"work_unit_candidates",
+		"setup_actions",
+		"limitations",
+		"privacy",
 	})
 }
 
@@ -219,7 +246,7 @@ func reportContractAnalysisFixture() signals.AnalysisReport {
 		},
 		Profile: signals.ProfileSummary{
 			DisplayName:        "Example Developer",
-			Headline:           "AI-native contribution profile",
+			Headline:           "Agentic readiness profile",
 			AnalyzedPRs:        1,
 			AnalysisWindowDays: 90,
 			Confidence:         signals.ConfidenceMedium,

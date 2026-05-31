@@ -527,7 +527,7 @@ function analysisFixture(privateRoot) {
       confidence: "medium",
     },
     profile: {
-      headline: "AI-native contribution profile",
+      headline: "Agentic readiness profile",
       analyzed_prs: 1,
       analysis_window_days: 90,
       confidence: "medium",
@@ -569,9 +569,7 @@ function runSmoke(binary, tempRoot, options = {}) {
 
   const help = runCli(binary, [], { env, byName: options.byName });
   assert(
-    help.stdout.includes(
-      "Analyze contribution quality from local repo evidence.",
-    ),
+    help.stdout.includes("Analyze agentic readiness from local repo evidence."),
     "root help output missing summary",
   );
 
@@ -738,6 +736,9 @@ function runSmoke(binary, tempRoot, options = {}) {
   const jsonRun = latestRunDir(jsonRoot);
   assertFilesExist(jsonRun, [
     "analysis.json",
+    "collector.bundle.json",
+    "source-coverage.json",
+    "attribution-readiness.json",
     "profile.export.json",
     "share-card.json",
     "tooling.json",
@@ -766,6 +767,19 @@ function runSmoke(binary, tempRoot, options = {}) {
     "analysis missing confidence setup actions",
   );
   assert(
+    analysis.agentic_readiness?.grade && analysis.agentic_readiness?.score > 0,
+    "analysis missing agentic readiness score",
+  );
+  assert(
+    Array.isArray(analysis.source_coverage?.sources) &&
+      analysis.source_coverage.sources.length > 0,
+    "analysis missing source coverage",
+  );
+  assert(
+    analysis.attribution_readiness?.pattern,
+    "analysis missing attribution readiness",
+  );
+  assert(
     analysis.inventory?.total_files === analysisRepoVisibleFiles.length,
     `inventory counted ${analysis.inventory?.total_files} files, want ${analysisRepoVisibleFiles.length} Git-visible files`,
   );
@@ -790,6 +804,60 @@ function runSmoke(binary, tempRoot, options = {}) {
   );
   assertNoTextInFiles(collectFiles(jsonRun), [SECRET_SENTINEL]);
 
+  const probeRoot = path.join(tempRoot, "probe-json");
+  const probe = runCli(
+    binary,
+    ["probe", "--repo", ".", "--output", probeRoot, "--no-external-tools"],
+    { cwd: analysisRepo, env, byName: options.byName },
+  );
+  assertReferencedPathsExist(probe, tempRoot);
+  const probeRun = latestRunDir(probeRoot);
+  assertFilesExist(probeRun, [
+    "analysis.json",
+    "collector.bundle.json",
+    "source-coverage.json",
+    "attribution-readiness.json",
+    "tooling.json",
+  ]);
+  assert(
+    probe.stdout.includes("Bundle: ") &&
+      probe.stdout.includes("Source coverage: ") &&
+      probe.stdout.includes("Attribution readiness: "),
+    "probe output missing collector artifact paths",
+  );
+  assertPublicSafeFiles(collectFiles(probeRun), analysisRepo);
+
+  const workUnitStart = runCli(
+    binary,
+    [
+      "work-unit",
+      "start",
+      "--repo",
+      ".",
+      "--goal",
+      "Dogfood agentic readiness",
+      "--issue",
+      "DOG-123",
+    ],
+    { cwd: analysisRepo, env, byName: options.byName },
+  );
+  assert(
+    workUnitStart.stdout.includes("Work unit: ") &&
+      workUnitStart.stdout.includes("Marker: "),
+    "work-unit start output missing marker details",
+  );
+  const workUnitRoot = path.join(tempRoot, "work-unit-export");
+  const workUnitExport = runCli(
+    binary,
+    ["work-unit", "export", "--repo", ".", "--output", workUnitRoot],
+    { cwd: analysisRepo, env, byName: options.byName },
+  );
+  assert(
+    workUnitExport.stdout.includes("Work units: 1"),
+    "work-unit export did not include the created marker",
+  );
+  assertFilesExist(workUnitRoot, ["work-units.json"]);
+
   const defaultOutput = runCli(
     binary,
     [
@@ -810,6 +878,9 @@ function runSmoke(binary, tempRoot, options = {}) {
   const defaultAnalysis = path.join(defaultRun, "analysis.json");
   assertFilesExist(defaultRun, [
     "analysis.json",
+    "collector.bundle.json",
+    "source-coverage.json",
+    "attribution-readiness.json",
     "profile.export.json",
     "share-card.json",
     "tooling.json",
@@ -838,6 +909,9 @@ function runSmoke(binary, tempRoot, options = {}) {
   assertFilesExist(allRun, [
     "analysis.json",
     "report.md",
+    "collector.bundle.json",
+    "source-coverage.json",
+    "attribution-readiness.json",
     "profile.export.json",
     "share-card.json",
     "tooling.json",

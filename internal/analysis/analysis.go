@@ -21,6 +21,8 @@ import (
 	"github.com/contribution-dev/contribution/internal/report"
 	"github.com/contribution-dev/contribution/internal/signals"
 	"github.com/contribution-dev/contribution/internal/tools"
+	"github.com/contribution-dev/contribution/internal/valuepipeline"
+	"github.com/contribution-dev/contribution/internal/workunit"
 )
 
 var (
@@ -30,16 +32,18 @@ var (
 
 // Options are the effective analyze command options.
 type Options struct {
-	Repo            string
-	Since           string
-	MaxPRs          int
-	GitHubToken     string
-	Output          string
-	Format          string
-	PublicSafe      bool
-	NoExternalTools bool
-	CoveragePaths   []string
-	CoverageFormat  string
+	Repo                  string
+	Since                 string
+	MaxPRs                int
+	GitHubToken           string
+	Output                string
+	Format                string
+	PublicSafe            bool
+	NoExternalTools       bool
+	CoveragePaths         []string
+	CoverageFormat        string
+	IncludeAgentArtifacts bool
+	AgentArtifactPaths    []string
 }
 
 // Run analyzes a repository and writes the configured report artifacts.
@@ -106,6 +110,11 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 	if analyzerFindings == nil {
 		analyzerFindings = []signals.AnalyzerFinding{}
 	}
+	agentArtifacts, agentArtifactLimitations, err := valuepipeline.InspectAgentArtifacts(opts.AgentArtifactPaths, opts.IncludeAgentArtifacts, repo.Path)
+	if err != nil {
+		return "", err
+	}
+	workUnitMarkers, markerLimitations := workunit.ReadMarkers(repo.Path)
 
 	token, tokenAvailable := github.ResolveToken(opts.GitHubToken)
 	metadata := github.Metadata{Reason: "GitHub metadata was not requested; continuing local-only."}
@@ -140,6 +149,8 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 	limitations = append(limitations, historyLimitations...)
 	limitations = append(limitations, tooling.Limitations...)
 	limitations = append(limitations, analyzerLimitations...)
+	limitations = append(limitations, agentArtifactLimitations...)
+	limitations = append(limitations, markerLimitations...)
 	limitations = append(limitations, coverageInputLimitations...)
 	limitations = append(limitations, coverageLimitations...)
 	if metadata.Reason != "" {
@@ -170,6 +181,30 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 		AIModes:            cfg.AIUsage.SelfReportedModes,
 	})
 	limitations = append(limitations, receiptResult.Limitations...)
+	privacySummary := signals.PrivacySummary{
+		PublicSafe:                         opts.PublicSafe,
+		RawCodeIncluded:                    false,
+		RawDiffsIncluded:                   false,
+		PrivatePathsIncludedInPublicExport: false,
+		AuthorEmailsIncluded:               false,
+	}
+	valuePipeline := valuepipeline.Build(valuepipeline.Input{
+		GeneratedAt:          start,
+		Repo:                 repo,
+		RepoMetadata:         repo.Metadata(opts.PublicSafe),
+		Config:               cfg,
+		ConfigWarnings:       cfgWarnings,
+		Inventory:            inventory,
+		History:              history,
+		GitHub:               metadata,
+		Coverage:             coverageSummary,
+		Tooling:              tooling,
+		GitHubTokenAvailable: tokenAvailable,
+		ExternalToolsAllowed: !opts.NoExternalTools,
+		AgentArtifacts:       agentArtifacts,
+		WorkUnitMarkers:      workUnitMarkers,
+	})
+	limitations = append(limitations, valuePipeline.Limitations...)
 	analysis := signals.AnalysisReport{
 		Version:     1,
 		GeneratedAt: start,
@@ -184,28 +219,30 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 			OutputDirectory:          outputDir,
 			GitHubMetadataConfigured: tokenAvailable,
 		},
-		Tooling:          tooling,
-		Inventory:        inventory,
-		Coverage:         coverageSummary,
-		AnalyzerFindings: analyzerFindings,
-		Signals:          allSignals,
-		PRCards:          receiptResult.Cards,
-		WeaknessMap:      receiptResult.WeaknessMap,
-		Trends:           receiptResult.Trends,
-		DeepDives:        receiptResult.DeepDives,
-		Profile:          receiptResult.Profile,
-		SetupActions:     buildSetupActions(repo, cfgWarnings, metadata, coverageSummary, cfg.Coverage, tooling, tokenAvailable, !opts.NoExternalTools, sinceDays),
-		Limitations:      uniqueStrings(limitations),
-		Privacy: signals.PrivacySummary{
-			PublicSafe:                         opts.PublicSafe,
-			RawCodeIncluded:                    false,
-			RawDiffsIncluded:                   false,
-			PrivatePathsIncludedInPublicExport: false,
-			AuthorEmailsIncluded:               false,
-		},
+		Tooling:                tooling,
+		Inventory:              inventory,
+		Coverage:               coverageSummary,
+		AnalyzerFindings:       analyzerFindings,
+		Signals:                allSignals,
+		PRCards:                receiptResult.Cards,
+		WeaknessMap:            receiptResult.WeaknessMap,
+		Trends:                 receiptResult.Trends,
+		DeepDives:              receiptResult.DeepDives,
+		Profile:                receiptResult.Profile,
+		AgenticReadiness:       valuePipeline.AgenticReadiness,
+		SourceCoverage:         valuePipeline.SourceCoverage,
+		DataGaps:               valuePipeline.DataGaps,
+		RecommendedConnections: valuePipeline.RecommendedConnections,
+		AttributionReadiness:   valuePipeline.AttributionReadiness,
+		WorkUnitCandidates:     valuePipeline.WorkUnitCandidates,
+		AgentArtifacts:         agentArtifacts,
+		SetupActions:           buildSetupActions(repo, cfgWarnings, metadata, coverageSummary, cfg.Coverage, tooling, tokenAvailable, !opts.NoExternalTools, sinceDays),
+		Limitations:            uniqueStrings(limitations),
+		Privacy:                privacySummary,
+		PrivacySummary:         privacySummary,
 	}
 	if analysis.Profile.Headline == "" {
-		analysis.Profile.Headline = "AI-native contribution profile"
+		analysis.Profile.Headline = "Agentic readiness profile"
 	}
 	prior := latestPriorAnalysis(outputRoot, outputDir)
 	analysis.FollowUp = buildFollowUpComparison(analysis, prior.analysis, prior.found, prior.err)
@@ -224,18 +261,47 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 	return outputDir, nil
 }
 
+// RunProbe writes a public-safe web-importable collector bundle.
+func RunProbe(ctx context.Context, out io.Writer, opts Options) (string, error) {
+	opts.Format = "json"
+	outputDir, err := Run(ctx, out, opts)
+	if err != nil {
+		return "", err
+	}
+	if _, err := fmt.Fprintf(out, "Bundle: %s\n", filepath.Join(outputDir, "collector.bundle.json")); err != nil {
+		return "", err
+	}
+	if _, err := fmt.Fprintf(out, "Source coverage: %s\n", filepath.Join(outputDir, "source-coverage.json")); err != nil {
+		return "", err
+	}
+	if _, err := fmt.Fprintf(out, "Attribution readiness: %s\n", filepath.Join(outputDir, "attribution-readiness.json")); err != nil {
+		return "", err
+	}
+	return outputDir, nil
+}
+
 func writeAnalyzeReceipt(out io.Writer, analysis signals.AnalysisReport, outputDir string, format string) error {
 	if _, err := fmt.Fprintln(out); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintln(out, "Contribution receipt"); err != nil {
+	if _, err := fmt.Fprintln(out, "Agentic readiness report"); err != nil {
 		return err
 	}
 	if _, err := fmt.Fprintf(out, "Artifacts: %d recent artifacts over %d days\n", analysis.Profile.AnalyzedPRs, analysis.Profile.AnalysisWindowDays); err != nil {
 		return err
 	}
-	if _, err := fmt.Fprintf(out, "Confidence: %s\n", analysis.Profile.Confidence); err != nil {
+	if analysis.AgenticReadiness.Grade != "" {
+		if _, err := fmt.Fprintf(out, "Readiness: %s (%d/100)\n", analysis.AgenticReadiness.Grade, analysis.AgenticReadiness.Score); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintf(out, "Confidence: %s\n", analysis.AgenticReadiness.Confidence); err != nil {
 		return err
+	}
+	if analysis.SourceCoverage.Summary != "" {
+		if _, err := fmt.Fprintf(out, "Coverage: %s\n", terminalText(analysis.SourceCoverage.Summary)); err != nil {
+			return err
+		}
 	}
 	if analysis.FollowUp.Summary != "" {
 		if _, err := fmt.Fprintf(out, "Since last report: %s\n", terminalFollowUpSummary(analysis.FollowUp.Summary)); err != nil {
@@ -256,7 +322,16 @@ func writeAnalyzeReceipt(out io.Writer, analysis signals.AnalysisReport, outputD
 	} else if _, err := fmt.Fprintln(out, "Risk: No major weakness detected with the available evidence."); err != nil {
 		return err
 	}
-	if len(analysis.WeaknessMap.NextActions) > 0 {
+	if len(analysis.AgenticReadiness.TopActions) > 0 {
+		if _, err := fmt.Fprintln(out, "Next:"); err != nil {
+			return err
+		}
+		for i, action := range firstTerminalStrings(analysis.AgenticReadiness.TopActions, 3) {
+			if _, err := fmt.Fprintf(out, "%d. %s\n", i+1, terminalText(action)); err != nil {
+				return err
+			}
+		}
+	} else if len(analysis.WeaknessMap.NextActions) > 0 {
 		if _, err := fmt.Fprintln(out, "Next:"); err != nil {
 			return err
 		}

@@ -19,6 +19,11 @@ tooling layer for repository automation.
   validation.
 - `internal/receipt` owns PR quality cards, weakness map, trend comparison,
   deep dives, profile summary, and receipt confidence.
+- `internal/valuepipeline` owns deterministic source coverage, agentic
+  readiness, attribution readiness, work-unit candidate, and metadata-only
+  agent artifact modeling.
+- `internal/workunit` owns local work-unit marker creation, discovery, and
+  export.
 - `internal/privacy` owns redaction primitives.
 - `internal/publicsafe` owns public-safe transformation policy for analysis,
   repo metadata, and PR cards. Callers should reuse it instead of creating
@@ -62,16 +67,37 @@ public-safe human feedback. The root GitHub Action is a wrapper around local
 CLI preflight only: it produces files and action outputs, but does not upload,
 comment, host, or persist state.
 
-Single-player coaching stays local-first. Private `report.md` may explain
+Agentic-readiness coaching stays local-first. Private `report.md` may explain
 artifact titles, high-churn files, no-test artifacts, PR durability evidence,
 coverage import, optional analyzer findings, recent-vs-prior trend comparison,
-and confidence setup actions. Public-safe analysis/redaction must neutralize
-those details before profile, share-card, packet, or public-safe markdown
+source coverage, attribution readiness, work-unit candidates, and confidence
+setup actions. Public-safe analysis/redaction must neutralize those details
+before profile, share-card, packet, collector bundle, or public-safe markdown
 output.
+
+## Value pipeline boundary
+
+The CLI is the local collector for the Contribution.dev value pipeline. It can
+deterministically measure repo readiness, source coverage, attribution quality,
+local git evidence, validation setup, tool availability, metadata-only agent
+artifacts, and local work-unit markers. It must clearly report missing source
+coverage instead of pretending to know AI spend, token efficiency, or business
+ROI.
+
+`probe` is the web-app bridge. It writes public-safe JSON collector artifacts,
+including `collector.bundle.json`, `source-coverage.json`, and
+`attribution-readiness.json`. It does not upload until the private web/app repo
+defines an authenticated receiving contract.
+
+`work-unit start` creates optional local intent markers for workflows where a
+branch or PR is not a reliable unit of work. Markers are local files and are not
+staged automatically.
 
 The CLI should not contain hosted profile pages, OpenGraph rendering, X API
 integrations, Discord-specific sharing code, share buttons, social mention
-tracking, reply workers, auth, storage, or hosted background jobs.
+tracking, reply workers, auth, storage, uploads, dashboards, LLM
+interpretation, provider billing connectors, product analytics connectors, or
+hosted background jobs.
 
 Those website and social surfaces belong in the private Contribution.dev
 website and web app repo, which consumes the CLI exports.

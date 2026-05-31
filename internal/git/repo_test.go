@@ -131,6 +131,7 @@ func TestInventoryUsesGitVisibleFiles(t *testing.T) {
 	writeTestFile(t, repoPath, "docs-shared/vision.md", "private\n")
 	writeTestFile(t, repoPath, ".contribution/reports/2026-05-29T000000Z/analysis.json", "{}\n")
 	writeTestFile(t, repoPath, ".contribution/reports/2026-05-29T000000Z/profile.export.json", "{}\n")
+	writeTestFile(t, repoPath, ".contribution/work-units/awu-test.json", "{}\n")
 	if err := os.Remove(filepath.Join(repoPath, "deleted.txt")); err != nil {
 		t.Fatalf("remove deleted tracked file: %v", err)
 	}
@@ -141,7 +142,7 @@ func TestInventoryUsesGitVisibleFiles(t *testing.T) {
 	}
 	want := 0
 	for _, path := range gitVisibleExistingFiles(t, repoPath) {
-		if !isDefaultReportArtifactPath(path) {
+		if !isDefaultContributionArtifactPath(path) {
 			want++
 		}
 	}

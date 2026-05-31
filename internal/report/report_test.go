@@ -18,7 +18,7 @@ func TestProfileExportIsPublicSafe(t *testing.T) {
 	analysis := signals.AnalysisReport{
 		GeneratedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		Profile: signals.ProfileSummary{
-			Headline:           "AI-native contribution profile",
+			Headline:           "Agentic readiness profile",
 			AnalyzedPRs:        1,
 			AnalysisWindowDays: 90,
 			Confidence:         signals.ConfidenceMedium,
@@ -76,7 +76,7 @@ func TestProfileExportOmitsRiskyArtifactsByDefault(t *testing.T) {
 	analysis := signals.AnalysisReport{
 		GeneratedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
 		Profile: signals.ProfileSummary{
-			Headline:           "AI-native contribution profile",
+			Headline:           "Agentic readiness profile",
 			AnalyzedPRs:        3,
 			AnalysisWindowDays: 90,
 			Confidence:         signals.ConfidenceMedium,
@@ -202,12 +202,52 @@ func TestPublicSafeAnalysisRedactsPrivateMetadata(t *testing.T) {
 			NextActions: []string{"rotate " + secret},
 		},
 		Profile: signals.ProfileSummary{
-			Headline:           "AI-native contribution profile",
+			Headline:           "Agentic readiness profile",
 			AnalyzedPRs:        1,
 			AnalysisWindowDays: 90,
 			Confidence:         signals.ConfidenceMedium,
 			Strengths:          []signals.Finding{{Label: "Secret", Evidence: secret}},
 		},
+		AgenticReadiness: signals.AgenticReadiness{
+			Grade:      "B",
+			Score:      82,
+			Confidence: signals.ConfidenceMedium,
+			Summary:    "Ready except " + privateRelativePath + " and " + commitSHA,
+			Components: []signals.ReadinessComponent{{
+				Label:    "Private component",
+				Score:    80,
+				Evidence: privateRelativePath,
+			}},
+			TopActions: []string{"Fix " + privateRelativePath},
+		},
+		SourceCoverage: signals.SourceCoverage{
+			Summary: "Coverage mentions " + privateRelativePath,
+			Sources: []signals.SourceCoverageItem{{
+				Label:    "Private source",
+				Status:   signals.SourceCoveragePartial,
+				Evidence: privateRelativePath,
+			}},
+		},
+		AttributionReadiness: signals.AttributionReadiness{
+			Pattern:    "commit-batch",
+			Confidence: signals.ConfidenceLow,
+			Summary:    "Commit " + commitSHA + " touched " + privateRelativePath,
+		},
+		WorkUnitCandidates: []signals.WorkUnitCandidate{{
+			ID:         "private",
+			Title:      "Private " + privateRelativePath,
+			Pattern:    "commit-batch",
+			Confidence: signals.ConfidenceLow,
+			Summary:    "Commit " + commitSHA,
+			Anchors:    []signals.WorkUnitAnchor{{Type: "commit", ID: commitSHA, Label: commitSHA[:8], Confidence: signals.ConfidenceLow}},
+		}},
+		AgentArtifacts: []signals.AgentArtifactMetadata{{
+			Path:       privateRoot + "/" + privateRelativePath,
+			Branch:     "feature/" + privateRelativePath,
+			Commit:     commitSHA,
+			Status:     "available",
+			Confidence: signals.ConfidenceMedium,
+		}},
 		Limitations: []string{"limitation " + secret},
 		Privacy: signals.PrivacySummary{
 			RawCodeIncluded:                    true,
@@ -287,6 +327,24 @@ func TestPublicSafeAnalysisRedactsPathsAndEmailsOutsideSignals(t *testing.T) {
 	}
 	if !containsText(got, "session.go") {
 		t.Fatalf("public-safe analysis did not preserve neutral basename: %+v", got)
+	}
+}
+
+func TestPublicSafeAnalysisPreservesReadinessScoreFraction(t *testing.T) {
+	analysis := signals.AnalysisReport{
+		Repo: signals.RepoMetadata{ID: "owner/private", Name: "private"},
+		AgenticReadiness: signals.AgenticReadiness{
+			Grade:      "C",
+			Score:      73,
+			Confidence: signals.ConfidenceMedium,
+			Summary:    "Your repo is a C (73/100) for agentic readiness with medium confidence.",
+		},
+		Privacy: signals.PrivacySummary{PublicSafe: true},
+	}
+
+	got := publicsafe.Analysis(analysis)
+	if !strings.Contains(got.AgenticReadiness.Summary, "73/100") {
+		t.Fatalf("readiness score fraction was redacted: %+v", got.AgenticReadiness)
 	}
 }
 
@@ -467,6 +525,9 @@ func TestMarkdownIncludesPrivateExplainabilityDeepDivesAndSetup(t *testing.T) {
 	text := Markdown(analysis)
 	for _, want := range []string{
 		"commit: Refactor checkout flow",
+		"## Agentic Readiness",
+		"## Source Coverage",
+		"## Attribution Readiness",
 		"## High-Churn Deep Dive",
 		"internal/report/report.go",
 		"## No-Test Deep Dive",

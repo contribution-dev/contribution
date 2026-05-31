@@ -8,10 +8,10 @@ lives in Go tests and `scripts/dogfood-cli.mjs`.
 
 - Commands must be deterministic about stdout, stderr, exit status, and output
   files.
-- Successful `analyze` and `preflight` runs print concise terminal summaries
-  with the main result, follow-up movement when available, next action context,
-  capped unavailable-signal notes, and only the artifact paths actually written
-  for the selected format.
+- Successful `analyze`, `probe`, and `preflight` runs print concise terminal
+  summaries with the main result, follow-up movement when available, next action
+  context, capped unavailable-signal notes, and only the artifact paths actually
+  written for the selected format.
 - Errors return a non-zero exit code, write the error to stderr at process
   level, and do not create unrelated artifacts.
 - Public-safe outputs must omit raw code, raw diffs, author emails, secrets,
@@ -33,9 +33,10 @@ lives in Go tests and `scripts/dogfood-cli.mjs`.
 - Private markdown may show artifact titles, file paths, high-churn details,
   and no-test evidence. Public-safe markdown must keep those details redacted
   to neutral artifact labels or path basenames.
-- The CLI may generate `profile.export.json` and `share-card.json`, but it must
-  not publish profiles, render OpenGraph images, call X or Discord APIs, track
-  social mentions, run reply workers, or store hosted social state.
+- The CLI may generate `profile.export.json`, `share-card.json`, and
+  public-safe collector bundle artifacts, but it must not publish profiles,
+  render OpenGraph images, call X or Discord APIs, track social mentions, run
+  reply workers, upload bundles, or store hosted social state.
 
 ## Install and Invocation
 
@@ -53,11 +54,13 @@ lives in Go tests and `scripts/dogfood-cli.mjs`.
 
 | Command           | Contract                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                      | Required coverage                                       |
 | ----------------- | --------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------------- | ------------------------------------------------------- |
-| root/help         | No args exits 0 and prints command help to stdout.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Go command test and dogfood smoke.                      |
+| root/help         | No args exits 0 and prints command help to stdout with the agentic-readiness summary.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                         | Go command test and dogfood smoke.                      |
 | `version`         | Exits 0 and prints version, commit, and date fields. Release artifacts must use linker-provided values.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                       | Go command test, dogfood smoke, release artifact smoke. |
 | `init`            | Creates `.contribution.yml` in the current Git repo, uses a detected default branch when available, includes risky-path presets and repo-type coverage guidance where practical, and is idempotent.                                                                                                                                                                                                                                                                                                                                                                                                                                           | Dogfood smoke.                                          |
 | `doctor`          | Exits 0 in a Git repo, reports required/optional tool status, and never prints token values. Missing optional tools are non-fatal.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                            | Dogfood smoke and release artifact smoke.               |
-| `analyze`         | Analyzes `--repo` or the current repo, always writes canonical `analysis.json`, respects `--format`, optionally imports Go/LCOV coverage from flags or an existing configured artifact, supports explicit `--github-token gh`, imports optional analyzer findings when tools are available, compares recent and prior local history windows, and continues without optional tools or GitHub metadata.                                                                                                                                                                                                                                         | Go analysis tests, dogfood smoke, real-repo dogfood.    |
+| `analyze`         | Analyzes `--repo` or the current repo, always writes canonical `analysis.json`, readiness/source/attribution collector artifacts, profile/share artifacts, and tooling data; respects `--format`; optionally imports Go/LCOV coverage from flags or an existing configured artifact; supports explicit `--github-token gh`; imports optional analyzer findings when tools are available; can import metadata-only agent artifacts with explicit opt-in; compares recent and prior local history windows; and continues without optional tools or GitHub metadata.                                                                             | Go analysis tests, dogfood smoke, real-repo dogfood.    |
+| `probe`           | Runs a public-safe JSON-only local collector for web-app import. It writes `analysis.json`, `collector.bundle.json`, `source-coverage.json`, `attribution-readiness.json`, profile/share artifacts, and `tooling.json`; does not upload; defaults to public-safe output; supports optional GitHub metadata; and requires `--include-agent-artifacts` before reading any explicit `--agent-artifact` metadata path.                                                                                                                                                                                                                            | Go command test and dogfood smoke.                      |
+| `work-unit`       | `work-unit start --goal` creates a local marker under `.contribution/work-units/` by default and never stages it. `work-unit export` writes `work-units.json` for local marker import. Markers contain intent metadata only: goal, branch, commit, optional issue, repo fingerprint, and privacy classification.                                                                                                                                                                                                                                                                                                                              | Go command test and dogfood smoke.                      |
 | `report`          | Requires `--input`, validates `--format`, regenerates report/profile/share artifacts, and honors `--public-safe`.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                             | Go command test and dogfood smoke.                      |
 | `export-profile`  | Requires `--input` and `--output`, writes only public-safe `profile.export.json` and `share-card.json`, and never writes report artifacts.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                    | Go command test and dogfood smoke.                      |
 | `redact`          | Requires `--input` and `--output`, validates `--format`, and writes public-safe JSON, markdown, profile, and share artifacts.                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                                 | Go command test and dogfood smoke.                      |
@@ -84,8 +87,10 @@ lives in Go tests and `scripts/dogfood-cli.mjs`.
   contract for the separate website/app repo. Profile exports prefer non-risky
   selected artifacts and must not expose risky artifacts by default. The CLI
   does not upload or host them.
-- `analysis.json`, `profile.export.json`, `share-card.json`, `preflight.json`,
-  `friend-review-packet.json`, and `friend-feedback.export.json` have
+- `analysis.json`, `collector.bundle.json`, `source-coverage.json`,
+  `attribution-readiness.json`, `profile.export.json`, `share-card.json`,
+  `preflight.json`, `friend-review-packet.json`, and
+  `friend-feedback.export.json` have
   behavior-level contract tests for their top-level JSON shape.
 - `analysis.json` includes `coverage`, `analyzer_findings`, `trends`,
   `follow_up`, `deep_dives`, and `setup_actions`. `coverage` summarizes
@@ -97,8 +102,19 @@ lives in Go tests and `scripts/dogfood-cli.mjs`.
   current report with the latest prior local `analysis.json` under the same
   output root and records improved, regressed, resolved, and persistent
   patterns. `deep_dives` explains high-churn and source-without-test patterns
-  for the private receipt. `setup_actions` gives concrete commands that would
+  for the private report. `setup_actions` gives concrete commands that would
   raise confidence.
+- `analysis.json` also includes additive value-pipeline fields:
+  `agentic_readiness`, `source_coverage`, `data_gaps`,
+  `recommended_connections`, `attribution_readiness`,
+  `work_unit_candidates`, `agent_artifacts` when imported, and
+  `privacy_summary`. These fields are deterministic and must not claim token or
+  cost ROI unless explicit telemetry or metadata supplies that numeric evidence.
+- `collector.bundle.json` is public-safe by construction. It includes schema
+  version, generated time, redacted repo metadata, local git summary, tooling,
+  agentic readiness, source coverage, data gaps, recommended connections,
+  attribution readiness, candidate work units, optional metadata-only agent
+  artifact summaries, setup actions, limitations, and privacy posture.
 - `preflight.json` is V2. It includes structured changed files, additions and
   deletions, new-side changed line ranges, total changed lines, optional
   changed-line coverage, bounded optional `analyzer_findings` for changed

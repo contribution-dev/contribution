@@ -182,6 +182,19 @@ func DefaultBranch(ctx context.Context, repoPath string) (string, error) {
 	return "main", nil
 }
 
+// CurrentBranch returns the current checked-out branch, or an empty string for detached HEAD.
+func CurrentBranch(ctx context.Context, repoPath string) (string, error) {
+	out, err := gitOutput(ctx, repoPath, "rev-parse", "--abbrev-ref", "HEAD")
+	if err != nil {
+		return "", err
+	}
+	branch := strings.TrimSpace(out)
+	if branch == "HEAD" {
+		return "", nil
+	}
+	return branch, nil
+}
+
 // ParseGitHubRepo extracts owner and repo from common GitHub remote URL forms.
 func ParseGitHubRepo(remote string) (string, string) {
 	remote = strings.TrimSpace(remote)
@@ -264,7 +277,7 @@ func gitInventoryPaths(ctx context.Context, repoPath string) ([]string, error) {
 		if path == "." || strings.HasPrefix(path, "../") || filepath.IsAbs(path) {
 			continue
 		}
-		if isDefaultReportArtifactPath(path) {
+		if isDefaultContributionArtifactPath(path) {
 			continue
 		}
 		paths = append(paths, path)
@@ -272,9 +285,12 @@ func gitInventoryPaths(ctx context.Context, repoPath string) ([]string, error) {
 	return paths, nil
 }
 
-func isDefaultReportArtifactPath(path string) bool {
+func isDefaultContributionArtifactPath(path string) bool {
 	lower := strings.ToLower(filepath.ToSlash(path))
-	return lower == ".contribution/reports" || strings.HasPrefix(lower, ".contribution/reports/")
+	return lower == ".contribution/reports" ||
+		strings.HasPrefix(lower, ".contribution/reports/") ||
+		lower == ".contribution/work-units" ||
+		strings.HasPrefix(lower, ".contribution/work-units/")
 }
 
 // ChangedFile is a changed path in commit history or a diff.

@@ -20,7 +20,7 @@ type BuildInfo struct {
 func NewRootCommand(out io.Writer, errOut io.Writer, info BuildInfo) *cobra.Command {
 	cmd := &cobra.Command{
 		Use:           "contribution",
-		Short:         "Analyze contribution quality from local repo evidence.",
+		Short:         "Analyze agentic readiness from local repo evidence.",
 		SilenceErrors: true,
 		SilenceUsage:  true,
 		RunE: func(cmd *cobra.Command, _ []string) error {
@@ -38,9 +38,11 @@ func NewRootCommand(out io.Writer, errOut io.Writer, info BuildInfo) *cobra.Comm
 		newInitCommand(out),
 		newPacketCommand(out),
 		newPreflightCommand(out),
+		newProbeCommand(out, errOut),
 		newRedactCommand(out),
 		newReportCommand(out),
 		newVersionCommand(out, info),
+		newWorkUnitCommand(out),
 	)
 	return cmd
 }

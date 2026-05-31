@@ -56,7 +56,7 @@ func TestRunWritesJsonArtifactsAndLocalOnlyFallback(t *testing.T) {
 	if outputDir != wantDir {
 		t.Fatalf("outputDir = %q, want %q", outputDir, wantDir)
 	}
-	for _, name := range []string{"analysis.json", "profile.export.json", "share-card.json", "tooling.json"} {
+	for _, name := range []string{"analysis.json", "profile.export.json", "share-card.json", "tooling.json", "collector.bundle.json", "source-coverage.json", "attribution-readiness.json"} {
 		assertFileExists(t, filepath.Join(outputDir, name))
 	}
 	assertFileMissing(t, filepath.Join(outputDir, "report.md"))
@@ -86,13 +86,24 @@ func TestRunWritesJsonArtifactsAndLocalOnlyFallback(t *testing.T) {
 	if analysis.FollowUp.Status != "baseline" {
 		t.Fatalf("follow-up status = %q, want baseline", analysis.FollowUp.Status)
 	}
+	if analysis.AgenticReadiness.Grade == "" || analysis.AgenticReadiness.Score == 0 {
+		t.Fatalf("agentic readiness missing: %+v", analysis.AgenticReadiness)
+	}
+	if len(analysis.SourceCoverage.Sources) == 0 || len(analysis.DataGaps) == 0 {
+		t.Fatalf("source coverage/data gaps missing: %+v gaps=%+v", analysis.SourceCoverage, analysis.DataGaps)
+	}
+	if analysis.AttributionReadiness.Pattern == "" || len(analysis.WorkUnitCandidates) == 0 {
+		t.Fatalf("attribution readiness missing: %+v candidates=%+v", analysis.AttributionReadiness, analysis.WorkUnitCandidates)
+	}
 	assertContains(t, analysis.Limitations, "GitHub metadata was not requested; continuing local-only.")
 	got := stdout.String()
 	for _, want := range []string{
 		"GitHub metadata: unavailable, continuing local-only",
-		"Contribution receipt",
+		"Agentic readiness report",
 		"Artifacts: 1 recent artifacts over 14 days",
+		"Readiness:",
 		"Confidence: low",
+		"Coverage:",
 		"Since last report: No previous local report found; this run establishes the comparison baseline.",
 		"Strength:",
 		"Risk:",

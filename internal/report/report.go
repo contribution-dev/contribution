@@ -54,6 +54,16 @@ func WriteAnalysisBundle(outputDir string, analysis signals.AnalysisReport, form
 	if err := writeJSON(filepath.Join(outputDir, "tooling.json"), analysis.Tooling); err != nil {
 		return err
 	}
+	publicAnalysis := publicsafe.Analysis(analysis)
+	if err := writeJSON(filepath.Join(outputDir, "source-coverage.json"), publicAnalysis.SourceCoverage); err != nil {
+		return err
+	}
+	if err := writeJSON(filepath.Join(outputDir, "attribution-readiness.json"), publicAnalysis.AttributionReadiness); err != nil {
+		return err
+	}
+	if err := writeJSON(filepath.Join(outputDir, "collector.bundle.json"), CollectorBundle(analysis)); err != nil {
+		return err
+	}
 	return nil
 }
 
@@ -88,7 +98,17 @@ func WriteReportOnly(outputDir string, analysis signals.AnalysisReport, format s
 	if err := writeJSON(filepath.Join(outputDir, "profile.export.json"), ProfileExport(analysis)); err != nil {
 		return err
 	}
-	return writeJSON(filepath.Join(outputDir, "share-card.json"), ShareCard(analysis))
+	if err := writeJSON(filepath.Join(outputDir, "share-card.json"), ShareCard(analysis)); err != nil {
+		return err
+	}
+	publicAnalysis := publicsafe.Analysis(analysis)
+	if err := writeJSON(filepath.Join(outputDir, "source-coverage.json"), publicAnalysis.SourceCoverage); err != nil {
+		return err
+	}
+	if err := writeJSON(filepath.Join(outputDir, "attribution-readiness.json"), publicAnalysis.AttributionReadiness); err != nil {
+		return err
+	}
+	return writeJSON(filepath.Join(outputDir, "collector.bundle.json"), CollectorBundle(analysis))
 }
 
 // WriteProfileArtifacts writes only the public profile export contract files.
@@ -119,11 +139,23 @@ func ReadAnalysis(path string) (signals.AnalysisReport, error) {
 // Markdown renders the private human report.
 func Markdown(analysis signals.AnalysisReport) string {
 	var buf bytes.Buffer
-	fmt.Fprintln(&buf, "# Contribution.dev Report")
+	fmt.Fprintln(&buf, "# Agentic Readiness Report")
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "## Summary")
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, summary(analysis))
+	fmt.Fprintln(&buf)
+	fmt.Fprintln(&buf, "## Agentic Readiness")
+	fmt.Fprintln(&buf)
+	writeAgenticReadiness(&buf, analysis.AgenticReadiness)
+	fmt.Fprintln(&buf)
+	fmt.Fprintln(&buf, "## Source Coverage")
+	fmt.Fprintln(&buf)
+	writeSourceCoverage(&buf, analysis.SourceCoverage, analysis.DataGaps)
+	fmt.Fprintln(&buf)
+	fmt.Fprintln(&buf, "## Attribution Readiness")
+	fmt.Fprintln(&buf)
+	writeAttributionReadiness(&buf, analysis.AttributionReadiness, analysis.WorkUnitCandidates)
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "## Since Last Report")
 	fmt.Fprintln(&buf)
@@ -182,7 +214,7 @@ func Markdown(analysis signals.AnalysisReport) string {
 		fmt.Fprintln(&buf)
 		fmt.Fprintln(&buf, "## AI Workflow Notes")
 		fmt.Fprintln(&buf)
-		fmt.Fprintf(&buf, "AI workflow confidence is low because this report only uses self-reported tools and modes. Tools: %s. Modes: %s. The CLI does not detect AI-authored code or calculate token efficiency.\n", joinOrNone(analysis.Config.SelfReportedAITools), joinOrNone(analysis.Config.SelfReportedAIModes))
+		fmt.Fprintf(&buf, "AI workflow confidence is low because this report only uses self-reported tools and modes. Tools: %s. Modes: %s. The CLI does not detect AI-authored code or calculate token efficiency unless telemetry or metadata artifacts are imported.\n", joinOrNone(analysis.Config.SelfReportedAITools), joinOrNone(analysis.Config.SelfReportedAIModes))
 	}
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "## Next 3 Actions")
@@ -224,7 +256,7 @@ func ProfileExport(analysis signals.AnalysisReport) signals.ProfileExport {
 	export.Version = 1
 	export.GeneratedAt = analysis.GeneratedAt
 	export.Profile.DisplayName = analysis.Profile.DisplayName
-	export.Profile.Headline = "AI-native contribution profile"
+	export.Profile.Headline = "Agentic readiness profile"
 	export.Profile.Visibility = "private_by_default"
 	export.Summary.AnalyzedPRs = analysis.Profile.AnalyzedPRs
 	export.Summary.AnalysisWindowDays = analysis.Profile.AnalysisWindowDays
@@ -255,18 +287,61 @@ func ShareCard(analysis signals.AnalysisReport) signals.ShareCard {
 	for len(highlights) < 3 {
 		highlights = append(highlights, "Private local analysis")
 	}
-	subtitle := "Improving contribution quality across recent work"
-	if len(analysis.Profile.ImprovementTrends) > 0 {
+	subtitle := "Improving repo readiness for AI-assisted development"
+	if analysis.AgenticReadiness.Grade != "" {
+		subtitle = fmt.Sprintf("Agentic readiness: %s (%d/100)", analysis.AgenticReadiness.Grade, analysis.AgenticReadiness.Score)
+	} else if len(analysis.Profile.ImprovementTrends) > 0 {
 		subtitle = analysis.Profile.ImprovementTrends[0].Label
 	}
 	return signals.ShareCard{
 		Version:    1,
-		Title:      "AI-native contribution profile",
+		Title:      "Agentic readiness profile",
 		Subtitle:   subtitle,
 		Highlights: highlights,
 		Confidence: analysis.Profile.Confidence,
 		PublicSafe: true,
 	}
+}
+
+// CollectorBundle builds the public-safe web-importable local probe artifact.
+func CollectorBundle(analysis signals.AnalysisReport) signals.CollectorBundle {
+	headSHAAvailable := analysis.Repo.HeadSHA != "" || analysis.Trends.CurrentWindow.Commits > 0
+	analysis = publicsafe.Analysis(analysis)
+	highChurn := make([]string, 0, len(analysis.DeepDives.HighChurn))
+	for _, item := range analysis.DeepDives.HighChurn {
+		highChurn = append(highChurn, item.Path)
+	}
+	return signals.CollectorBundle{
+		Version:     1,
+		GeneratedAt: analysis.GeneratedAt,
+		Repo:        analysis.Repo,
+		Git: signals.CollectorGitSummary{
+			CommitCount:      analysis.Trends.CurrentWindow.Commits,
+			UniqueFiles:      uniqueFilesChanged(analysis.Signals),
+			HighChurnFiles:   highChurn,
+			HeadSHAAvailable: headSHAAvailable,
+		},
+		Tooling:              analysis.Tooling,
+		AgenticReadiness:     analysis.AgenticReadiness,
+		SourceCoverage:       analysis.SourceCoverage,
+		DataGaps:             analysis.DataGaps,
+		Recommended:          analysis.RecommendedConnections,
+		AttributionReadiness: analysis.AttributionReadiness,
+		WorkUnitCandidates:   analysis.WorkUnitCandidates,
+		AgentArtifacts:       analysis.AgentArtifacts,
+		SetupActions:         analysis.SetupActions,
+		Limitations:          analysis.Limitations,
+		Privacy:              analysis.Privacy,
+	}
+}
+
+func uniqueFilesChanged(signalsIn []signals.Signal) int {
+	for _, sig := range signalsIn {
+		if sig.Type == "files_changed_count" {
+			return int(sig.Value)
+		}
+	}
+	return 0
 }
 
 // WritePreflight writes current-diff preflight artifacts.
@@ -460,6 +535,11 @@ func writeJSON(path string, value any) error {
 }
 
 func summary(analysis signals.AnalysisReport) string {
+	if analysis.AgenticReadiness.Grade != "" {
+		return fmt.Sprintf("%s This report measures how prepared the repo is for agentic development, then shows which data gaps prevent stronger AI-spend-to-outcome analysis.",
+			analysis.AgenticReadiness.Summary,
+		)
+	}
 	if len(analysis.WeaknessMap.Weaknesses) > 0 && len(analysis.WeaknessMap.Strengths) > 0 {
 		return fmt.Sprintf("%s The main risk pattern is %s. Confidence is %s because this report is based on the available local and optional metadata signals.",
 			analysis.WeaknessMap.Strengths[0].Evidence,
@@ -468,6 +548,89 @@ func summary(analysis signals.AnalysisReport) string {
 		)
 	}
 	return fmt.Sprintf("%d artifacts were analyzed locally with %s confidence. Missing optional metadata lowers certainty instead of creating fake precision.", analysis.Profile.AnalyzedPRs, analysis.Profile.Confidence)
+}
+
+func writeAgenticReadiness(buf *bytes.Buffer, readiness signals.AgenticReadiness) {
+	if readiness.Grade == "" {
+		fmt.Fprintln(buf, "No agentic readiness score was computed.")
+		return
+	}
+	fmt.Fprintf(buf, "Your repo is a %s (%d/100). Confidence: %s.\n", readiness.Grade, readiness.Score, readiness.Confidence)
+	if readiness.Summary != "" {
+		fmt.Fprintf(buf, "\n%s\n", readiness.Summary)
+	}
+	if len(readiness.Components) > 0 {
+		fmt.Fprintln(buf)
+		fmt.Fprintln(buf, "| Component | Score | Confidence | Evidence |")
+		fmt.Fprintln(buf, "| --- | ---: | --- | --- |")
+		for _, component := range readiness.Components {
+			fmt.Fprintf(buf, "| %s | %d | %s | %s |\n", escapeTable(component.Label), component.Score, component.Confidence, escapeTable(component.Evidence))
+		}
+	}
+	if len(readiness.TopActions) > 0 {
+		fmt.Fprintln(buf)
+		fmt.Fprintln(buf, "Highest-ROI improvements:")
+		for _, action := range firstStrings(readiness.TopActions, 5) {
+			fmt.Fprintf(buf, "- %s\n", action)
+		}
+	}
+	if len(readiness.Limitations) > 0 {
+		fmt.Fprintln(buf)
+		fmt.Fprintln(buf, "What would make this score more trustworthy:")
+		for _, limitation := range readiness.Limitations {
+			fmt.Fprintf(buf, "- %s\n", limitation)
+		}
+	}
+}
+
+func writeSourceCoverage(buf *bytes.Buffer, coverage signals.SourceCoverage, gaps []signals.DataGap) {
+	if len(coverage.Sources) == 0 {
+		fmt.Fprintln(buf, "No source coverage model was computed.")
+		return
+	}
+	fmt.Fprintf(buf, "%s Confidence: %s.\n", coverage.Summary, coverage.Confidence)
+	fmt.Fprintln(buf)
+	fmt.Fprintln(buf, "| Source | Status | Unlocks | Next |")
+	fmt.Fprintln(buf, "| --- | --- | --- | --- |")
+	for _, item := range coverage.Sources {
+		next := item.NextAction
+		if next == "" {
+			next = "No action needed."
+		}
+		fmt.Fprintf(buf, "| %s | %s | %s | %s |\n", escapeTable(item.Label), item.Status, escapeTable(item.Unlocks), escapeTable(next))
+	}
+	if len(gaps) > 0 {
+		fmt.Fprintln(buf)
+		fmt.Fprintln(buf, "Most important data gaps:")
+		for _, gap := range firstDataGaps(gaps, 5) {
+			fmt.Fprintf(buf, "- %s: %s Next: %s\n", gap.Label, gap.Unlocks, gap.NextAction)
+		}
+	}
+}
+
+func writeAttributionReadiness(buf *bytes.Buffer, attribution signals.AttributionReadiness, candidates []signals.WorkUnitCandidate) {
+	if attribution.Pattern == "" {
+		fmt.Fprintln(buf, "No attribution readiness model was computed.")
+		return
+	}
+	fmt.Fprintf(buf, "Pattern: %s. Confidence: %s.\n", attribution.Pattern, attribution.Confidence)
+	if attribution.Summary != "" {
+		fmt.Fprintf(buf, "\n%s\n", attribution.Summary)
+	}
+	if attribution.NextAction != "" {
+		fmt.Fprintf(buf, "\nNext: %s\n", attribution.NextAction)
+	}
+	if len(attribution.MissingEvidence) > 0 {
+		fmt.Fprintln(buf)
+		fmt.Fprintf(buf, "Missing evidence: %s.\n", strings.Join(attribution.MissingEvidence, ", "))
+	}
+	if len(candidates) > 0 {
+		fmt.Fprintln(buf)
+		fmt.Fprintln(buf, "Candidate work units:")
+		for _, candidate := range firstWorkUnitCandidates(candidates, 5) {
+			fmt.Fprintf(buf, "- %s: %s (%s confidence)\n", candidate.Pattern, candidate.Title, candidate.Confidence)
+		}
+	}
 }
 
 func writeFindings(buf *bytes.Buffer, findings []signals.Finding) {
@@ -604,6 +767,20 @@ func profileCards(cards []signals.PRQualityCard, limit int) []signals.PRQualityC
 }
 
 func firstStrings(values []string, limit int) []string {
+	if len(values) < limit {
+		limit = len(values)
+	}
+	return values[:limit]
+}
+
+func firstDataGaps(values []signals.DataGap, limit int) []signals.DataGap {
+	if len(values) < limit {
+		limit = len(values)
+	}
+	return values[:limit]
+}
+
+func firstWorkUnitCandidates(values []signals.WorkUnitCandidate, limit int) []signals.WorkUnitCandidate {
 	if len(values) < limit {
 		limit = len(values)
 	}

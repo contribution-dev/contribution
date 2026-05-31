@@ -14,6 +14,7 @@ import {
 } from "node:fs";
 import path from "node:path";
 import { fileURLToPath } from "node:url";
+import { cleanupStaleProjectTempRoots } from "./lib/temp-cleanup.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
 const ROOT = path.resolve(SCRIPT_DIR, "..");
@@ -1379,6 +1380,7 @@ function main() {
     } else {
       rmSync(tempRoot, { recursive: true, force: true });
     }
+    cleanupStaleProjectTempRoots({ quiet: true });
   }
 }
 

@@ -13,6 +13,10 @@ Applies to `scripts/**`. Use with [AGENTS.md](../AGENTS.md).
 - Never log secrets, tokens, credentials, or PII.
 - Keep review and validation routing centralized in shared scripts instead of
   adding ad hoc checks in multiple places.
+- Use `scripts/lib/temp-cleanup.mjs` for repo-owned temp cleanup. New
+  disposable top-level temp paths should use the `contribution-*` prefix under
+  `/tmp` or `$TMPDIR`; preserve durable review roots such as
+  `contribution-code-reviews-*`.
 - When script behavior changes, update validating docs or runbooks in the same
   change.
 

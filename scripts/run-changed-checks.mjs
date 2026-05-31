@@ -15,6 +15,7 @@ import {
   hasControlPlaneChanges,
   isControlPlaneDocUpdated,
 } from "./lib/control-plane-doc-sync.mjs";
+import { cleanupStaleProjectTempRoots } from "./lib/temp-cleanup.mjs";
 
 const MODES = new Set(["lint", "typecheck", "test", "all"]);
 
@@ -278,47 +279,55 @@ function runPrePushRoute(changes, classification, args, changedFilesList) {
 
 function main() {
   const args = parseArgs(process.argv.slice(2));
-  assertPrePushBase(args);
-  const changes = getChangedFiles({ explicitBase: args.base });
-  const classification = classifyChangedFiles(changes.files);
-  const shouldRunAgentsCheck = hasAgentsCheckRelevantChanges(changes.files);
+  cleanupStaleProjectTempRoots({ quiet: true });
+  try {
+    assertPrePushBase(args);
+    const changes = getChangedFiles({ explicitBase: args.base });
+    const classification = classifyChangedFiles(changes.files);
+    const shouldRunAgentsCheck = hasAgentsCheckRelevantChanges(changes.files);
 
-  console.log(`Changed-checks diff range: ${changes.diffRange}`);
+    console.log(`Changed-checks diff range: ${changes.diffRange}`);
 
-  if (changes.files.length === 0) {
-    console.log("No changed files detected. Nothing to run.");
-    return;
-  }
-
-  withChangedFilesList(changes.files, (changedFilesList) => {
-    if (args.prePush) {
-      runPrePushRoute(changes, classification, args, changedFilesList);
+    if (changes.files.length === 0) {
+      console.log("No changed files detected. Nothing to run.");
       return;
     }
 
-    if (shouldUseDocsOnlyFastPath(classification, args)) {
-      console.log("Docs-only change set detected.");
-      runContractCoverageForDocsOnly(changes.files, changedFilesList);
+    withChangedFilesList(changes.files, (changedFilesList) => {
+      if (args.prePush) {
+        runPrePushRoute(changes, classification, args, changedFilesList);
+        return;
+      }
+
+      if (shouldUseDocsOnlyFastPath(classification, args)) {
+        console.log("Docs-only change set detected.");
+        runContractCoverageForDocsOnly(changes.files, changedFilesList);
+        if (shouldRunAgentsCheck) {
+          runPlan(
+            [["pnpm", ["agents:check"]]],
+            "Running AGENTS/docs validation",
+          );
+        }
+        return;
+      }
+
+      const commands = appendContractCommands(
+        args.full || classification.rootConfig || classification.tooling
+          ? buildFullCommands(args.mode)
+          : buildChangedCommands(args.mode, changes.files, classification),
+        args.mode,
+        changes.files,
+        changedFilesList,
+      );
+      runPlan(commands, "Running changed-aware check set");
+
       if (shouldRunAgentsCheck) {
         runPlan([["pnpm", ["agents:check"]]], "Running AGENTS/docs validation");
       }
-      return;
-    }
-
-    const commands = appendContractCommands(
-      args.full || classification.rootConfig || classification.tooling
-        ? buildFullCommands(args.mode)
-        : buildChangedCommands(args.mode, changes.files, classification),
-      args.mode,
-      changes.files,
-      changedFilesList,
-    );
-    runPlan(commands, "Running changed-aware check set");
-
-    if (shouldRunAgentsCheck) {
-      runPlan([["pnpm", ["agents:check"]]], "Running AGENTS/docs validation");
-    }
-  });
+    });
+  } finally {
+    cleanupStaleProjectTempRoots({ quiet: true });
+  }
 }
 
 export function isDirectExecution(importMetaUrl, argv1) {

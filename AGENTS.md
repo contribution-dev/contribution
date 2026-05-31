@@ -101,7 +101,10 @@ If two instructions conflict and both cannot be satisfied, stop and ask.
   their owning source repo, such as `/Users/gabe/Sites/contribution-website`,
   and keep that commit separate from CLI repo changes.
 - Temporary repo files must use a `temp-` prefix. Prefer `/tmp/contribution-*`
-  for disposable harnesses and scratch runs.
+  or `$TMPDIR/contribution-*` for disposable harnesses and scratch runs; these
+  top-level paths are automatically pruned by repo validation and dogfood
+  scripts once stale. Do not store durable state under that prefix. For manual
+  cleanup, run `pnpm tmp:clean`.
 
 ## Routing
 

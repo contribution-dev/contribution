@@ -124,6 +124,11 @@ preflight report construction.
 Changed-aware commands fall back to broad checks for root config or tooling
 changes.
 
+Changed-aware validation also prunes stale top-level project temp paths named
+`contribution-*` under `/tmp`, `/private/tmp`, and the shell `TMPDIR`; durable
+review fallback roots named `contribution-code-reviews-*` are preserved. Run
+`pnpm tmp:clean` to remove current disposable project temp paths manually.
+
 ## CLI dogfood
 
 - `pnpm dogfood:smoke` builds the real CLI and exercises it against temporary
@@ -142,6 +147,8 @@ changes.
   unpacks the current runner artifact, and runs a clean-environment smoke. This
   current-runner artifact check is the intended default; add cross-OS artifact
   execution only if release risk justifies the extra CI cost.
+- Dogfood removes its current temp workspace on completion and also prunes
+  stale disposable `contribution-*` temp paths from previous interrupted runs.
 - `docs/cli-contract.md` is the compact contract map for user-visible command
   behavior and required coverage. CLI architecture references under
   `docs/reference/architecture.md` also count as contract evidence when they

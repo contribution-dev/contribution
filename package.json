@@ -33,6 +33,7 @@
     "tools:preflight": "pnpm tools:check",
     "tools:install:optional": "scripts/with-tools bash scripts/install-optional-tools.sh",
     "tools:optional:check": "scripts/with-tools bash scripts/install-optional-tools.sh --check",
+    "tmp:clean": "scripts/with-tools node scripts/cleanup-temp.mjs --all",
     "validate:final": "scripts/with-tools node scripts/validate-and-report.mjs",
     "validate:final:skip-install": "scripts/with-tools node scripts/validate-and-report.mjs --skip-install",
     "review:worker": "scripts/with-tools scripts/codex-review-worker --watch",

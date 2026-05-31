@@ -1,7 +1,7 @@
 import test from "node:test";
 import assert from "node:assert/strict";
 import { execFileSync } from "node:child_process";
-import { mkdtempSync, writeFileSync } from "node:fs";
+import { mkdtempSync, rmSync, writeFileSync } from "node:fs";
 import { tmpdir } from "node:os";
 import path from "node:path";
 import { classifyChangedFiles, getChangedFiles } from "./changed-files.mjs";
@@ -28,70 +28,91 @@ test("classifies docs-only changes", () => {
 
 test("collects unstaged modified files without truncating path names", () => {
   const repo = mkdtempSync(path.join(tmpdir(), "contribution-changed-files-"));
-  execFileSync("git", ["init", "-b", "main"], { cwd: repo, stdio: "ignore" });
-  execFileSync("git", ["config", "user.email", "test@example.test"], {
-    cwd: repo,
-  });
-  execFileSync("git", ["config", "user.name", "Test User"], { cwd: repo });
-  writeFileSync(path.join(repo, "CHANGELOG.md"), "# Changelog\n");
-  execFileSync("git", ["add", "CHANGELOG.md"], { cwd: repo });
-  execFileSync("git", ["commit", "-m", "initial"], {
-    cwd: repo,
-    stdio: "ignore",
-  });
+  try {
+    execFileSync("git", ["init", "-b", "main"], {
+      cwd: repo,
+      stdio: "ignore",
+    });
+    execFileSync("git", ["config", "user.email", "test@example.test"], {
+      cwd: repo,
+    });
+    execFileSync("git", ["config", "user.name", "Test User"], { cwd: repo });
+    writeFileSync(path.join(repo, "CHANGELOG.md"), "# Changelog\n");
+    execFileSync("git", ["add", "CHANGELOG.md"], { cwd: repo });
+    execFileSync("git", ["commit", "-m", "initial"], {
+      cwd: repo,
+      stdio: "ignore",
+    });
 
-  writeFileSync(path.join(repo, "CHANGELOG.md"), "# Changelog\n\nChanged.\n");
-  const result = getChangedFiles({ cwd: repo });
+    writeFileSync(path.join(repo, "CHANGELOG.md"), "# Changelog\n\nChanged.\n");
+    const result = getChangedFiles({ cwd: repo });
 
-  assert(result.files.includes("CHANGELOG.md"));
-  assert(!result.files.includes("HANGELOG.md"));
+    assert(result.files.includes("CHANGELOG.md"));
+    assert(!result.files.includes("HANGELOG.md"));
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
 });
 
 test("throws for an invalid explicit base", () => {
   const repo = mkdtempSync(path.join(tmpdir(), "contribution-changed-files-"));
-  execFileSync("git", ["init", "-b", "main"], { cwd: repo, stdio: "ignore" });
-  execFileSync("git", ["config", "user.email", "test@example.test"], {
-    cwd: repo,
-  });
-  execFileSync("git", ["config", "user.name", "Test User"], { cwd: repo });
-  writeFileSync(path.join(repo, "README.md"), "# Test\n");
-  execFileSync("git", ["add", "README.md"], { cwd: repo });
-  execFileSync("git", ["commit", "-m", "initial"], {
-    cwd: repo,
-    stdio: "ignore",
-  });
+  try {
+    execFileSync("git", ["init", "-b", "main"], {
+      cwd: repo,
+      stdio: "ignore",
+    });
+    execFileSync("git", ["config", "user.email", "test@example.test"], {
+      cwd: repo,
+    });
+    execFileSync("git", ["config", "user.name", "Test User"], { cwd: repo });
+    writeFileSync(path.join(repo, "README.md"), "# Test\n");
+    execFileSync("git", ["add", "README.md"], { cwd: repo });
+    execFileSync("git", ["commit", "-m", "initial"], {
+      cwd: repo,
+      stdio: "ignore",
+    });
 
-  assert.throws(
-    () => getChangedFiles({ cwd: repo, explicitBase: "missing-ref" }),
-    /git diff --name-only/,
-  );
+    assert.throws(
+      () => getChangedFiles({ cwd: repo, explicitBase: "missing-ref" }),
+      /git diff --name-only/,
+    );
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
 });
 
 test("collects worktree paths with spaces and rename arrows", () => {
   const repo = mkdtempSync(path.join(tmpdir(), "contribution-changed-files-"));
-  execFileSync("git", ["init", "-b", "main"], { cwd: repo, stdio: "ignore" });
-  execFileSync("git", ["config", "user.email", "test@example.test"], {
-    cwd: repo,
-  });
-  execFileSync("git", ["config", "user.name", "Test User"], { cwd: repo });
-  writeFileSync(path.join(repo, "old -> name.md"), "# Old\n");
-  execFileSync("git", ["add", "old -> name.md"], { cwd: repo });
-  execFileSync("git", ["commit", "-m", "initial"], {
-    cwd: repo,
-    stdio: "ignore",
-  });
-  writeFileSync(path.join(repo, "README.md"), "# Test\n");
-  execFileSync("git", ["add", "README.md"], { cwd: repo });
-  execFileSync("git", ["commit", "-m", "add readme"], {
-    cwd: repo,
-    stdio: "ignore",
-  });
-  execFileSync("git", ["mv", "old -> name.md", "new -> name.md"], {
-    cwd: repo,
-  });
+  try {
+    execFileSync("git", ["init", "-b", "main"], {
+      cwd: repo,
+      stdio: "ignore",
+    });
+    execFileSync("git", ["config", "user.email", "test@example.test"], {
+      cwd: repo,
+    });
+    execFileSync("git", ["config", "user.name", "Test User"], { cwd: repo });
+    writeFileSync(path.join(repo, "old -> name.md"), "# Old\n");
+    execFileSync("git", ["add", "old -> name.md"], { cwd: repo });
+    execFileSync("git", ["commit", "-m", "initial"], {
+      cwd: repo,
+      stdio: "ignore",
+    });
+    writeFileSync(path.join(repo, "README.md"), "# Test\n");
+    execFileSync("git", ["add", "README.md"], { cwd: repo });
+    execFileSync("git", ["commit", "-m", "add readme"], {
+      cwd: repo,
+      stdio: "ignore",
+    });
+    execFileSync("git", ["mv", "old -> name.md", "new -> name.md"], {
+      cwd: repo,
+    });
 
-  const result = getChangedFiles({ cwd: repo });
+    const result = getChangedFiles({ cwd: repo });
 
-  assert(result.files.includes("new -> name.md"));
-  assert(!result.files.includes("old -> name.md"));
+    assert(result.files.includes("new -> name.md"));
+    assert(!result.files.includes("old -> name.md"));
+  } finally {
+    rmSync(repo, { recursive: true, force: true });
+  }
 });

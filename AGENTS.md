@@ -63,6 +63,22 @@ If two instructions conflict and both cannot be satisfied, stop and ask.
 - For behavior changes and bug fixes, add or update the narrowest regression
   test that would fail before the change unless no practical harness exists.
 
+## Sub-agent coordination
+
+- Use sub-agents when bounded parallel work makes the task safer or faster,
+  especially read-only investigation, code review, test or log analysis, Go
+  package-specific discovery, or drafting isolated docs.
+- Do not assign multiple agents to edit overlapping files, shared packages,
+  public interfaces, command behavior, or generated/vendor surfaces unless the
+  work is explicitly partitioned.
+- For write tasks, give each sub-agent exclusive paths or packages, or have
+  sub-agents return proposed patches or drafts for the lead agent to apply.
+- The lead agent owns final integration, consistency with repo patterns,
+  `gofmt`, `go test` or required repo validation, explicit staging, and
+  commits.
+- Sub-agents must not push, run destructive commands, or include unrelated local
+  changes.
+
 ## Working norms
 
 - Keep progress updates and final responses concise and high signal.

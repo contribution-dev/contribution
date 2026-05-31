@@ -13,6 +13,9 @@ All notable changes to this project will be documented in this file.
 - Add `probe` for public-safe local collector bundles, metadata-only
   `--agent-artifact` import with explicit opt-in, and `work-unit start/export`
   for optional local intent markers that improve future work-unit attribution.
+- Harden collector follow-ups so public-safe redaction preserves useful
+  slash-separated product terms, work-unit candidates omit empty anchors, and
+  exported marker bundles are not reread as malformed source markers.
 - Add a `follow_up` report comparison that checks the latest prior local
   `analysis.json`, shows what improved, regressed, resolved, or persisted since
   the last report, and surfaces that loop in markdown and terminal summaries.

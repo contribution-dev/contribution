@@ -53,7 +53,7 @@ func newProbeCommand(out io.Writer, _ io.Writer) *cobra.Command {
 	cmd.Flags().StringVar(&opts.Repo, "repo", "", "Repo path or Git URL. Defaults to current directory.")
 	cmd.Flags().StringVar(&opts.GitHubToken, "github-token", "", "GitHub token or env var name for optional metadata.")
 	cmd.Flags().StringVar(&opts.Output, "output", "", "Output directory root.")
-	cmd.Flags().BoolVar(&opts.PublicSafe, "public-safe", true, "Redact local repo metadata from the probe bundle.")
+	cmd.Flags().BoolVar(&opts.PublicSafe, "public-safe", true, "Redact analysis.json local repo metadata; collector artifacts are always public-safe.")
 	cmd.Flags().BoolVar(&opts.NoExternalTools, "no-external-tools", false, "Skip optional external tool discovery.")
 	cmd.Flags().BoolVar(&opts.IncludeAgentArtifacts, "include-agent-artifacts", false, "Opt in to metadata-only import from explicitly supplied agent artifact paths.")
 	cmd.Flags().StringArrayVar(&opts.AgentArtifactPaths, "agent-artifact", nil, "Metadata-only agent artifact JSON path. Requires --include-agent-artifacts. May be repeated.")

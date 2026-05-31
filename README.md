@@ -235,8 +235,10 @@ contribution probe \
 
 The probe is public-safe by default and writes JSON artifacts only inside a
 timestamped run directory, including `collector.bundle.json`,
-`source-coverage.json`, `attribution-readiness.json`, and `tooling.json`. It
-does not upload anything.
+`source-coverage.json`, `attribution-readiness.json`, and `tooling.json`.
+Collector artifacts are always public-safe; `analysis.json` is redacted by
+default unless you explicitly disable `--public-safe` for local debugging. The
+CLI does not upload anything.
 
 You can explicitly enrich the probe with metadata-only agent artifacts:
 

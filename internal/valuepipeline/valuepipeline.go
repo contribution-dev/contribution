@@ -30,9 +30,7 @@ var (
 type Input struct {
 	GeneratedAt          time.Time
 	Repo                 gitrepo.Repo
-	RepoMetadata         signals.RepoMetadata
 	Config               config.Config
-	ConfigWarnings       []string
 	Inventory            signals.FileSummary
 	History              gitrepo.History
 	GitHub               github.Metadata
@@ -70,7 +68,7 @@ type validationEvidence struct {
 // Build computes deterministic value-pipeline evidence.
 func Build(input Input) Output {
 	evidence := inspectRepo(input.Repo.Path, input.Config)
-	attribution, candidates := buildAttribution(input, evidence)
+	attribution, candidates := buildAttribution(input)
 	sourceCoverage, gaps, recommendations := buildSourceCoverage(input, evidence, attribution)
 	readiness := buildReadiness(input, evidence, attribution, sourceCoverage)
 	return Output{
@@ -330,8 +328,6 @@ func recommendedConnections(items []signals.SourceCoverageItem) []signals.Recomm
 			connection.Command = "contribution probe --repo . --github-token gh --output /tmp/contribution-probe"
 		case "coverage_report":
 			connection.Command = "contribution analyze --repo . --coverage coverage.out --coverage-format go"
-		case "repo_instructions":
-			connection.Command = "contribution init"
 		case "ai_spend_telemetry":
 			connection.RequiresAdmin = true
 		}
@@ -544,7 +540,7 @@ func readinessActions(components []signals.ReadinessComponent) []string {
 	return out
 }
 
-func buildAttribution(input Input, _ repoEvidence) (signals.AttributionReadiness, []signals.WorkUnitCandidate) {
+func buildAttribution(input Input) (signals.AttributionReadiness, []signals.WorkUnitCandidate) {
 	commitIssues := map[string]int{}
 	for _, commit := range input.History.Commits {
 		for _, issue := range issueRefs(commit.Subject) {
@@ -640,33 +636,44 @@ func attributionEvidence(patterns []signals.AnchorPattern) []string {
 func workUnitCandidates(input Input, pattern string, confidence signals.Confidence, commitIssues map[string]int) []signals.WorkUnitCandidate {
 	var out []signals.WorkUnitCandidate
 	for _, marker := range input.WorkUnitMarkers {
+		anchors := []signals.WorkUnitAnchor{
+			{Type: "manual_marker", ID: marker.ID, Label: marker.Goal, Confidence: signals.ConfidenceHigh},
+		}
+		evidence := []string{"Local marker contains explicit goal metadata."}
+		if marker.Branch != "" {
+			anchors = append(anchors, signals.WorkUnitAnchor{Type: "branch", ID: marker.Branch, Label: marker.Branch, Confidence: signals.ConfidenceMedium})
+			evidence = append(evidence, "Marker records the branch visible when it was created.")
+		}
+		if marker.Commit != "" {
+			anchors = append(anchors, signals.WorkUnitAnchor{Type: "commit", ID: marker.Commit, Label: gitrepo.ShortSHA(marker.Commit), Confidence: signals.ConfidenceMedium})
+			evidence = append(evidence, "Marker records the commit visible when it was created.")
+		}
 		out = append(out, signals.WorkUnitCandidate{
 			ID:         marker.ID,
 			Title:      marker.Goal,
 			Pattern:    "manual_marker",
 			Confidence: signals.ConfidenceHigh,
 			Summary:    "Manual marker created before or during agentic work.",
-			Anchors: []signals.WorkUnitAnchor{
-				{Type: "manual_marker", ID: marker.ID, Label: marker.Goal, Confidence: signals.ConfidenceHigh},
-				{Type: "branch", ID: marker.Branch, Label: marker.Branch, Confidence: signals.ConfidenceMedium},
-				{Type: "commit", ID: marker.Commit, Label: gitrepo.ShortSHA(marker.Commit), Confidence: signals.ConfidenceMedium},
-			},
-			Evidence: []string{"Local marker contains goal, branch, and commit metadata."},
+			Anchors:    anchors,
+			Evidence:   evidence,
 		})
 	}
 	for _, pr := range input.GitHub.PRs {
 		id := fmt.Sprintf("pr-%d", pr.Number)
+		anchors := []signals.WorkUnitAnchor{
+			{Type: "pr", ID: fmt.Sprintf("%d", pr.Number), Label: fmt.Sprintf("PR #%d", pr.Number), Confidence: signals.ConfidenceHigh},
+		}
+		if pr.MergeCommitSHA != "" {
+			anchors = append(anchors, signals.WorkUnitAnchor{Type: "commit", ID: pr.MergeCommitSHA, Label: gitrepo.ShortSHA(pr.MergeCommitSHA), Confidence: signals.ConfidenceMedium})
+		}
 		out = append(out, signals.WorkUnitCandidate{
 			ID:         id,
 			Title:      pr.Title,
 			Pattern:    "pr",
 			Confidence: confidenceForPRCandidate(pr),
 			Summary:    fmt.Sprintf("PR #%d changed %d file(s) with %d review(s).", pr.Number, pr.ChangedFiles, pr.ReviewCount),
-			Anchors: []signals.WorkUnitAnchor{
-				{Type: "pr", ID: fmt.Sprintf("%d", pr.Number), Label: fmt.Sprintf("PR #%d", pr.Number), Confidence: signals.ConfidenceHigh},
-				{Type: "commit", ID: pr.MergeCommitSHA, Label: gitrepo.ShortSHA(pr.MergeCommitSHA), Confidence: signals.ConfidenceMedium},
-			},
-			Evidence: issueRefs(pr.Title),
+			Anchors:    anchors,
+			Evidence:   issueRefs(pr.Title),
 		})
 		if len(out) >= 12 {
 			return out

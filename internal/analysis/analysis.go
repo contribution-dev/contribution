@@ -191,9 +191,7 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 	valuePipeline := valuepipeline.Build(valuepipeline.Input{
 		GeneratedAt:          start,
 		Repo:                 repo,
-		RepoMetadata:         repo.Metadata(opts.PublicSafe),
 		Config:               cfg,
-		ConfigWarnings:       cfgWarnings,
 		Inventory:            inventory,
 		History:              history,
 		GitHub:               metadata,

@@ -18,9 +18,11 @@ type pathReplacement struct {
 }
 
 var (
-	commitSHAPattern     = regexp.MustCompile(`\b[0-9a-fA-F]{7,40}\b`)
-	pathCandidatePattern = regexp.MustCompile(`(?:[A-Za-z]:)?(?:[./~]?[\w.-]+[/\\])+[\w.@+-]+`)
-	fractionPattern      = regexp.MustCompile(`^\d+/\d+$`)
+	commitSHAPattern      = regexp.MustCompile(`\b[0-9a-fA-F]{7,40}\b`)
+	pathCandidatePattern  = regexp.MustCompile(`(?:[A-Za-z]:)?(?:[./~]?[\w.-]+[/\\])+[\w.@+-]+`)
+	fractionPattern       = regexp.MustCompile(`^\d+/\d+$`)
+	pathLikePrefixPattern = regexp.MustCompile(`^(?:\.github|app|apps|assets|bin|build|cmd|config|configs|dist|docs|internal|lib|package|packages|pkg|public|script|scripts|src|test|tests|tool|tools)/`)
+	proseSlashPairPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*/[A-Za-z][A-Za-z0-9_-]*$`)
 )
 
 const publicRepoID = "private-repository"
@@ -589,10 +591,32 @@ func addPathReplacementsFromText(replacements *[]pathReplacement, seen map[strin
 }
 
 func isPathCandidate(value string) bool {
-	if strings.ContainsAny(strings.TrimSpace(value), " \t\n") {
+	value = strings.TrimSpace(value)
+	if strings.ContainsAny(value, " \t\n") {
 		return false
 	}
-	if fractionPattern.MatchString(strings.TrimSpace(value)) {
+	if fractionPattern.MatchString(value) {
+		return false
+	}
+	normalized := filepath.ToSlash(value)
+	trimmed := strings.TrimPrefix(strings.TrimPrefix(normalized, "./"), "../")
+	if strings.HasPrefix(normalized, "/") ||
+		strings.HasPrefix(normalized, "./") ||
+		strings.HasPrefix(normalized, "../") ||
+		strings.HasPrefix(normalized, "~/") ||
+		strings.Contains(normalized, ":/") {
+		return true
+	}
+	if strings.Count(normalized, "/") >= 2 {
+		return true
+	}
+	if pathLikePrefixPattern.MatchString(trimmed) {
+		return true
+	}
+	if strings.Contains(filepath.Base(normalized), ".") {
+		return true
+	}
+	if proseSlashPairPattern.MatchString(normalized) {
 		return false
 	}
 	return strings.Contains(value, "/") || strings.Contains(value, "\\")

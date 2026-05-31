@@ -3,6 +3,7 @@ package valuepipeline
 import (
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
@@ -116,4 +117,55 @@ func TestBuildUsesDefaultConfigWhenMissing(t *testing.T) {
 	if out.AttributionReadiness.Pattern != "unknown" {
 		t.Fatalf("pattern = %q, want unknown", out.AttributionReadiness.Pattern)
 	}
+}
+
+func TestBuildSkipsEmptyWorkUnitAnchors(t *testing.T) {
+	root := t.TempDir()
+	out := Build(Input{
+		GeneratedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Repo:        gitrepo.Repo{Path: root, Name: "app", ID: "local:app"},
+		Config:      config.Default(),
+		Inventory:   signals.FileSummary{TotalFiles: 1},
+		History:     gitrepo.History{FileTouchCount: map[string]int{}},
+		Coverage:    signals.CoverageSummary{Status: "unknown", Reason: "No coverage report was imported."},
+		WorkUnitMarkers: []signals.WorkUnitMarker{{
+			ID:   "awu-1",
+			Goal: "Build onboarding",
+		}},
+	})
+	if out.AttributionReadiness.Pattern != "manual_marker" {
+		t.Fatalf("pattern = %q, want manual_marker", out.AttributionReadiness.Pattern)
+	}
+	if len(out.WorkUnitCandidates) != 1 {
+		t.Fatalf("candidates = %+v, want one candidate", out.WorkUnitCandidates)
+	}
+	candidate := out.WorkUnitCandidates[0]
+	if len(candidate.Anchors) != 1 || candidate.Anchors[0].Type != "manual_marker" {
+		t.Fatalf("anchors = %+v, want only manual marker anchor", candidate.Anchors)
+	}
+}
+
+func TestBuildDoesNotInventInstructionCommand(t *testing.T) {
+	root := t.TempDir()
+	out := Build(Input{
+		GeneratedAt: time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC),
+		Repo:        gitrepo.Repo{Path: root, Name: "app", ID: "local:app"},
+		Config:      config.Default(),
+		Inventory:   signals.FileSummary{TotalFiles: 1},
+		History:     gitrepo.History{FileTouchCount: map[string]int{}},
+		Coverage:    signals.CoverageSummary{Status: "unknown", Reason: "No coverage report was imported."},
+	})
+	for _, connection := range out.RecommendedConnections {
+		if connection.ID != "repo_instructions" {
+			continue
+		}
+		if connection.Command != "" {
+			t.Fatalf("repo instruction command = %q, want empty manual action", connection.Command)
+		}
+		if !strings.Contains(connection.Label, "AGENTS.md") {
+			t.Fatalf("repo instruction label = %q, want AGENTS.md action", connection.Label)
+		}
+		return
+	}
+	t.Fatalf("repo instruction recommendation missing: %+v", out.RecommendedConnections)
 }

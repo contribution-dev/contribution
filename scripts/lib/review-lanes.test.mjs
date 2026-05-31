@@ -12,6 +12,9 @@ import path from "node:path";
 import test from "node:test";
 
 import {
+  classifyBacklogArtifact,
+  isActionableCodexReviewReport,
+  isIncompleteCodexReviewReport,
   normalizeReviewRootOverride,
   resolveReviewRootOverride,
   createReviewQueueBaseJob,
@@ -30,6 +33,55 @@ test("review queue lanes stay Codex-only", () => {
 
 test("review queue statuses stay pending and active only", () => {
   assert.deepEqual(REVIEW_QUEUE_STATUSES, ["pending", "active"]);
+});
+
+test("partial success without findings is incomplete but not actionable", () => {
+  const report = {
+    review_status: "partial_success",
+    review_engines: {
+      codex: {
+        status: "ok",
+      },
+    },
+    findings: [],
+  };
+
+  assert.equal(isActionableCodexReviewReport(report, true), false);
+  assert.equal(isIncompleteCodexReviewReport(report), true);
+  assert.equal(
+    classifyBacklogArtifact({
+      filePath: "/tmp/review.md",
+      markdown: "",
+      reviewStatus: "partial_success",
+      report,
+    }).category,
+    "clear",
+  );
+});
+
+test("partial success with findings remains actionable", () => {
+  const report = {
+    review_status: "partial_success",
+    findings: [
+      {
+        finding_id: "finding-1",
+        severity: "major",
+        confidence: 0.98,
+      },
+    ],
+  };
+
+  assert.equal(isActionableCodexReviewReport(report, true), true);
+  assert.equal(isIncompleteCodexReviewReport(report), false);
+  assert.equal(
+    classifyBacklogArtifact({
+      filePath: "/tmp/review.md",
+      markdown: "",
+      reviewStatus: "partial_success",
+      report,
+    }).category,
+    "actionable",
+  );
 });
 
 test("review root override uses canonical env only", () => {

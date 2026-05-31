@@ -242,7 +242,9 @@ export function normalizeFinding(item) {
     return null;
   }
 
-  const severity = normalizeSeverityValue(item.severity);
+  const severity = normalizeReviewSeverity(item.severity, {
+    fallback: "minor",
+  });
 
   let normalized;
   if (

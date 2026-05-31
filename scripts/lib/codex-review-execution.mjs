@@ -85,15 +85,27 @@ function normalizeCheckpointState(checkpoint, prompts) {
   };
 }
 
-function buildFailureSummary(kind, passMode, sha, { partial = false } = {}) {
+function partialFailureContext(hasFindings) {
+  return hasFindings
+    ? "after earlier findings were collected"
+    : "after earlier review passes completed";
+}
+
+function buildFailureSummary(
+  kind,
+  passMode,
+  sha,
+  { partial = false, hasFindings = false } = {},
+) {
+  const partialContext = partialFailureContext(hasFindings);
   if (kind === "timeout") {
     return partial
-      ? `Codex review timed out during the ${passMode} pass after earlier findings were collected.`
+      ? `Codex review timed out during the ${passMode} pass ${partialContext}.`
       : `Codex review timed out during the ${passMode} pass for commit ${sha}.`;
   }
   if (kind === "exec_failed") {
     return partial
-      ? `Codex review failed during the ${passMode} pass after earlier findings were collected.`
+      ? `Codex review failed during the ${passMode} pass ${partialContext}.`
       : `Codex review failed during the ${passMode} pass for commit ${sha}.`;
   }
   if (kind === "rate_limit") {
@@ -292,7 +304,10 @@ export async function executeReviewPasses({
 
     reviewStatus = "partial_success";
     summaries.push(
-      buildFailureSummary(classified.kind, mode, sha, { partial: true }),
+      buildFailureSummary(classified.kind, mode, sha, {
+        partial: true,
+        hasFindings: aggregatedFindings.length > 0,
+      }),
     );
     if (reviewsDir && sha) {
       await writeCheckpointFn(reviewsDir, {

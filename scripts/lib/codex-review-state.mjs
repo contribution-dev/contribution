@@ -652,7 +652,7 @@ export function isNonFindingCodexReviewStatusActionable(reviewStatus) {
   const normalized = String(reviewStatus ?? "")
     .trim()
     .toLowerCase();
-  if (!normalized || normalized === "ok") {
+  if (!normalized || normalized === "ok" || normalized === "partial_success") {
     return false;
   }
   return normalized !== "infra_error";

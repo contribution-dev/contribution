@@ -37,6 +37,10 @@ This repo uses Go for product code and Node/pnpm for repository automation.
   blocks unresolved major or blocker findings. Older outgoing commits do not
   require fresh complete review evidence before push, but any already-known
   unresolved major or blocker finding on them still blocks the gate.
+- A `partial_success` Codex report with no findings is incomplete review
+  evidence, not a remediation handoff. Pushed tips still wait for complete
+  evidence, while backlog remediation should only claim reports that contain
+  findings or contradictory finding metadata.
 - Codex review is the only active review lane. Do not add dormant lane plumbing
   without a runnable producer, gate, and tests.
 - Review state is canonical under `.code-reviews` with Codex queue jobs in

@@ -25,6 +25,7 @@ func TestAnalysisReportJSONContract(t *testing.T) {
 		"pr_quality_cards",
 		"weakness_map",
 		"trends",
+		"follow_up",
 		"deep_dives",
 		"profile",
 		"setup_actions",
@@ -32,6 +33,18 @@ func TestAnalysisReportJSONContract(t *testing.T) {
 		"privacy",
 	})
 	assertReportContractKeys(t, reportContractNestedObject(t, object, "privacy"), reportPrivacyContractKeys())
+	assertReportContractKeys(t, reportContractNestedObject(t, object, "follow_up"), []string{
+		"status",
+		"previous_generated_at",
+		"current_generated_at",
+		"summary",
+		"improved",
+		"regressed",
+		"resolved",
+		"persistent",
+		"next_action",
+		"confidence",
+	})
 }
 
 func TestProfileExportJSONContract(t *testing.T) {
@@ -187,6 +200,18 @@ func reportContractAnalysisFixture() signals.AnalysisReport {
 			}},
 			Findings:   []signals.Finding{{Label: "Test evidence improved", Evidence: "Source commits with test-file evidence improved.", Confidence: signals.ConfidenceMedium}},
 			Confidence: signals.ConfidenceMedium,
+		},
+		FollowUp: signals.FollowUpComparison{
+			Status:              "available",
+			PreviousGeneratedAt: now.AddDate(0, 0, -7),
+			CurrentGeneratedAt:  now,
+			Summary:             "Since the last report, 1 improved.",
+			Improved:            []signals.Finding{{Label: "Test evidence improved", Evidence: "Source changes with test evidence improved.", Confidence: signals.ConfidenceMedium}},
+			Regressed:           []signals.Finding{},
+			Resolved:            []signals.Finding{},
+			Persistent:          []signals.Finding{},
+			NextAction:          "Keep pairing source changes with nearby tests.",
+			Confidence:          signals.ConfidenceMedium,
 		},
 		DeepDives: signals.AnalysisDeepDives{
 			HighChurn:       []signals.HighChurnDeepDive{},

@@ -9,8 +9,9 @@ lives in Go tests and `scripts/dogfood-cli.mjs`.
 - Commands must be deterministic about stdout, stderr, exit status, and output
   files.
 - Successful `analyze` and `preflight` runs print concise terminal summaries
-  with the main result, next action context, capped unavailable-signal notes,
-  and only the artifact paths actually written for the selected format.
+  with the main result, follow-up movement when available, next action context,
+  capped unavailable-signal notes, and only the artifact paths actually written
+  for the selected format.
 - Errors return a non-zero exit code, write the error to stderr at process
   level, and do not create unrelated artifacts.
 - Public-safe outputs must omit raw code, raw diffs, author emails, secrets,
@@ -87,14 +88,17 @@ lives in Go tests and `scripts/dogfood-cli.mjs`.
   `friend-review-packet.json`, and `friend-feedback.export.json` have
   behavior-level contract tests for their top-level JSON shape.
 - `analysis.json` includes `coverage`, `analyzer_findings`, `trends`,
-  `deep_dives`, and `setup_actions`. `coverage` summarizes explicitly imported
-  Go/LCOV coverage, including the lowest-coverage files.
+  `follow_up`, `deep_dives`, and `setup_actions`. `coverage` summarizes
+  explicitly imported Go/LCOV coverage, including the lowest-coverage files.
   `analyzer_findings` stores normalized optional-tool findings without raw
   code. `trends` compares the recent local-history window with the immediately
   prior window for test evidence, large changes, fix/revert-like churn, risky
-  untested changes, and high-churn concentration. `deep_dives` explains
-  high-churn and source-without-test patterns for the private receipt.
-  `setup_actions` gives concrete commands that would raise confidence.
+  untested changes, and high-churn concentration. `follow_up` compares the
+  current report with the latest prior local `analysis.json` under the same
+  output root and records improved, regressed, resolved, and persistent
+  patterns. `deep_dives` explains high-churn and source-without-test patterns
+  for the private receipt. `setup_actions` gives concrete commands that would
+  raise confidence.
 - `preflight.json` is V2. It includes structured changed files, additions and
   deletions, new-side changed line ranges, total changed lines, optional
   changed-line coverage, bounded optional `analyzer_findings` for changed

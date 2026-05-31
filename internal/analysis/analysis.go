@@ -207,6 +207,11 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 	if analysis.Profile.Headline == "" {
 		analysis.Profile.Headline = "AI-native contribution profile"
 	}
+	prior := latestPriorAnalysis(outputRoot, outputDir)
+	analysis.FollowUp = buildFollowUpComparison(analysis, prior.analysis, prior.found, prior.err)
+	if prior.err != nil && !prior.found {
+		analysis.Limitations = uniqueStrings(append(analysis.Limitations, "Previous local report comparison unavailable: "+prior.err.Error()))
+	}
 	if opts.PublicSafe {
 		analysis = publicsafe.Analysis(analysis)
 	}
@@ -231,6 +236,11 @@ func writeAnalyzeReceipt(out io.Writer, analysis signals.AnalysisReport, outputD
 	}
 	if _, err := fmt.Fprintf(out, "Confidence: %s\n", analysis.Profile.Confidence); err != nil {
 		return err
+	}
+	if analysis.FollowUp.Summary != "" {
+		if _, err := fmt.Fprintf(out, "Since last report: %s\n", terminalFollowUpSummary(analysis.FollowUp.Summary)); err != nil {
+			return err
+		}
 	}
 	if len(analysis.WeaknessMap.Strengths) > 0 {
 		if _, err := fmt.Fprintf(out, "Strength: %s\n", terminalFinding(analysis.WeaknessMap.Strengths[0])); err != nil {
@@ -290,6 +300,13 @@ func terminalFinding(finding signals.Finding) string {
 		return label
 	}
 	return label + " - " + evidence
+}
+
+func terminalFollowUpSummary(summary string) string {
+	summary = terminalText(summary)
+	summary = strings.TrimPrefix(summary, "Since the last report, ")
+	summary = strings.TrimPrefix(summary, "Since the last report ")
+	return summary
 }
 
 func terminalText(value string) string {

@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Add a `follow_up` report comparison that checks the latest prior local
+  `analysis.json`, shows what improved, regressed, resolved, or persisted since
+  the last report, and surfaces that loop in markdown and terminal summaries.
 - Add terminal receipt summaries for `analyze` and `preflight`, including
   confidence, top evidence, next actions, capped unavailable signals, and
   format-aware artifact paths while keeping durable report files on disk.

@@ -221,6 +221,21 @@ type TrendComparison struct {
 	Reason        string        `json:"reason,omitempty"`
 }
 
+// FollowUpComparison compares the current report with the latest prior report.
+type FollowUpComparison struct {
+	Status              string     `json:"status"`
+	PreviousGeneratedAt time.Time  `json:"previous_generated_at,omitempty"`
+	CurrentGeneratedAt  time.Time  `json:"current_generated_at,omitempty"`
+	Summary             string     `json:"summary,omitempty"`
+	Improved            []Finding  `json:"improved"`
+	Regressed           []Finding  `json:"regressed"`
+	Resolved            []Finding  `json:"resolved"`
+	Persistent          []Finding  `json:"persistent"`
+	NextAction          string     `json:"next_action,omitempty"`
+	Confidence          Confidence `json:"confidence"`
+	Reason              string     `json:"reason,omitempty"`
+}
+
 // DeepDiveArtifact is a private-first reference to the artifact behind a pattern.
 type DeepDiveArtifact struct {
 	ID           string     `json:"id,omitempty"`
@@ -337,6 +352,7 @@ type AnalysisReport struct {
 	PRCards          []PRQualityCard        `json:"pr_quality_cards"`
 	WeaknessMap      WeaknessMap            `json:"weakness_map"`
 	Trends           TrendComparison        `json:"trends"`
+	FollowUp         FollowUpComparison     `json:"follow_up"`
 	DeepDives        AnalysisDeepDives      `json:"deep_dives"`
 	Profile          ProfileSummary         `json:"profile"`
 	SetupActions     []SetupAction          `json:"setup_actions"`

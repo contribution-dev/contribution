@@ -83,6 +83,9 @@ func TestRunWritesJsonArtifactsAndLocalOnlyFallback(t *testing.T) {
 	if len(analysis.SetupActions) == 0 {
 		t.Fatal("expected confidence setup actions")
 	}
+	if analysis.FollowUp.Status != "baseline" {
+		t.Fatalf("follow-up status = %q, want baseline", analysis.FollowUp.Status)
+	}
 	assertContains(t, analysis.Limitations, "GitHub metadata was not requested; continuing local-only.")
 	got := stdout.String()
 	for _, want := range []string{
@@ -90,6 +93,7 @@ func TestRunWritesJsonArtifactsAndLocalOnlyFallback(t *testing.T) {
 		"Contribution receipt",
 		"Artifacts: 1 recent artifacts over 14 days",
 		"Confidence: low",
+		"Since last report: No previous local report found; this run establishes the comparison baseline.",
 		"Strength:",
 		"Risk:",
 		"Next:",

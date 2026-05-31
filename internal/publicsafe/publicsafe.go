@@ -42,6 +42,7 @@ func Analysis(analysis signals.AnalysisReport) signals.AnalysisReport {
 	analysis.PRCards = cards(analysis.PRCards, len(analysis.PRCards), pathReplacements)
 	analysis.WeaknessMap = weaknessMap(analysis.WeaknessMap, pathReplacements)
 	analysis.Trends = trends(analysis.Trends, pathReplacements)
+	analysis.FollowUp = followUp(analysis.FollowUp, pathReplacements)
 	analysis.Coverage = coverage(analysis.Coverage, pathReplacements)
 	analysis.AnalyzerFindings = analyzerFindings(analysis.AnalyzerFindings, pathReplacements)
 	analysis.DeepDives = deepDives(analysis.DeepDives, pathReplacements)
@@ -149,6 +150,17 @@ func trends(value signals.TrendComparison, replacements ...[]pathReplacement) si
 		value.Metrics[i].WhyItMatters = redactCommitLikeText(redactText(value.Metrics[i].WhyItMatters, replacements...))
 		value.Metrics[i].NextAction = redactCommitLikeText(redactText(value.Metrics[i].NextAction, replacements...))
 	}
+	return value
+}
+
+func followUp(value signals.FollowUpComparison, replacements ...[]pathReplacement) signals.FollowUpComparison {
+	value.Summary = redactCommitLikeText(redactText(value.Summary, replacements...))
+	value.Reason = redactCommitLikeText(redactText(value.Reason, replacements...))
+	value.NextAction = redactCommitLikeText(redactText(value.NextAction, replacements...))
+	value.Improved = redactFindings(value.Improved, replacements...)
+	value.Regressed = redactFindings(value.Regressed, replacements...)
+	value.Resolved = redactFindings(value.Resolved, replacements...)
+	value.Persistent = redactFindings(value.Persistent, replacements...)
 	return value
 }
 
@@ -347,6 +359,19 @@ func pathReplacementsForAnalysis(analysis signals.AnalysisReport) []pathReplacem
 		add(metric.ID, metric.Label, metric.Direction, metric.Evidence, metric.WhyItMatters, metric.NextAction)
 	}
 	for _, finding := range analysis.Trends.Findings {
+		addFindingText(add, finding)
+	}
+	add(analysis.FollowUp.Status, analysis.FollowUp.Summary, analysis.FollowUp.NextAction, analysis.FollowUp.Reason)
+	for _, finding := range analysis.FollowUp.Improved {
+		addFindingText(add, finding)
+	}
+	for _, finding := range analysis.FollowUp.Regressed {
+		addFindingText(add, finding)
+	}
+	for _, finding := range analysis.FollowUp.Resolved {
+		addFindingText(add, finding)
+	}
+	for _, finding := range analysis.FollowUp.Persistent {
 		addFindingText(add, finding)
 	}
 	add(analysis.Profile.DisplayName, analysis.Profile.Headline)

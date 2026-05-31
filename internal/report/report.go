@@ -125,6 +125,10 @@ func Markdown(analysis signals.AnalysisReport) string {
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, summary(analysis))
 	fmt.Fprintln(&buf)
+	fmt.Fprintln(&buf, "## Since Last Report")
+	fmt.Fprintln(&buf)
+	writeFollowUpComparison(&buf, analysis.FollowUp)
+	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "## Strengths")
 	fmt.Fprintln(&buf)
 	writeFindings(&buf, analysis.WeaknessMap.Strengths)
@@ -530,6 +534,49 @@ func writeTrendComparison(buf *bytes.Buffer, trends signals.TrendComparison) {
 			escapeTable(formatTrendMetricValue(metric.Delta, metric.Unit)),
 			escapeTable(metric.NextAction),
 		)
+	}
+}
+
+func writeFollowUpComparison(buf *bytes.Buffer, followUp signals.FollowUpComparison) {
+	if followUp.Status == "" {
+		fmt.Fprintln(buf, "No previous-report comparison was computed.")
+		return
+	}
+	if followUp.Summary != "" {
+		fmt.Fprintln(buf, followUp.Summary)
+	} else if followUp.Reason != "" {
+		fmt.Fprintln(buf, followUp.Reason)
+	}
+	if followUp.Status != "available" {
+		if followUp.NextAction != "" {
+			fmt.Fprintf(buf, "\nBest next move: %s\n", followUp.NextAction)
+		}
+		return
+	}
+	writeFollowUpGroup(buf, "Improved", followUp.Improved)
+	writeFollowUpGroup(buf, "Got worse", followUp.Regressed)
+	writeFollowUpGroup(buf, "Resolved", followUp.Resolved)
+	writeFollowUpGroup(buf, "Still true", followUp.Persistent)
+	if len(followUp.Improved)+len(followUp.Regressed)+len(followUp.Resolved)+len(followUp.Persistent) == 0 {
+		fmt.Fprintln(buf, "\nNo major tracked movement was detected since the last report.")
+	}
+	if followUp.NextAction != "" {
+		fmt.Fprintf(buf, "\nBest next move: %s\n", followUp.NextAction)
+	}
+	fmt.Fprintf(buf, "\nConfidence: %s\n", followUp.Confidence)
+}
+
+func writeFollowUpGroup(buf *bytes.Buffer, title string, findings []signals.Finding) {
+	if len(findings) == 0 {
+		return
+	}
+	fmt.Fprintf(buf, "\n%s:\n", title)
+	for _, finding := range findings {
+		fmt.Fprintf(buf, "- %s: %s (%s confidence)", finding.Label, finding.Evidence, finding.Confidence)
+		if finding.NextAction != "" && title == "Got worse" {
+			fmt.Fprintf(buf, " Next: %s", finding.NextAction)
+		}
+		fmt.Fprintln(buf)
 	}
 }
 

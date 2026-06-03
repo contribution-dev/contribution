@@ -416,13 +416,15 @@ func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMa
 			WhyItMatters: "Docs changes help make contribution value durable beyond the diff.",
 		})
 	}
+	var localEvidenceContext *signals.Finding
 	if len(strengths) == 0 {
-		strengths = append(strengths, signals.Finding{
+		finding := signals.Finding{
 			Label:        "Local evidence collected",
 			Evidence:     fmt.Sprintf("%d commits and %d files were analyzed locally.", len(input.History.Commits), input.Inventory.TotalFiles),
 			Confidence:   confidence,
 			WhyItMatters: "The report is grounded in repo artifacts and did not require code upload.",
-		})
+		}
+		localEvidenceContext = &finding
 	}
 
 	var weaknesses []signals.Finding
@@ -509,6 +511,9 @@ func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMa
 	}
 
 	var watchItems []signals.Finding
+	if localEvidenceContext != nil {
+		watchItems = append(watchItems, *localEvidenceContext)
+	}
 	if input.Coverage.Status == "available" {
 		watchItems = append(watchItems, signals.Finding{
 			Label:        "Coverage was imported",

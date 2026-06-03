@@ -327,8 +327,6 @@ func writeAnalyzeReceipt(out io.Writer, analysis signals.AnalysisReport, outputD
 		if _, err := fmt.Fprintf(out, "Strength: %s\n", terminalFinding(analysis.WeaknessMap.Strengths[0])); err != nil {
 			return err
 		}
-	} else if _, err := fmt.Fprintln(out, "Strength: No strength finding available."); err != nil {
-		return err
 	}
 	if len(analysis.WeaknessMap.Weaknesses) > 0 {
 		if _, err := fmt.Fprintf(out, "Risk: %s\n", terminalFinding(analysis.WeaknessMap.Weaknesses[0])); err != nil {

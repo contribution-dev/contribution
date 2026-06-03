@@ -136,6 +136,39 @@ func TestRunWritesJsonArtifactsAndLocalOnlyFallback(t *testing.T) {
 	}
 }
 
+func TestAnalyzeReceiptOmitsMissingStrengthPlaceholder(t *testing.T) {
+	var stdout bytes.Buffer
+	analysis := signals.AnalysisReport{
+		Profile: signals.ProfileSummary{
+			AnalyzedPRs:        0,
+			AnalysisWindowDays: 90,
+		},
+		AgenticReadiness: signals.AgenticReadiness{
+			Grade:      "D",
+			Score:      61,
+			Confidence: signals.ConfidenceLow,
+		},
+		WeaknessMap: signals.WeaknessMap{
+			Weaknesses: []signals.Finding{{
+				Label:      "PR-level review burden is unavailable",
+				Evidence:   "No detailed PR review metadata was imported for this report.",
+				Confidence: signals.ConfidenceHigh,
+			}},
+		},
+	}
+
+	if err := writeAnalyzeReceipt(&stdout, analysis, "/tmp/report", "json"); err != nil {
+		t.Fatalf("writeAnalyzeReceipt error: %v", err)
+	}
+	got := stdout.String()
+	if strings.Contains(got, "Strength:") {
+		t.Fatalf("receipt should omit missing strength placeholder:\n%s", got)
+	}
+	if !strings.Contains(got, "Risk: PR-level review burden is unavailable") {
+		t.Fatalf("receipt should still include risk:\n%s", got)
+	}
+}
+
 func TestRunImportsAnalyzeCoverage(t *testing.T) {
 	requireGit(t)
 	withFixedNow(t, time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC))

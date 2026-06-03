@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Add a `PR Inspection Priorities` digest before the full ledger, align
+  readiness-gap ordering with the Top Read finding, make contribution.dev
+  handoffs specific to the missing context, and treat zero-commit local evidence
+  as neutral context instead of a profile strength.
 - Improve report readability with magnitude-aware repair-loop top-read ranking,
   singular/plural finding evidence, readiness-only source gap prioritization,
   a repeated end-of-report next PR plan, and non-salesy contribution.dev

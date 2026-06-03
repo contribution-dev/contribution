@@ -31,6 +31,58 @@ func writeLedger(buf *bytes.Buffer, cards []signals.PRQualityCard) {
 	}
 }
 
+func writeInspectionPriorities(buf *bytes.Buffer, cards []signals.PRQualityCard) {
+	if len(cards) == 0 {
+		fmt.Fprintln(buf, "No PR or commit-group cards were available.")
+		return
+	}
+	priorities := inspectionPriorityCards(cards)
+	if len(priorities) == 0 {
+		fmt.Fprintln(buf, "No risky or mixed PR cards were visible in the local evidence. Use the full ledger as supporting context rather than an inspection queue.")
+		return
+	}
+	for i, card := range firstPRCards(priorities, 3) {
+		fmt.Fprintf(buf, "%d. %s (%s, %s confidence)\n", i+1, artifactLabel(card), ledgerCell(card.Label, "unlabeled"), card.Confidence)
+		fmt.Fprintf(buf, "   Risk: %s\n", ledgerCell(card.MainRisk, "No specific risk recorded."))
+		fmt.Fprintf(buf, "   Next: %s\n", ledgerCell(card.NextAction, "No specific action recorded."))
+	}
+}
+
+func inspectionPriorityCards(cards []signals.PRQualityCard) []signals.PRQualityCard {
+	priorities := make([]signals.PRQualityCard, 0, min(len(cards), 3))
+	for _, labels := range [][]string{{"risky"}, {"mixed", "insufficient_data"}, {"unknown", ""}} {
+		for _, card := range cards {
+			if !containsString(labels, card.Label) {
+				continue
+			}
+			priorities = append(priorities, card)
+			if len(priorities) == 3 {
+				return priorities
+			}
+		}
+	}
+	return priorities
+}
+
+func firstPRCards(values []signals.PRQualityCard, limit int) []signals.PRQualityCard {
+	if limit < 0 {
+		limit = 0
+	}
+	if len(values) <= limit {
+		return values
+	}
+	return values[:limit]
+}
+
+func containsString(values []string, target string) bool {
+	for _, value := range values {
+		if value == target {
+			return true
+		}
+	}
+	return false
+}
+
 func artifactLabel(card signals.PRQualityCard) string {
 	title := strings.TrimSpace(card.Title)
 	if card.PRNumber > 0 {

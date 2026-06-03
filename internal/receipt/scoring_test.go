@@ -90,6 +90,25 @@ func TestBuildUsesSingularFindingEvidence(t *testing.T) {
 	}
 }
 
+func TestBuildDoesNotTurnZeroCommitsIntoStrength(t *testing.T) {
+	out := Build(Input{
+		Repo:      signals.RepoMetadata{DefaultBranch: "main"},
+		History:   gitrepo.History{FileTouchCount: map[string]int{}},
+		Inventory: signals.FileSummary{TotalFiles: 463, SourceFiles: 120, TestFiles: 85},
+		SinceDays: 90,
+		MaxCards:  20,
+	})
+
+	for _, strength := range out.WeaknessMap.Strengths {
+		if strength.Label == "Local evidence collected" {
+			t.Fatalf("zero-commit local evidence should be context, not a strength: %+v", out.WeaknessMap.Strengths)
+		}
+	}
+	if !hasFinding(out.WeaknessMap.WatchItems, "Local evidence collected") {
+		t.Fatalf("zero-commit local evidence should remain visible as a watch item: %+v", out.WeaknessMap.WatchItems)
+	}
+}
+
 func TestLocalOnlyConfidenceCapsAtMedium(t *testing.T) {
 	history := gitrepo.History{FileTouchCount: map[string]int{}}
 	for i := 0; i < 12; i++ {
@@ -509,6 +528,15 @@ func findingEvidence(findings []signals.Finding, label string) string {
 		}
 	}
 	return ""
+}
+
+func hasFinding(findings []signals.Finding, label string) bool {
+	for _, finding := range findings {
+		if finding.Label == label {
+			return true
+		}
+	}
+	return false
 }
 
 func repeatedChangedFiles(count int) []gitrepo.ChangedFile {

@@ -41,9 +41,18 @@ lives in Go tests and `scripts/dogfood-cli.mjs`.
   issue intent, AI/session telemetry, and product outcome context, but the copy
   must be framed as missing-evidence guidance rather than upload or publishing
   pressure.
+- Web-connected handoffs should be contextual to the current Top Read when
+  possible, such as verifying repair-loop PR/file lineage, grouping high-churn
+  touches by issue intent, or checking whether untested changes caused review or
+  CI friction.
 - Source coverage must keep Phase 1 readiness gaps separate from future ROI
   telemetry so missing spend or product analytics does not outrank validation,
   GitHub, issue, coverage, or instruction readiness.
+- The readiness-gap list should respect setup-related Top Read priority before
+  falling back to the standard source order.
+- Markdown reports should show a short PR inspection queue before the full PR
+  quality ledger, and zero-commit local evidence should be neutral context or a
+  watch item rather than a profile strength.
 - The CLI may generate `profile.export.json`, `share-card.json`, and
   public-safe collector bundle artifacts, but it must not publish profiles,
   render OpenGraph images, call X or Discord APIs, track social mentions, run

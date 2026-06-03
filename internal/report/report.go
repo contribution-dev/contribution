@@ -155,7 +155,7 @@ func Markdown(analysis signals.AnalysisReport) string {
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "## Source Coverage")
 	fmt.Fprintln(&buf)
-	writeSourceCoverage(&buf, analysis.SourceCoverage, analysis.DataGaps)
+	writeSourceCoverage(&buf, analysis.SourceCoverage, analysis.DataGaps, analysis.TopRead)
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "## Attribution Readiness")
 	fmt.Fprintln(&buf)
@@ -167,7 +167,7 @@ func Markdown(analysis signals.AnalysisReport) string {
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "## Strengths")
 	fmt.Fprintln(&buf)
-	writeFindings(&buf, analysis.WeaknessMap.Strengths)
+	writeStrengthFindings(&buf, analysis.WeaknessMap.Strengths)
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "## Weakness Map")
 	fmt.Fprintln(&buf)
@@ -183,9 +183,15 @@ func Markdown(analysis signals.AnalysisReport) string {
 	fmt.Fprintln(&buf)
 	writeTrendComparison(&buf, analysis.Trends)
 	fmt.Fprintln(&buf)
-	fmt.Fprintln(&buf, "## PR Quality Ledger")
+	fmt.Fprintln(&buf, "## PR Inspection Priorities")
 	fmt.Fprintln(&buf)
-	writeLedger(&buf, analysis.PRCards)
+	writeInspectionPriorities(&buf, analysis.PRCards)
+	if len(analysis.PRCards) > 0 {
+		fmt.Fprintln(&buf)
+		fmt.Fprintln(&buf, "## Full PR Quality Ledger")
+		fmt.Fprintln(&buf)
+		writeLedger(&buf, analysis.PRCards)
+	}
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "## High-Churn Deep Dive")
 	fmt.Fprintln(&buf)
@@ -630,7 +636,7 @@ func writeAgenticReadiness(buf *bytes.Buffer, readiness signals.AgenticReadiness
 	}
 }
 
-func writeSourceCoverage(buf *bytes.Buffer, coverage signals.SourceCoverage, gaps []signals.DataGap) {
+func writeSourceCoverage(buf *bytes.Buffer, coverage signals.SourceCoverage, gaps []signals.DataGap, topRead signals.TopRead) {
 	if len(coverage.Sources) == 0 {
 		fmt.Fprintln(buf, "No source coverage model was computed.")
 		return
@@ -639,7 +645,7 @@ func writeSourceCoverage(buf *bytes.Buffer, coverage signals.SourceCoverage, gap
 	readiness, future := splitSourceCoverage(coverage.Sources)
 	writeSourceCoverageGroup(buf, "Readiness Essentials", readiness)
 	writeSourceCoverageGroup(buf, "Future ROI Telemetry", future)
-	readinessGaps := readinessDataGaps(gaps)
+	readinessGaps := readinessDataGaps(gaps, topRead)
 	if len(readinessGaps) > 0 {
 		fmt.Fprintln(buf)
 		fmt.Fprintln(buf, "Most important readiness gaps:")
@@ -684,15 +690,57 @@ func writeSourceCoverageGroup(buf *bytes.Buffer, title string, items []signals.S
 	}
 }
 
-func readinessDataGaps(gaps []signals.DataGap) []signals.DataGap {
-	out := make([]signals.DataGap, 0, len(gaps))
+func readinessDataGaps(gaps []signals.DataGap, topRead signals.TopRead) []signals.DataGap {
+	filtered := make([]signals.DataGap, 0, len(gaps))
 	for _, gap := range gaps {
 		if futureTelemetryGapID(gap.ID) {
+			continue
+		}
+		filtered = append(filtered, gap)
+	}
+	if len(topRead.Findings) == 0 {
+		return filtered
+	}
+	out := make([]signals.DataGap, 0, len(filtered))
+	used := map[string]bool{}
+	for _, id := range topReadDataGapIDs(topRead) {
+		for _, gap := range filtered {
+			if gap.ID != id || used[gap.ID] {
+				continue
+			}
+			out = append(out, gap)
+			used[gap.ID] = true
+			break
+		}
+	}
+	for _, gap := range filtered {
+		if used[gap.ID] {
 			continue
 		}
 		out = append(out, gap)
 	}
 	return out
+}
+
+func topReadDataGapIDs(topRead signals.TopRead) []string {
+	ids := make([]string, 0, len(topRead.Findings))
+	for _, finding := range topRead.Findings {
+		switch finding.ID {
+		case "missing_validation_command":
+			ids = append(ids, "validation_commands")
+		case "attribution_gap":
+			ids = append(ids, "github_metadata", "issue_tracker")
+		case "setup_gap_github_metadata":
+			ids = append(ids, "github_metadata")
+		case "setup_gap_issue_tracker":
+			ids = append(ids, "issue_tracker")
+		case "setup_gap_coverage_report":
+			ids = append(ids, "coverage_report")
+		case "setup_gap_optional_static_tools":
+			ids = append(ids, "optional_static_tools")
+		}
+	}
+	return ids
 }
 
 func hasFutureDataGaps(gaps []signals.DataGap) bool {
@@ -743,11 +791,46 @@ func writeWebConnectedNextStep(buf *bytes.Buffer, analysis signals.AnalysisRepor
 	fmt.Fprintln(buf, "The CLI report is complete for deterministic local evidence. The web report becomes useful when you want the missing context this process should not guess locally.")
 	fmt.Fprintln(buf)
 	fmt.Fprintln(buf, "Import the CLI probe bundle (`collector.bundle.json`) at contribution.dev when you want to connect GitHub reviews/checks, issue tracker intent, AI session or spend metadata, and deployment or product outcomes to the same findings.")
+	if reasons := webConnectedReasons(analysis); len(reasons) > 0 {
+		fmt.Fprintln(buf)
+		fmt.Fprintln(buf, "Most useful connected checks for this run:")
+		for _, reason := range firstStrings(reasons, 3) {
+			fmt.Fprintf(buf, "- %s\n", reason)
+		}
+	}
 	if len(analysis.SourceCoverage.NextActions) > 0 {
 		fmt.Fprintln(buf)
 		fmt.Fprintln(buf, "Most relevant connection from this run:")
 		fmt.Fprintf(buf, "- %s\n", analysis.SourceCoverage.NextActions[0])
 	}
+}
+
+func webConnectedReasons(analysis signals.AnalysisReport) []string {
+	reasons := make([]string, 0, len(analysis.TopRead.Findings))
+	seen := map[string]bool{}
+	for _, finding := range analysis.TopRead.Findings {
+		var reason string
+		switch finding.ID {
+		case "fix_like_repair_loop", "pr_follow_up_churn":
+			reason = "Connect GitHub PR and changed-file metadata to verify whether the fix-like commits followed the same PRs or files."
+		case "high_churn_files":
+			reason = "Connect GitHub and issue intent to group the repeated file touches by feature or incident."
+		case "no_test_evidence", "risky_no_test_work":
+			reason = "Connect GitHub checks and reviews to see whether the untested or risky changes caused CI failures, requested changes, or follow-up fixes."
+		case "large_work_units":
+			reason = "Connect PR metadata to separate broad commits into actual review units and find which large changes created reviewer load."
+		case "missing_validation_command":
+			reason = "After adding one validation command, import the bundle so the web report can show which repos are ready for repeatable agent work."
+		case "attribution_gap":
+			reason = "Connect issues or work-unit markers to tie the local findings to feature intent instead of raw commit batches."
+		}
+		if reason == "" || seen[reason] {
+			continue
+		}
+		reasons = append(reasons, reason)
+		seen[reason] = true
+	}
+	return reasons
 }
 
 func writeFindings(buf *bytes.Buffer, findings []signals.Finding) {
@@ -758,6 +841,14 @@ func writeFindings(buf *bytes.Buffer, findings []signals.Finding) {
 	for _, finding := range findings {
 		fmt.Fprintf(buf, "- %s: %s (%s confidence)\n", finding.Label, finding.Evidence, finding.Confidence)
 	}
+}
+
+func writeStrengthFindings(buf *bytes.Buffer, findings []signals.Finding) {
+	if len(findings) == 0 {
+		fmt.Fprintln(buf, "No durable strength signal was visible in this local run. That is neutral evidence, not a failure; inspect the watch items and setup gaps before treating the repo as ready.")
+		return
+	}
+	writeFindings(buf, findings)
 }
 
 func writeNumberedFindings(buf *bytes.Buffer, findings []signals.Finding) {

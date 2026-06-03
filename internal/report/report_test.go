@@ -262,6 +262,135 @@ func TestMarkdownFiltersFutureTelemetryFromImportantDataGaps(t *testing.T) {
 	}
 }
 
+func TestMarkdownOrdersReadinessGapsByTopRead(t *testing.T) {
+	analysis := signals.AnalysisReport{
+		TopRead: signals.TopRead{
+			Findings: []signals.TopFinding{{
+				ID: "missing_validation_command",
+			}},
+		},
+		SourceCoverage: signals.SourceCoverage{
+			Summary:    "2 of 11 evidence sources are available.",
+			Confidence: signals.ConfidenceLow,
+			Sources: []signals.SourceCoverageItem{{
+				ID:       "github_metadata",
+				Label:    "GitHub metadata",
+				Category: "review",
+				Status:   signals.SourceCoverageRequiresWebConnection,
+				Unlocks:  "Review burden.",
+			}, {
+				ID:       "validation_commands",
+				Label:    "Local validation commands",
+				Category: "validation",
+				Status:   signals.SourceCoverageMissing,
+				Unlocks:  "Agent workflow efficiency.",
+			}},
+		},
+		DataGaps: []signals.DataGap{{
+			ID:         "github_metadata",
+			Label:      "GitHub metadata",
+			Unlocks:    "Review burden.",
+			NextAction: "Connect GitHub.",
+		}, {
+			ID:         "validation_commands",
+			Label:      "Local validation commands",
+			Unlocks:    "Agent workflow efficiency.",
+			NextAction: "Document one command.",
+		}},
+	}
+
+	got := Markdown(analysis)
+	gaps := markdownSection(got, "Most important readiness gaps:", "Future ROI telemetry")
+	validationIndex := strings.Index(gaps, "Local validation commands")
+	githubIndex := strings.Index(gaps, "GitHub metadata")
+	if validationIndex < 0 || githubIndex < 0 || validationIndex > githubIndex {
+		t.Fatalf("readiness gaps should follow Top Read priority:\n%s", gaps)
+	}
+}
+
+func TestMarkdownRendersInspectionPrioritiesBeforeFullLedger(t *testing.T) {
+	analysis := signals.AnalysisReport{
+		PRCards: []signals.PRQualityCard{{
+			Title:      "Risky auth change",
+			Label:      "risky",
+			Confidence: signals.ConfidenceMedium,
+			Scope:      "20 files and 900 lines",
+			MainRisk:   "Security-sensitive paths changed without adjacent tests.",
+			NextAction: "Add focused tests around auth edge cases.",
+		}, {
+			Title:      "Strong docs change",
+			Label:      "strong",
+			Confidence: signals.ConfidenceMedium,
+			Scope:      "1 file and 20 lines",
+			MainRisk:   "No major local-history risk was visible.",
+			NextAction: "Repeat this small change shape.",
+		}},
+	}
+
+	got := Markdown(analysis)
+	prioritiesIndex := strings.Index(got, "## PR Inspection Priorities")
+	ledgerIndex := strings.Index(got, "## Full PR Quality Ledger")
+	if prioritiesIndex < 0 || ledgerIndex < 0 || prioritiesIndex > ledgerIndex {
+		t.Fatalf("inspection priorities should render before the full ledger:\n%s", got)
+	}
+	priorities := markdownSection(got, "## PR Inspection Priorities", "## Full PR Quality Ledger")
+	if !strings.Contains(priorities, "Risky auth change") || strings.Contains(priorities, "Strong docs change") {
+		t.Fatalf("inspection priorities should emphasize risky cards before strong cards:\n%s", priorities)
+	}
+}
+
+func TestMarkdownUsesNeutralCopyWhenNoStrengths(t *testing.T) {
+	got := Markdown(signals.AnalysisReport{})
+	strengths := markdownSection(got, "## Strengths", "## Weakness Map")
+	if strings.Contains(strengths, "No finding available") {
+		t.Fatalf("empty strengths should not use generic filler:\n%s", strengths)
+	}
+	if !strings.Contains(strengths, "No durable strength signal was visible") {
+		t.Fatalf("empty strengths should explain the lack of strength evidence:\n%s", strengths)
+	}
+}
+
+func TestMarkdownSkipsFullLedgerWhenNoCards(t *testing.T) {
+	got := Markdown(signals.AnalysisReport{})
+	if !strings.Contains(got, "## PR Inspection Priorities") {
+		t.Fatalf("inspection priority section should still explain missing cards:\n%s", got)
+	}
+	if strings.Contains(got, "## Full PR Quality Ledger") {
+		t.Fatalf("empty full ledger should not be repeated:\n%s", got)
+	}
+}
+
+func TestMarkdownWebConnectedStepUsesSpecificMissingContext(t *testing.T) {
+	analysis := signals.AnalysisReport{
+		TopRead: signals.TopRead{
+			Findings: []signals.TopFinding{{
+				ID:       "fix_like_repair_loop",
+				Evidence: "18 of 20 recent commits matched fix/revert-like message heuristics.",
+			}, {
+				ID:       "high_churn_files",
+				Evidence: "High-churn files include app/session.ts.",
+			}},
+		},
+		AttributionReadiness: signals.AttributionReadiness{
+			MissingEvidence: []string{"PR metadata", "issue tracker metadata"},
+		},
+		SourceCoverage: signals.SourceCoverage{
+			NextActions: []string{"Connect GitHub in the web app."},
+		},
+	}
+
+	got := Markdown(analysis)
+	finalStep := markdownSection(got, "## Web-Connected Next Step", "## Limitations")
+	for _, want := range []string{
+		"verify whether the fix-like commits followed the same PRs or files",
+		"group the repeated file touches by feature or incident",
+	} {
+		if !strings.Contains(finalStep, want) {
+			t.Fatalf("web-connected final step missing contextual guidance %q:\n%s", want, finalStep)
+		}
+	}
+}
+
 func TestMarkdownRepeatsNextPlanAndWebConnectedStepAtEnd(t *testing.T) {
 	analysis := signals.AnalysisReport{
 		TopRead: signals.TopRead{

@@ -51,3 +51,22 @@ func TestAnalysisRedactsPathCandidatesInText(t *testing.T) {
 		t.Fatalf("summary did not keep redacted basename: %q", got.SourceCoverage.Summary)
 	}
 }
+
+func TestAnalysisRedactsUnknownTwoSegmentPathCandidatesInText(t *testing.T) {
+	privateDir := "services/payments"
+	analysis := signals.AnalysisReport{
+		Repo: signals.RepoMetadata{ID: "local:test", Name: "test"},
+		SourceCoverage: signals.SourceCoverage{
+			Summary: "High churn includes " + privateDir + ".",
+		},
+		Privacy: signals.PrivacySummary{PublicSafe: true},
+	}
+
+	got := Analysis(analysis)
+	if strings.Contains(got.SourceCoverage.Summary, privateDir) {
+		t.Fatalf("summary retained private path: %q", got.SourceCoverage.Summary)
+	}
+	if !strings.Contains(got.SourceCoverage.Summary, "payments") {
+		t.Fatalf("summary did not keep redacted basename: %q", got.SourceCoverage.Summary)
+	}
+}

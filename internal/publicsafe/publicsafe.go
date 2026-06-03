@@ -18,11 +18,17 @@ type pathReplacement struct {
 }
 
 var (
-	commitSHAPattern      = regexp.MustCompile(`\b[0-9a-fA-F]{7,40}\b`)
-	pathCandidatePattern  = regexp.MustCompile(`(?:[A-Za-z]:)?(?:[./~]?[\w.-]+[/\\])+[\w.@+-]+`)
-	fractionPattern       = regexp.MustCompile(`^\d+/\d+$`)
-	pathLikePrefixPattern = regexp.MustCompile(`^(?:\.github|app|apps|assets|bin|build|cmd|config|configs|dist|docs|internal|lib|package|packages|pkg|public|script|scripts|src|test|tests|tool|tools)/`)
-	proseSlashPairPattern = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*/[A-Za-z][A-Za-z0-9_-]*$`)
+	commitSHAPattern        = regexp.MustCompile(`\b[0-9a-fA-F]{7,40}\b`)
+	pathCandidatePattern    = regexp.MustCompile(`(?:[A-Za-z]:)?(?:[./~]?[\w.-]+[/\\])+[\w.@+-]+`)
+	fractionPattern         = regexp.MustCompile(`^\d+/\d+$`)
+	pathLikePrefixPattern   = regexp.MustCompile(`^(?:\.github|app|apps|assets|bin|build|cmd|config|configs|dist|docs|internal|lib|package|packages|pkg|public|script|scripts|src|test|tests|tool|tools)/`)
+	proseSlashPairPattern   = regexp.MustCompile(`^[A-Za-z][A-Za-z0-9_-]*/[A-Za-z][A-Za-z0-9_-]*$`)
+	proseSlashPairAllowlist = map[string]struct{}{
+		"analyze/probe":   {},
+		"ci/test":         {},
+		"fix/revert-like": {},
+		"token/cost":      {},
+	}
 )
 
 const publicRepoID = "private-repository"
@@ -616,10 +622,18 @@ func isPathCandidate(value string) bool {
 	if strings.Contains(filepath.Base(normalized), ".") {
 		return true
 	}
-	if proseSlashPairPattern.MatchString(normalized) {
+	if isAllowedProseSlashPair(normalized) {
 		return false
 	}
 	return strings.Contains(value, "/") || strings.Contains(value, "\\")
+}
+
+func isAllowedProseSlashPair(value string) bool {
+	if !proseSlashPairPattern.MatchString(value) {
+		return false
+	}
+	_, ok := proseSlashPairAllowlist[strings.ToLower(value)]
+	return ok
 }
 
 func addPathReplacement(replacements *[]pathReplacement, seen map[string]bool, value string) {

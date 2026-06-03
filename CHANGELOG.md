@@ -16,6 +16,8 @@ All notable changes to this project will be documented in this file.
 - Harden collector follow-ups so public-safe redaction preserves useful
   slash-separated product terms, work-unit candidates omit empty anchors, and
   exported marker bundles are not reread as malformed source markers.
+- Redact unknown two-segment slash path candidates in public-safe text while
+  preserving known slash-separated product terms.
 - Add a `follow_up` report comparison that checks the latest prior local
   `analysis.json`, shows what improved, regressed, resolved, or persisted since
   the last report, and surfaces that loop in markdown and terminal summaries.

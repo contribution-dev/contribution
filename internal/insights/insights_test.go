@@ -142,6 +142,26 @@ func TestBuildPrioritizesHighVolumeRepairLoopAheadOfSmallLargeWork(t *testing.T)
 	}
 }
 
+func TestBuildDoesNotPromoteSingleFixLikeCommitAheadOfLargeWork(t *testing.T) {
+	report := baseAnalysis()
+	report.WeaknessMap.Weaknesses = []signals.Finding{{
+		Label:      "Large changes create review risk",
+		Evidence:   "1 recent commit changed more than 12 files.",
+		Confidence: signals.ConfidenceMedium,
+		NextAction: "Split broad refactors from behavior changes.",
+	}}
+	report.Trends.CurrentWindow.Commits = 1
+	report.Trends.CurrentWindow.FixLikeCommits = 1
+
+	top := Build(report)
+	if len(top.Findings) < 2 {
+		t.Fatalf("findings = %+v, want large work and repair-loop findings", top.Findings)
+	}
+	if top.Findings[0].ID != "large_work_units" || top.Findings[1].ID != "fix_like_repair_loop" {
+		t.Fatalf("finding order = %+v, want large work before single fix-like commit", top.Findings)
+	}
+}
+
 func TestBuildUsesSingularRepairLoopEvidence(t *testing.T) {
 	report := baseAnalysis()
 	report.Trends.CurrentWindow.Commits = 1

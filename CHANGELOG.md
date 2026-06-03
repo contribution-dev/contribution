@@ -4,6 +4,8 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Keep one-off fix-like commits from being promoted above stronger Top Read
+  findings such as large work units.
 - Add a `PR Inspection Priorities` digest before the full ledger, align
   readiness-gap ordering with the Top Read finding, make contribution.dev
   handoffs specific to the missing context, and treat zero-commit local evidence

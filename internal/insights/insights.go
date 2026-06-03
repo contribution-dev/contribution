@@ -192,7 +192,7 @@ func highVolumeRepairLoop(window signals.TrendWindow) bool {
 	if window.FixLikeCommits >= 5 {
 		return true
 	}
-	if window.Commits <= 0 {
+	if window.FixLikeCommits < 3 || window.Commits <= 0 {
 		return false
 	}
 	return float64(window.FixLikeCommits)/float64(window.Commits) >= 0.5

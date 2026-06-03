@@ -574,7 +574,7 @@ func buildAttribution(input Input) (signals.AttributionReadiness, []signals.Work
 	if len(input.History.Commits) > 0 {
 		patterns = append(patterns, signals.AnchorPattern{ID: "commit_batch", Label: "Commit batch", Count: len(input.History.Commits), Confidence: signals.ConfidenceLow, Evidence: "Local commits can be grouped coarsely by time window when stronger anchors are missing."})
 	}
-	pattern, confidence, summary, next := choosePattern(input, patterns, prIssueCount, len(commitIssues))
+	pattern, confidence, summary, next := choosePattern(input, prIssueCount, len(commitIssues))
 	missing := missingAttributionEvidence(input, confidence)
 	attribution := signals.AttributionReadiness{
 		Pattern:         pattern,
@@ -588,7 +588,7 @@ func buildAttribution(input Input) (signals.AttributionReadiness, []signals.Work
 	return attribution, workUnitCandidates(input, pattern, confidence, commitIssues)
 }
 
-func choosePattern(input Input, patterns []signals.AnchorPattern, prIssueCount int, commitIssueKeys int) (string, signals.Confidence, string, string) {
+func choosePattern(input Input, prIssueCount int, commitIssueKeys int) (string, signals.Confidence, string, string) {
 	switch {
 	case len(input.WorkUnitMarkers) > 0:
 		return "manual_marker", signals.ConfidenceHigh, fmt.Sprintf("%d manual work-unit marker(s) provide explicit intent anchors.", len(input.WorkUnitMarkers)), "Keep using work-unit markers or connect issue tracker metadata for confirmation."

@@ -120,6 +120,13 @@ func normalizeSHA(value string) string {
 	return strings.ToLower(strings.TrimSpace(value))
 }
 
+func countNoun(count int, singular string, plural string) string {
+	if count == 1 {
+		return fmt.Sprintf("%d %s", count, singular)
+	}
+	return fmt.Sprintf("%d %s", count, plural)
+}
+
 func cardFromPR(pr github.PullRequest, history gitrepo.History) signals.PRQualityCard {
 	totalLines := pr.Additions + pr.Deletions
 	label := "mixed"
@@ -388,7 +395,7 @@ func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMa
 	if focused > 0 {
 		strengths = append(strengths, signals.Finding{
 			Label:        "Focused local changes",
-			Evidence:     fmt.Sprintf("%d recent commits changed five or fewer files.", focused),
+			Evidence:     fmt.Sprintf("%s changed five or fewer files.", countNoun(focused, "recent commit", "recent commits")),
 			Confidence:   confidence,
 			WhyItMatters: "Smaller changes are easier to review and easier to make durable.",
 		})
@@ -396,7 +403,7 @@ func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMa
 	if testTouched > 0 {
 		strengths = append(strengths, signals.Finding{
 			Label:        "Some adjacent test evidence",
-			Evidence:     fmt.Sprintf("%d recent commits touched test files.", testTouched),
+			Evidence:     fmt.Sprintf("%s touched test files.", countNoun(testTouched, "recent commit", "recent commits")),
 			Confidence:   confidence,
 			WhyItMatters: "Adjacent tests give reviewers and future changes better protection.",
 		})
@@ -404,7 +411,7 @@ func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMa
 	if docsTouched > 0 {
 		strengths = append(strengths, signals.Finding{
 			Label:        "Documentation support appears in recent work",
-			Evidence:     fmt.Sprintf("%d recent commits touched docs.", docsTouched),
+			Evidence:     fmt.Sprintf("%s touched docs.", countNoun(docsTouched, "recent commit", "recent commits")),
 			Confidence:   confidence,
 			WhyItMatters: "Docs changes help make contribution value durable beyond the diff.",
 		})
@@ -422,7 +429,7 @@ func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMa
 	if sourceNoTest > 0 {
 		weaknesses = append(weaknesses, signals.Finding{
 			Label:        "Behavior changes often lack test evidence",
-			Evidence:     fmt.Sprintf("%d source-changing commits did not touch test files.", sourceNoTest),
+			Evidence:     fmt.Sprintf("%s did not touch test files.", countNoun(sourceNoTest, "source-changing commit", "source-changing commits")),
 			Confidence:   confidence,
 			WhyItMatters: "This does not prove the code is wrong, but it gives reviewers less protection.",
 			NextAction:   "For the next behavior-changing PR, add at least one adjacent test before review.",
@@ -431,7 +438,7 @@ func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMa
 	if large > 0 {
 		weaknesses = append(weaknesses, signals.Finding{
 			Label:        "Large changes create review risk",
-			Evidence:     fmt.Sprintf("%d recent commits changed more than 12 files.", large),
+			Evidence:     fmt.Sprintf("%s changed more than 12 files.", countNoun(large, "recent commit", "recent commits")),
 			Confidence:   confidence,
 			WhyItMatters: "Large changes are harder to review and easier to churn after merge.",
 			NextAction:   "Split broad refactors from behavior changes.",
@@ -440,7 +447,7 @@ func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMa
 	if riskyNoTest > 0 {
 		weaknesses = append(weaknesses, signals.Finding{
 			Label:        "Risky paths need stronger proof",
-			Evidence:     fmt.Sprintf("%d security-sensitive commits had no adjacent test file changes.", riskyNoTest),
+			Evidence:     fmt.Sprintf("%s had no adjacent test file changes.", countNoun(riskyNoTest, "security-sensitive commit", "security-sensitive commits")),
 			Confidence:   signals.ConfidenceMedium,
 			WhyItMatters: "Auth, billing, session, token, and permission changes need sharper verification.",
 			NextAction:   "Add targeted tests around security-sensitive edge cases before review.",
@@ -458,7 +465,7 @@ func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMa
 	if followUpPRs > 0 {
 		weaknesses = append(weaknesses, signals.Finding{
 			Label:        "Some PRs needed post-merge follow-up",
-			Evidence:     fmt.Sprintf("%d imported PR(s) had later fix/revert-like commits touching their changed files.", followUpPRs),
+			Evidence:     fmt.Sprintf("%s had later fix/revert-like commits touching their changed files.", countNoun(followUpPRs, "imported PR", "imported PRs")),
 			Confidence:   signals.ConfidenceMedium,
 			WhyItMatters: "This is stronger durability evidence than commit-message counts alone because it ties follow-up churn back to the PR's files.",
 			NextAction:   "Inspect those PRs before repeating the same shape, especially if they also changed high-churn files.",
@@ -467,7 +474,7 @@ func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMa
 	if requestedChangePRs > 0 {
 		weaknesses = append(weaknesses, signals.Finding{
 			Label:        "Review requested changes on imported PRs",
-			Evidence:     fmt.Sprintf("%d imported PR(s) had requested-change reviews.", requestedChangePRs),
+			Evidence:     fmt.Sprintf("%s had requested-change reviews.", countNoun(requestedChangePRs, "imported PR", "imported PRs")),
 			Confidence:   signals.ConfidenceMedium,
 			WhyItMatters: "Requested changes are useful, but repeated review rounds can point to unclear scope or missing preflight checks.",
 			NextAction:   "Use preflight to call out scope, risky paths, and test evidence before opening comparable PRs.",
@@ -476,7 +483,7 @@ func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMa
 	if failedCheckPRs > 0 {
 		weaknesses = append(weaknesses, signals.Finding{
 			Label:        "Checks failed on imported PRs",
-			Evidence:     fmt.Sprintf("%d imported PR(s) had failing or non-success check runs.", failedCheckPRs),
+			Evidence:     fmt.Sprintf("%s had failing or non-success check runs.", countNoun(failedCheckPRs, "imported PR", "imported PRs")),
 			Confidence:   signals.ConfidenceMedium,
 			WhyItMatters: "Failing checks before merge add churn and reviewer load.",
 			NextAction:   "Run the same validation locally before review and keep CI-only failures visible in the PR notes.",
@@ -485,7 +492,7 @@ func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMa
 	if len(input.AnalyzerFindings) > 0 {
 		weaknesses = append(weaknesses, signals.Finding{
 			Label:        "Optional analyzers found issues",
-			Evidence:     fmt.Sprintf("%d optional analyzer finding(s) were imported.", len(input.AnalyzerFindings)),
+			Evidence:     fmt.Sprintf("%s imported.", countNoun(len(input.AnalyzerFindings), "optional analyzer finding was", "optional analyzer findings were")),
 			Confidence:   signals.ConfidenceMedium,
 			WhyItMatters: "Static, secret, dependency, and vulnerability findings are not proof of broken code, but they are concrete risk evidence to triage before review.",
 			NextAction:   "Triage the analyzer findings and separate new risk from inherited backlog before sharing the report.",
@@ -522,7 +529,7 @@ func buildWeaknessMap(input Input, _ []signals.PRQualityCard) signals.WeaknessMa
 	if fixLike > 0 {
 		watchItems = append(watchItems, signals.Finding{
 			Label:        "Follow-up fix language appears in history",
-			Evidence:     fmt.Sprintf("%d commits matched low-confidence fix or revert message heuristics.", fixLike),
+			Evidence:     fmt.Sprintf("%s matched low-confidence fix or revert message heuristics.", countNoun(fixLike, "commit", "commits")),
 			Confidence:   signals.ConfidenceLow,
 			WhyItMatters: "Message heuristics are weak, but repeated fix language can point to durability risk.",
 			NextAction:   "Inspect those commits before drawing conclusions.",

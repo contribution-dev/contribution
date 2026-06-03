@@ -35,6 +35,15 @@ lives in Go tests and `scripts/dogfood-cli.mjs`.
 - Private markdown may show artifact titles, file paths, high-churn details,
   and no-test evidence. Public-safe markdown must keep those details redacted
   to neutral artifact labels or path basenames.
+- Markdown reports must distinguish deterministic local CLI evidence from
+  web-connected evidence. They may point users to import the CLI probe bundle
+  (`collector.bundle.json`) at contribution.dev for PR review/check metadata,
+  issue intent, AI/session telemetry, and product outcome context, but the copy
+  must be framed as missing-evidence guidance rather than upload or publishing
+  pressure.
+- Source coverage must keep Phase 1 readiness gaps separate from future ROI
+  telemetry so missing spend or product analytics does not outrank validation,
+  GitHub, issue, coverage, or instruction readiness.
 - The CLI may generate `profile.export.json`, `share-card.json`, and
   public-safe collector bundle artifacts, but it must not publish profiles,
   render OpenGraph images, call X or Discord APIs, track social mentions, run

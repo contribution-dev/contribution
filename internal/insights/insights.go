@@ -8,8 +8,10 @@ import (
 	"github.com/contribution-dev/contribution/internal/signals"
 )
 
-const maxTopFindings = 5
-const maxNextPRPlan = 5
+const (
+	maxTopFindings = 5
+	maxNextPRPlan  = 5
+)
 
 type candidate struct {
 	priority int
@@ -59,12 +61,16 @@ func collectCandidates(report signals.AnalysisReport) []candidate {
 		}
 	}
 	if report.Trends.CurrentWindow.FixLikeCommits > 0 {
+		priority := 60
+		if highVolumeRepairLoop(report.Trends.CurrentWindow) {
+			priority = 38
+		}
 		out = append(out, candidate{
-			priority: 60,
+			priority: priority,
 			finding: signals.TopFinding{
 				ID:           "fix_like_repair_loop",
 				Label:        "Fix-like repair loop",
-				Evidence:     fmt.Sprintf("%d recent commit(s) matched fix/revert-like message heuristics.", report.Trends.CurrentWindow.FixLikeCommits),
+				Evidence:     repairLoopEvidence(report.Trends.CurrentWindow),
 				Severity:     signals.SeverityMedium,
 				Confidence:   signals.ConfidenceLow,
 				WhyItMatters: "Message heuristics are weak, but repeated fix-like language is useful durability smoke.",
@@ -164,7 +170,7 @@ func topFinding(priority int, id string, severity signals.Severity, source strin
 func rankedFindings(candidates []candidate) []signals.TopFinding {
 	out := make([]signals.TopFinding, 0, min(len(candidates), maxTopFindings))
 	seen := map[string]bool{}
-	for _, priority := range []int{10, 20, 30, 35, 40, 50, 60, 70, 80, 90, 100} {
+	for _, priority := range []int{10, 20, 30, 35, 38, 40, 50, 60, 70, 80, 90, 100} {
 		for _, candidate := range candidates {
 			if candidate.priority != priority || seen[candidate.finding.ID] {
 				continue
@@ -180,6 +186,34 @@ func rankedFindings(candidates []candidate) []signals.TopFinding {
 		}
 	}
 	return out
+}
+
+func highVolumeRepairLoop(window signals.TrendWindow) bool {
+	if window.FixLikeCommits >= 5 {
+		return true
+	}
+	if window.Commits <= 0 {
+		return false
+	}
+	return float64(window.FixLikeCommits)/float64(window.Commits) >= 0.5
+}
+
+func repairLoopEvidence(window signals.TrendWindow) string {
+	if window.Commits > 0 && window.Commits != window.FixLikeCommits {
+		return fmt.Sprintf("%d of %d recent %s matched fix/revert-like message heuristics.", window.FixLikeCommits, window.Commits, plural(window.Commits, "commit", "commits"))
+	}
+	return fmt.Sprintf("%s matched fix/revert-like message heuristics.", countNoun(window.FixLikeCommits, "recent commit", "recent commits"))
+}
+
+func countNoun(count int, singular string, pluralValue string) string {
+	return fmt.Sprintf("%d %s", count, plural(count, singular, pluralValue))
+}
+
+func plural(count int, singular string, pluralValue string) string {
+	if count == 1 {
+		return singular
+	}
+	return pluralValue
 }
 
 func nextPRPlan(findings []signals.TopFinding, report signals.AnalysisReport) []string {

@@ -186,6 +186,111 @@ func TestMarkdownGroupsSourceCoverageByReadinessAndFutureTelemetry(t *testing.T)
 	}
 }
 
+func TestMarkdownSummaryExplainsLocalScopeAndWebHandoff(t *testing.T) {
+	analysis := signals.AnalysisReport{
+		TopRead: signals.TopRead{
+			Headline:   "Large work units are creating review risk.",
+			Summary:    "Readiness: C (73/100), medium confidence. 1 recent commit changed more than 12 files.",
+			Confidence: signals.ConfidenceMedium,
+			NextPRPlan: []string{"Split broad refactors from behavior changes."},
+		},
+		AgenticReadiness: signals.AgenticReadiness{
+			Grade:      "C",
+			Score:      73,
+			Confidence: signals.ConfidenceMedium,
+		},
+	}
+
+	got := Markdown(analysis)
+	summary := markdownSection(got, "## Summary", "## Top Read")
+	if strings.Contains(summary, analysis.TopRead.Summary) {
+		t.Fatalf("summary duplicated top-read evidence:\n%s", got)
+	}
+	for _, want := range []string{
+		"deterministic local evidence",
+		"collector.bundle.json",
+		"contribution.dev",
+	} {
+		if !strings.Contains(summary, want) {
+			t.Fatalf("summary missing %q:\n%s", want, summary)
+		}
+	}
+}
+
+func TestMarkdownFiltersFutureTelemetryFromImportantDataGaps(t *testing.T) {
+	analysis := signals.AnalysisReport{
+		SourceCoverage: signals.SourceCoverage{
+			Summary:    "1 of 3 evidence sources are available.",
+			Confidence: signals.ConfidenceLow,
+			Sources: []signals.SourceCoverageItem{{
+				ID:       "coverage_report",
+				Label:    "Coverage report",
+				Category: "validation",
+				Status:   signals.SourceCoverageMissing,
+				Unlocks:  "Validation confidence.",
+			}, {
+				ID:       "ai_spend_telemetry",
+				Label:    "AI spend telemetry",
+				Category: "spend",
+				Status:   signals.SourceCoverageRequiresAdmin,
+				Unlocks:  "Engineering ROI.",
+			}},
+		},
+		DataGaps: []signals.DataGap{{
+			ID:         "coverage_report",
+			Label:      "Coverage report",
+			Unlocks:    "Validation confidence.",
+			NextAction: "Import coverage.",
+		}, {
+			ID:         "ai_spend_telemetry",
+			Label:      "AI spend telemetry",
+			Unlocks:    "Engineering ROI.",
+			NextAction: "Connect spend telemetry.",
+		}},
+	}
+
+	got := Markdown(analysis)
+	gaps := markdownSection(got, "Most important readiness gaps:", "## Attribution Readiness")
+	if !strings.Contains(gaps, "Coverage report") {
+		t.Fatalf("readiness gaps missing coverage gap:\n%s", gaps)
+	}
+	if strings.Contains(gaps, "AI spend telemetry") {
+		t.Fatalf("readiness gaps should not include future telemetry:\n%s", gaps)
+	}
+	if !strings.Contains(got, "Future ROI Telemetry") || !strings.Contains(got, "AI spend telemetry") {
+		t.Fatalf("future telemetry should still render in its own group:\n%s", got)
+	}
+}
+
+func TestMarkdownRepeatsNextPlanAndWebConnectedStepAtEnd(t *testing.T) {
+	analysis := signals.AnalysisReport{
+		TopRead: signals.TopRead{
+			Headline:   "Behavior changes need stronger test evidence before review.",
+			Summary:    "Readiness: C (73/100), medium confidence.",
+			Confidence: signals.ConfidenceMedium,
+			NextPRPlan: []string{"Add one adjacent regression test before review."},
+		},
+		WeaknessMap: signals.WeaknessMap{
+			NextActions: []string{"Generic weakness-map fallback."},
+		},
+	}
+
+	got := Markdown(analysis)
+	nextPlan := markdownSection(got, "## Next PR Plan", "## Confidence Setup")
+	if !strings.Contains(nextPlan, "Add one adjacent regression test before review.") {
+		t.Fatalf("end next plan should use top_read next_pr_plan:\n%s", nextPlan)
+	}
+	if strings.Contains(nextPlan, "Generic weakness-map fallback") {
+		t.Fatalf("end next plan should not prefer generic fallback:\n%s", nextPlan)
+	}
+	finalStep := markdownSection(got, "## Web-Connected Next Step", "## Limitations")
+	for _, want := range []string{"collector.bundle.json", "contribution.dev", "GitHub", "issue"} {
+		if !strings.Contains(finalStep, want) {
+			t.Fatalf("web-connected final step missing %q:\n%s", want, finalStep)
+		}
+	}
+}
+
 func TestPreflightMarkdownIncludesAnalyzerFindings(t *testing.T) {
 	preflight := signals.PreflightReport{
 		Version:   2,
@@ -737,4 +842,20 @@ func containsInJSON(value any, needle string) bool {
 		return false
 	}
 	return strings.Contains(string(data), needle)
+}
+
+func markdownSection(text string, start string, end string) string {
+	startIndex := strings.Index(text, start)
+	if startIndex < 0 {
+		return ""
+	}
+	sectionStart := startIndex + len(start)
+	if end == "" {
+		return text[sectionStart:]
+	}
+	endIndex := strings.Index(text[sectionStart:], end)
+	if endIndex < 0 {
+		return text[sectionStart:]
+	}
+	return text[sectionStart : sectionStart+endIndex]
 }

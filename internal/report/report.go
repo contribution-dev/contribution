@@ -221,9 +221,9 @@ func Markdown(analysis signals.AnalysisReport) string {
 		fmt.Fprintf(&buf, "AI workflow confidence is low because this report only uses self-reported tools and modes. Tools: %s. Modes: %s. The CLI does not detect AI-authored code or calculate token efficiency unless telemetry or metadata artifacts are imported.\n", joinOrNone(analysis.Config.SelfReportedAITools), joinOrNone(analysis.Config.SelfReportedAIModes))
 	}
 	fmt.Fprintln(&buf)
-	fmt.Fprintln(&buf, "## Next 3 Actions")
+	fmt.Fprintln(&buf, "## Next PR Plan")
 	fmt.Fprintln(&buf)
-	for _, action := range firstStrings(analysis.WeaknessMap.NextActions, 3) {
+	for _, action := range firstStrings(nextPlanActions(analysis), 5) {
 		fmt.Fprintf(&buf, "- %s\n", action)
 	}
 	fmt.Fprintln(&buf)
@@ -240,6 +240,10 @@ func Markdown(analysis signals.AnalysisReport) string {
 	for _, strength := range profile.Strengths {
 		fmt.Fprintf(&buf, "- %s: %s (%s confidence)\n", strength.Label, strength.Evidence, strength.Confidence)
 	}
+	fmt.Fprintln(&buf)
+	fmt.Fprintln(&buf, "## Web-Connected Next Step")
+	fmt.Fprintln(&buf)
+	writeWebConnectedNextStep(&buf, analysis)
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "## Limitations")
 	fmt.Fprintln(&buf)
@@ -540,22 +544,24 @@ func writeJSON(path string, value any) error {
 }
 
 func summary(analysis signals.AnalysisReport) string {
-	if analysis.TopRead.Summary != "" {
-		return analysis.TopRead.Summary
+	read := strings.TrimSpace(analysis.TopRead.Headline)
+	if read == "" && analysis.AgenticReadiness.Grade != "" {
+		read = fmt.Sprintf("Agentic readiness is %s (%d/100).", analysis.AgenticReadiness.Grade, analysis.AgenticReadiness.Score)
 	}
-	if analysis.AgenticReadiness.Grade != "" {
-		return fmt.Sprintf("%s This report measures how prepared the repo is for agentic development, then shows which data gaps prevent stronger AI-spend-to-outcome analysis.",
-			analysis.AgenticReadiness.Summary,
-		)
+	if read == "" {
+		read = fmt.Sprintf("%d artifacts were analyzed locally.", analysis.Profile.AnalyzedPRs)
 	}
-	if len(analysis.WeaknessMap.Weaknesses) > 0 && len(analysis.WeaknessMap.Strengths) > 0 {
-		return fmt.Sprintf("%s The main risk pattern is %s. Confidence is %s because this report is based on the available local and optional metadata signals.",
-			analysis.WeaknessMap.Strengths[0].Evidence,
-			strings.ToLower(analysis.WeaknessMap.Weaknesses[0].Label),
-			analysis.WeaknessMap.Confidence,
-		)
+	return fmt.Sprintf("Local CLI read: %s This report uses deterministic local evidence: git history, repo shape, validation/config signals, and any artifacts you explicitly import. For PR review/check metadata, issue intent, AI/session telemetry, or product outcome context, import the CLI probe bundle (`collector.bundle.json`) at contribution.dev and connect those sources there.", read)
+}
+
+func nextPlanActions(analysis signals.AnalysisReport) []string {
+	if len(analysis.TopRead.NextPRPlan) > 0 {
+		return analysis.TopRead.NextPRPlan
 	}
-	return fmt.Sprintf("%d artifacts were analyzed locally with %s confidence. Missing optional metadata lowers certainty instead of creating fake precision.", analysis.Profile.AnalyzedPRs, analysis.Profile.Confidence)
+	if len(analysis.WeaknessMap.NextActions) > 0 {
+		return analysis.WeaknessMap.NextActions
+	}
+	return []string{"Run contribution preflight before the next behavior-changing PR."}
 }
 
 func writeTopRead(buf *bytes.Buffer, top signals.TopRead) {
@@ -633,12 +639,17 @@ func writeSourceCoverage(buf *bytes.Buffer, coverage signals.SourceCoverage, gap
 	readiness, future := splitSourceCoverage(coverage.Sources)
 	writeSourceCoverageGroup(buf, "Readiness Essentials", readiness)
 	writeSourceCoverageGroup(buf, "Future ROI Telemetry", future)
-	if len(gaps) > 0 {
+	readinessGaps := readinessDataGaps(gaps)
+	if len(readinessGaps) > 0 {
 		fmt.Fprintln(buf)
-		fmt.Fprintln(buf, "Most important data gaps:")
-		for _, gap := range firstDataGaps(gaps, 5) {
+		fmt.Fprintln(buf, "Most important readiness gaps:")
+		for _, gap := range firstDataGaps(readinessGaps, 5) {
 			fmt.Fprintf(buf, "- %s: %s Next: %s\n", gap.Label, gap.Unlocks, gap.NextAction)
 		}
+	}
+	if hasFutureDataGaps(gaps) {
+		fmt.Fprintln(buf)
+		fmt.Fprintln(buf, "Future ROI telemetry stays separate from readiness. Connect spend, session, deployment, or product data in the web report when you are ready to measure outcomes beyond local engineering evidence.")
 	}
 }
 
@@ -673,6 +684,34 @@ func writeSourceCoverageGroup(buf *bytes.Buffer, title string, items []signals.S
 	}
 }
 
+func readinessDataGaps(gaps []signals.DataGap) []signals.DataGap {
+	out := make([]signals.DataGap, 0, len(gaps))
+	for _, gap := range gaps {
+		if futureTelemetryGapID(gap.ID) {
+			continue
+		}
+		out = append(out, gap)
+	}
+	return out
+}
+
+func hasFutureDataGaps(gaps []signals.DataGap) bool {
+	for _, gap := range gaps {
+		if futureTelemetryGapID(gap.ID) {
+			return true
+		}
+	}
+	return false
+}
+
+func futureTelemetryGapID(id string) bool {
+	switch id {
+	case "ai_spend_telemetry", "agent_session_telemetry", "deployment_product_telemetry":
+		return true
+	}
+	return false
+}
+
 func writeAttributionReadiness(buf *bytes.Buffer, attribution signals.AttributionReadiness, candidates []signals.WorkUnitCandidate) {
 	if attribution.Pattern == "" {
 		fmt.Fprintln(buf, "No attribution readiness model was computed.")
@@ -688,6 +727,8 @@ func writeAttributionReadiness(buf *bytes.Buffer, attribution signals.Attributio
 	if len(attribution.MissingEvidence) > 0 {
 		fmt.Fprintln(buf)
 		fmt.Fprintf(buf, "Missing evidence: %s.\n", strings.Join(attribution.MissingEvidence, ", "))
+		fmt.Fprintln(buf)
+		fmt.Fprintln(buf, "Web-connected context helps here: import the CLI probe bundle (`collector.bundle.json`) at contribution.dev to connect GitHub PRs, issue tracker intent, and agent-session metadata instead of asking the local CLI to infer work units from commit batches.")
 	}
 	if len(candidates) > 0 {
 		fmt.Fprintln(buf)
@@ -695,6 +736,17 @@ func writeAttributionReadiness(buf *bytes.Buffer, attribution signals.Attributio
 		for _, candidate := range firstWorkUnitCandidates(candidates, 5) {
 			fmt.Fprintf(buf, "- %s: %s (%s confidence)\n", candidate.Pattern, candidate.Title, candidate.Confidence)
 		}
+	}
+}
+
+func writeWebConnectedNextStep(buf *bytes.Buffer, analysis signals.AnalysisReport) {
+	fmt.Fprintln(buf, "The CLI report is complete for deterministic local evidence. The web report becomes useful when you want the missing context this process should not guess locally.")
+	fmt.Fprintln(buf)
+	fmt.Fprintln(buf, "Import the CLI probe bundle (`collector.bundle.json`) at contribution.dev when you want to connect GitHub reviews/checks, issue tracker intent, AI session or spend metadata, and deployment or product outcomes to the same findings.")
+	if len(analysis.SourceCoverage.NextActions) > 0 {
+		fmt.Fprintln(buf)
+		fmt.Fprintln(buf, "Most relevant connection from this run:")
+		fmt.Fprintf(buf, "- %s\n", analysis.SourceCoverage.NextActions[0])
 	}
 }
 

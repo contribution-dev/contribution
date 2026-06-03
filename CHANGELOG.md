@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Improve report readability with magnitude-aware repair-loop top-read ranking,
+  singular/plural finding evidence, readiness-only source gap prioritization,
+  a repeated end-of-report next PR plan, and non-salesy contribution.dev
+  handoffs for evidence that requires web-connected sources.
 - Add deterministic `top_read` summaries to `analysis.json`,
   `collector.bundle.json`, markdown reports, and terminal receipts, and label
   imported PRs with no changed-file metadata as `insufficient_data` instead of

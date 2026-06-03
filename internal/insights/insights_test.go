@@ -119,6 +119,43 @@ func TestBuildFallsBackToReadinessGrade(t *testing.T) {
 	}
 }
 
+func TestBuildPrioritizesHighVolumeRepairLoopAheadOfSmallLargeWork(t *testing.T) {
+	report := baseAnalysis()
+	report.WeaknessMap.Weaknesses = []signals.Finding{{
+		Label:      "Large changes create review risk",
+		Evidence:   "1 recent commit changed more than 12 files.",
+		Confidence: signals.ConfidenceMedium,
+		NextAction: "Split broad refactors from behavior changes.",
+	}}
+	report.Trends.CurrentWindow.Commits = 20
+	report.Trends.CurrentWindow.FixLikeCommits = 18
+
+	top := Build(report)
+	if len(top.Findings) == 0 || top.Findings[0].ID != "fix_like_repair_loop" {
+		t.Fatalf("findings = %+v, want high-volume repair loop first", top.Findings)
+	}
+	if !strings.Contains(strings.ToLower(top.Headline), "repair loop") {
+		t.Fatalf("headline = %q, want repair-loop headline", top.Headline)
+	}
+	if !strings.Contains(top.Findings[0].Evidence, "18 of 20") {
+		t.Fatalf("evidence = %q, want magnitude-aware repair-loop evidence", top.Findings[0].Evidence)
+	}
+}
+
+func TestBuildUsesSingularRepairLoopEvidence(t *testing.T) {
+	report := baseAnalysis()
+	report.Trends.CurrentWindow.Commits = 1
+	report.Trends.CurrentWindow.FixLikeCommits = 1
+
+	top := Build(report)
+	if len(top.Findings) == 0 {
+		t.Fatalf("findings = %+v, want repair-loop finding", top.Findings)
+	}
+	if strings.Contains(top.Findings[0].Evidence, "commit(s)") || !strings.Contains(top.Findings[0].Evidence, "1 recent commit matched") {
+		t.Fatalf("evidence = %q, want singular grammar", top.Findings[0].Evidence)
+	}
+}
+
 func baseAnalysis() signals.AnalysisReport {
 	return signals.AnalysisReport{
 		AgenticReadiness: signals.AgenticReadiness{

@@ -46,6 +46,50 @@ func TestBuildFlagsSourceChangesWithoutTests(t *testing.T) {
 	}
 }
 
+func TestBuildUsesSingularFindingEvidence(t *testing.T) {
+	history := gitrepo.History{
+		Commits: []gitrepo.Commit{{
+			SHA:           "large123456",
+			Date:          time.Now(),
+			Subject:       "large tested change",
+			Files:         repeatedChangedFiles(13),
+			SourceTouched: true,
+			TestsTouched:  true,
+		}, {
+			SHA:           "risk123456",
+			Date:          time.Now(),
+			Subject:       "change auth behavior",
+			Files:         []gitrepo.ChangedFile{{Path: "internal/auth/session.go"}},
+			SourceTouched: true,
+			RiskyTouched:  true,
+		}, {
+			SHA:         "docs123456",
+			Date:        time.Now(),
+			Subject:     "docs update",
+			Files:       []gitrepo.ChangedFile{{Path: "docs/readme.md"}},
+			DocsTouched: true,
+		}},
+		FileTouchCount: map[string]int{"internal/auth/session.go": 1},
+	}
+	out := Build(Input{
+		Repo:      signals.RepoMetadata{DefaultBranch: "main"},
+		History:   history,
+		Inventory: signals.FileSummary{TotalFiles: 3, SourceFiles: 2, TestFiles: 1},
+		SinceDays: 90,
+		MaxCards:  20,
+	})
+
+	for label, want := range map[string]string{
+		"Behavior changes often lack test evidence": "1 source-changing commit did not touch test files.",
+		"Large changes create review risk":          "1 recent commit changed more than 12 files.",
+		"Risky paths need stronger proof":           "1 security-sensitive commit had no adjacent test file changes.",
+	} {
+		if got := findingEvidence(out.WeaknessMap.Weaknesses, label); got != want {
+			t.Fatalf("%s evidence = %q, want %q", label, got, want)
+		}
+	}
+}
+
 func TestLocalOnlyConfidenceCapsAtMedium(t *testing.T) {
 	history := gitrepo.History{FileTouchCount: map[string]int{}}
 	for i := 0; i < 12; i++ {
@@ -456,6 +500,15 @@ func hasTrendDirection(metrics []signals.TrendMetric, id string, direction strin
 		}
 	}
 	return false
+}
+
+func findingEvidence(findings []signals.Finding, label string) string {
+	for _, finding := range findings {
+		if finding.Label == label {
+			return finding.Evidence
+		}
+	}
+	return ""
 }
 
 func repeatedChangedFiles(count int) []gitrepo.ChangedFile {

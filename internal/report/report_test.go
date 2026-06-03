@@ -108,6 +108,84 @@ func TestProfileExportOmitsRiskyArtifactsByDefault(t *testing.T) {
 	}
 }
 
+func TestMarkdownRendersTopReadBeforeReadinessDetails(t *testing.T) {
+	analysis := signals.AnalysisReport{
+		TopRead: signals.TopRead{
+			Headline:   "Post-merge follow-up churn is the first thing to fix.",
+			Summary:    "Readiness: C (73/100), medium confidence.",
+			Confidence: signals.ConfidenceMedium,
+			Findings: []signals.TopFinding{{
+				Label:        "Some PRs needed post-merge follow-up",
+				Evidence:     "6 imported PR(s) had later fix/revert-like commits touching their changed files.",
+				Severity:     signals.SeverityHigh,
+				Confidence:   signals.ConfidenceMedium,
+				WhyItMatters: "This points to durable engineering risk.",
+				NextAction:   "Inspect those PRs before repeating the same shape.",
+			}},
+			NextPRPlan: []string{"Inspect those PRs before repeating the same shape."},
+		},
+		AgenticReadiness: signals.AgenticReadiness{
+			Grade:      "C",
+			Score:      73,
+			Confidence: signals.ConfidenceMedium,
+		},
+	}
+
+	got := Markdown(analysis)
+	topIndex := strings.Index(got, "## Top Read")
+	readinessIndex := strings.Index(got, "## Agentic Readiness")
+	if topIndex < 0 {
+		t.Fatalf("markdown missing Top Read:\n%s", got)
+	}
+	if readinessIndex < 0 || topIndex > readinessIndex {
+		t.Fatalf("Top Read should render before Agentic Readiness:\n%s", got)
+	}
+	for _, want := range []string{
+		"Post-merge follow-up churn is the first thing to fix.",
+		"Why it matters: This points to durable engineering risk.",
+		"Next PR plan:",
+	} {
+		if !strings.Contains(got, want) {
+			t.Fatalf("markdown missing %q:\n%s", want, got)
+		}
+	}
+}
+
+func TestMarkdownGroupsSourceCoverageByReadinessAndFutureTelemetry(t *testing.T) {
+	analysis := signals.AnalysisReport{
+		SourceCoverage: signals.SourceCoverage{
+			Summary:    "2 of 3 evidence sources are available.",
+			Confidence: signals.ConfidenceMedium,
+			Sources: []signals.SourceCoverageItem{{
+				ID:       "local_git_history",
+				Label:    "Local git history",
+				Category: "repo",
+				Status:   signals.SourceCoverageAvailable,
+				Unlocks:  "Local engineering outcome evidence.",
+			}, {
+				ID:       "coverage_report",
+				Label:    "Coverage report",
+				Category: "validation",
+				Status:   signals.SourceCoverageMissing,
+				Unlocks:  "Validation confidence.",
+			}, {
+				ID:       "ai_spend_telemetry",
+				Label:    "AI spend telemetry",
+				Category: "spend",
+				Status:   signals.SourceCoverageRequiresAdmin,
+				Unlocks:  "Engineering ROI.",
+			}},
+		},
+	}
+
+	got := Markdown(analysis)
+	essentials := strings.Index(got, "### Readiness Essentials")
+	future := strings.Index(got, "### Future ROI Telemetry")
+	if essentials < 0 || future < 0 || essentials > future {
+		t.Fatalf("source coverage grouping missing or misordered:\n%s", got)
+	}
+}
+
 func TestPreflightMarkdownIncludesAnalyzerFindings(t *testing.T) {
 	preflight := signals.PreflightReport{
 		Version:   2,
@@ -200,6 +278,22 @@ func TestPublicSafeAnalysisRedactsPrivateMetadata(t *testing.T) {
 		WeaknessMap: signals.WeaknessMap{
 			Weaknesses:  []signals.Finding{{Label: "Secret", Evidence: "High-churn files include " + privateRelativePath + " with " + secret, WhyItMatters: secret, NextAction: secret}},
 			NextActions: []string{"rotate " + secret},
+		},
+		TopRead: signals.TopRead{
+			Headline:   "Fix " + privateRelativePath + " after commit " + commitSHA,
+			Summary:    "Secret " + secret,
+			Confidence: signals.ConfidenceMedium,
+			Findings: []signals.TopFinding{{
+				ID:           "private",
+				Label:        "Private " + privateRelativePath,
+				Evidence:     "Commit " + commitSHA + " touched " + privateRelativePath + " with " + secret,
+				Severity:     signals.SeverityHigh,
+				Confidence:   signals.ConfidenceMedium,
+				WhyItMatters: secret,
+				NextAction:   "Inspect " + privateRelativePath,
+				Source:       "deep_dive",
+			}},
+			NextPRPlan: []string{"Protect " + privateRelativePath + " and " + secret},
 		},
 		Profile: signals.ProfileSummary{
 			Headline:           "Agentic readiness profile",

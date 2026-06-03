@@ -98,6 +98,58 @@ func TestEnrichedConfidenceCanBeHigh(t *testing.T) {
 	}
 }
 
+func TestImportedPRWithoutChangedFileMetadataIsInsufficientData(t *testing.T) {
+	out := Build(Input{
+		Repo: signals.RepoMetadata{DefaultBranch: "main"},
+		GitHub: github.Metadata{Available: true, PRs: []github.PullRequest{{
+			Number: 7,
+			Title:  "Focused title but sparse metadata",
+		}}},
+		Inventory: signals.FileSummary{TotalFiles: 1, SourceFiles: 1},
+		SinceDays: 90,
+		MaxCards:  20,
+	})
+	if len(out.Cards) != 1 {
+		t.Fatalf("cards = %d, want 1", len(out.Cards))
+	}
+	card := out.Cards[0]
+	if card.Label != "insufficient_data" {
+		t.Fatalf("label = %q, want insufficient_data", card.Label)
+	}
+	if card.Confidence != signals.ConfidenceLow {
+		t.Fatalf("confidence = %q, want low", card.Confidence)
+	}
+	if !strings.Contains(card.MainRisk, "metadata was unavailable") {
+		t.Fatalf("main risk = %q, want missing metadata warning", card.MainRisk)
+	}
+	if !strings.Contains(card.NextAction, "changed-file metadata") {
+		t.Fatalf("next action = %q, want metadata action", card.NextAction)
+	}
+}
+
+func TestImportedSmallPRWithChangedFileMetadataCanBeStrong(t *testing.T) {
+	out := Build(Input{
+		Repo: signals.RepoMetadata{DefaultBranch: "main"},
+		GitHub: github.Metadata{Available: true, PRs: []github.PullRequest{{
+			Number:       8,
+			Title:        "Small tested change",
+			ChangedFiles: 2,
+			Additions:    20,
+			Deletions:    5,
+			Files:        []string{"internal/app.go", "internal/app_test.go"},
+		}}},
+		Inventory: signals.FileSummary{TotalFiles: 2, SourceFiles: 1, TestFiles: 1},
+		SinceDays: 90,
+		MaxCards:  20,
+	})
+	if len(out.Cards) != 1 {
+		t.Fatalf("cards = %d, want 1", len(out.Cards))
+	}
+	if out.Cards[0].Label != "strong" {
+		t.Fatalf("label = %q, want strong", out.Cards[0].Label)
+	}
+}
+
 func TestZeroPRGitHubMetadataDoesNotRaiseConfidence(t *testing.T) {
 	history := gitrepo.History{FileTouchCount: map[string]int{}}
 	for i := 0; i < 12; i++ {

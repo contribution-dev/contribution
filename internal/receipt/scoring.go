@@ -130,7 +130,20 @@ func cardFromPR(pr github.PullRequest, history gitrepo.History) signals.PRQualit
 	var risks []signals.Finding
 	sourceFiles, testFiles, riskyFiles := classifyPaths(pr.Files)
 	durability := prDurabilityContext(pr, history)
-	if pr.ChangedFiles <= 5 && totalLines <= 300 {
+	metadataUnavailable := len(pr.Files) == 0 && pr.ChangedFiles == 0 && pr.Additions == 0 && pr.Deletions == 0
+	if metadataUnavailable {
+		label = "insufficient_data"
+		confidence = signals.ConfidenceLow
+		mainRisk = "Changed-file metadata was unavailable, so this PR should not be treated as proof of a focused PR."
+		nextAction = "Import changed-file metadata or rerun GitHub enrichment before using this PR as strong evidence."
+		risks = append(risks, signals.Finding{
+			Label:        "Changed-file metadata unavailable",
+			Evidence:     fmt.Sprintf("Imported metadata for PR #%d had no changed-file, addition, or deletion counts.", pr.Number),
+			Confidence:   signals.ConfidenceLow,
+			WhyItMatters: "Without changed-file metadata, the CLI cannot verify scope, test adjacency, or review surface.",
+			NextAction:   "Import changed-file metadata or rerun GitHub enrichment before using this PR as strong evidence.",
+		})
+	} else if pr.ChangedFiles <= 5 && totalLines <= 300 {
 		label = "strong"
 		strengths = append(strengths, signals.Finding{
 			Label:      "Focused scope",

@@ -316,6 +316,7 @@ type CollectorBundle struct {
 	GeneratedAt          time.Time               `json:"generated_at"`
 	Repo                 RepoMetadata            `json:"repo"`
 	Git                  CollectorGitSummary     `json:"git"`
+	TopRead              TopRead                 `json:"top_read"`
 	Tooling              ToolingReport           `json:"tooling"`
 	AgenticReadiness     AgenticReadiness        `json:"agentic_readiness"`
 	SourceCoverage       SourceCoverage          `json:"source_coverage"`
@@ -336,6 +337,27 @@ type Finding struct {
 	Confidence   Confidence `json:"confidence"`
 	WhyItMatters string     `json:"why_it_matters,omitempty"`
 	NextAction   string     `json:"next_action,omitempty"`
+}
+
+// TopFinding is a deterministic, first-read conclusion for the report summary.
+type TopFinding struct {
+	ID           string     `json:"id"`
+	Label        string     `json:"label"`
+	Evidence     string     `json:"evidence"`
+	Severity     Severity   `json:"severity"`
+	Confidence   Confidence `json:"confidence"`
+	WhyItMatters string     `json:"why_it_matters,omitempty"`
+	NextAction   string     `json:"next_action,omitempty"`
+	Source       string     `json:"source"`
+}
+
+// TopRead is the report-first deterministic summary.
+type TopRead struct {
+	Headline   string       `json:"headline"`
+	Summary    string       `json:"summary"`
+	Findings   []TopFinding `json:"findings"`
+	NextPRPlan []string     `json:"next_pr_plan"`
+	Confidence Confidence   `json:"confidence"`
 }
 
 // SignalRef points from higher-level reports back to source evidence.
@@ -539,6 +561,7 @@ type AnalysisReport struct {
 	Tooling                ToolingReport           `json:"tooling"`
 	Inventory              FileSummary             `json:"inventory"`
 	Coverage               CoverageSummary         `json:"coverage"`
+	TopRead                TopRead                 `json:"top_read"`
 	AnalyzerFindings       []AnalyzerFinding       `json:"analyzer_findings"`
 	Signals                []Signal                `json:"signals"`
 	PRCards                []PRQualityCard         `json:"pr_quality_cards"`

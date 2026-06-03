@@ -8,10 +8,12 @@ lives in Go tests and `scripts/dogfood-cli.mjs`.
 
 - Commands must be deterministic about stdout, stderr, exit status, and output
   files.
-- Successful `analyze`, `probe`, and `preflight` runs print concise terminal
-  summaries with the main result, follow-up movement when available, next action
-  context, capped unavailable-signal notes, and only the artifact paths actually
-  written for the selected format.
+- Successful `analyze` and `probe` runs print concise terminal summaries with
+  the main result, the top-read headline, top next-PR actions, follow-up
+  movement when available, capped unavailable-signal notes, and only the
+  artifact paths actually written for the selected format. Successful
+  `preflight` runs print the current-diff risk receipt, capped unavailable
+  notes, and only the artifact paths written for the selected format.
 - Errors return a non-zero exit code, write the error to stderr at process
   level, and do not create unrelated artifacts.
 - Public-safe outputs must omit raw code, raw diffs, author emails, secrets,
@@ -92,18 +94,20 @@ lives in Go tests and `scripts/dogfood-cli.mjs`.
   `preflight.json`, `friend-review-packet.json`, and
   `friend-feedback.export.json` have
   behavior-level contract tests for their top-level JSON shape.
-- `analysis.json` includes `coverage`, `analyzer_findings`, `trends`,
-  `follow_up`, `deep_dives`, and `setup_actions`. `coverage` summarizes
-  explicitly imported Go/LCOV coverage, including the lowest-coverage files.
-  `analyzer_findings` stores normalized optional-tool findings without raw
-  code. `trends` compares the recent local-history window with the immediately
-  prior window for test evidence, large changes, fix/revert-like churn, risky
-  untested changes, and high-churn concentration. `follow_up` compares the
-  current report with the latest prior local `analysis.json` under the same
-  output root and records improved, regressed, resolved, and persistent
-  patterns. `deep_dives` explains high-churn and source-without-test patterns
-  for the private report. `setup_actions` gives concrete commands that would
-  raise confidence.
+- `analysis.json` includes `coverage`, `top_read`, `analyzer_findings`,
+  `trends`, `follow_up`, `deep_dives`, and `setup_actions`. `coverage`
+  summarizes explicitly imported Go/LCOV coverage, including the
+  lowest-coverage files. `top_read` is an additive deterministic first-read
+  summary with a headline, evidence-backed findings, a next-PR plan, and
+  confidence. `analyzer_findings` stores normalized optional-tool findings
+  without raw code. `trends` compares the recent local-history window with the
+  immediately prior window for test evidence, large changes, fix/revert-like
+  churn, risky untested changes, and high-churn concentration. `follow_up`
+  compares the current report with the latest prior local `analysis.json` under
+  the same output root and records improved, regressed, resolved, and
+  persistent patterns. `deep_dives` explains high-churn and source-without-test
+  patterns for the private report. `setup_actions` gives concrete commands that
+  would raise confidence.
 - `analysis.json` also includes additive value-pipeline fields:
   `agentic_readiness`, `source_coverage`, `data_gaps`,
   `recommended_connections`, `attribution_readiness`,
@@ -111,10 +115,11 @@ lives in Go tests and `scripts/dogfood-cli.mjs`.
   `privacy_summary`. These fields are deterministic and must not claim token or
   cost ROI unless explicit telemetry or metadata supplies that numeric evidence.
 - `collector.bundle.json` is public-safe by construction. It includes schema
-  version, generated time, redacted repo metadata, local git summary, tooling,
-  agentic readiness, source coverage, data gaps, recommended connections,
-  attribution readiness, candidate work units, optional metadata-only agent
-  artifact summaries, setup actions, limitations, and privacy posture.
+  version, generated time, redacted repo metadata, local git summary,
+  `top_read`, tooling, agentic readiness, source coverage, data gaps,
+  recommended connections, attribution readiness, candidate work units,
+  optional metadata-only agent artifact summaries, setup actions, limitations,
+  and privacy posture.
 - `preflight.json` is V2. It includes structured changed files, additions and
   deletions, new-side changed line ranges, total changed lines, optional
   changed-line coverage, bounded optional `analyzer_findings` for changed

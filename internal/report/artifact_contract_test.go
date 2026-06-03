@@ -15,6 +15,7 @@ func TestAnalysisReportJSONContract(t *testing.T) {
 	assertReportContractKeys(t, object, []string{
 		"version",
 		"agentic_readiness",
+		"top_read",
 		"generated_at",
 		"repo",
 		"config",
@@ -104,6 +105,7 @@ func TestCollectorBundleJSONContract(t *testing.T) {
 		"generated_at",
 		"repo",
 		"git",
+		"top_read",
 		"tooling",
 		"agentic_readiness",
 		"source_coverage",
@@ -187,6 +189,20 @@ func reportContractAnalysisFixture() signals.AnalysisReport {
 			Evidence:     []signals.SignalRef{{ID: "sig-1", Message: "Small tested change."}},
 			NextAction:   "Keep contracts covered.",
 		}},
+		TopRead: signals.TopRead{
+			Headline:   "Contract coverage is the top read.",
+			Summary:    "Readiness evidence is available.",
+			Confidence: signals.ConfidenceMedium,
+			Findings: []signals.TopFinding{{
+				ID:         "contract_coverage",
+				Label:      "Contract coverage",
+				Evidence:   "Contracts need tests.",
+				Severity:   signals.SeverityMedium,
+				Confidence: signals.ConfidenceMedium,
+				Source:     "weakness_map",
+			}},
+			NextPRPlan: []string{"Keep contracts covered."},
+		},
 		WeaknessMap: signals.WeaknessMap{
 			Strengths:   []signals.Finding{{Label: "Focused", Evidence: "Single-purpose change.", Confidence: signals.ConfidenceMedium}},
 			Weaknesses:  []signals.Finding{{Label: "Coverage gap", Evidence: "Contracts need tests.", Confidence: signals.ConfidenceLow}},

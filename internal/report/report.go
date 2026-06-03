@@ -145,6 +145,10 @@ func Markdown(analysis signals.AnalysisReport) string {
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, summary(analysis))
 	fmt.Fprintln(&buf)
+	fmt.Fprintln(&buf, "## Top Read")
+	fmt.Fprintln(&buf)
+	writeTopRead(&buf, analysis.TopRead)
+	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "## Agentic Readiness")
 	fmt.Fprintln(&buf)
 	writeAgenticReadiness(&buf, analysis.AgenticReadiness)
@@ -321,6 +325,7 @@ func CollectorBundle(analysis signals.AnalysisReport) signals.CollectorBundle {
 			HighChurnFiles:   highChurn,
 			HeadSHAAvailable: headSHAAvailable,
 		},
+		TopRead:              analysis.TopRead,
 		Tooling:              analysis.Tooling,
 		AgenticReadiness:     analysis.AgenticReadiness,
 		SourceCoverage:       analysis.SourceCoverage,
@@ -535,6 +540,9 @@ func writeJSON(path string, value any) error {
 }
 
 func summary(analysis signals.AnalysisReport) string {
+	if analysis.TopRead.Summary != "" {
+		return analysis.TopRead.Summary
+	}
 	if analysis.AgenticReadiness.Grade != "" {
 		return fmt.Sprintf("%s This report measures how prepared the repo is for agentic development, then shows which data gaps prevent stronger AI-spend-to-outcome analysis.",
 			analysis.AgenticReadiness.Summary,
@@ -548,6 +556,39 @@ func summary(analysis signals.AnalysisReport) string {
 		)
 	}
 	return fmt.Sprintf("%d artifacts were analyzed locally with %s confidence. Missing optional metadata lowers certainty instead of creating fake precision.", analysis.Profile.AnalyzedPRs, analysis.Profile.Confidence)
+}
+
+func writeTopRead(buf *bytes.Buffer, top signals.TopRead) {
+	if top.Headline == "" {
+		fmt.Fprintln(buf, "No deterministic top read was computed.")
+		return
+	}
+	fmt.Fprintln(buf, top.Headline)
+	if top.Summary != "" {
+		fmt.Fprintf(buf, "\n%s\n", top.Summary)
+	}
+	if len(top.Findings) > 0 {
+		fmt.Fprintln(buf)
+		for _, finding := range top.Findings {
+			fmt.Fprintf(buf, "- %s: %s (%s confidence)\n", finding.Label, finding.Evidence, finding.Confidence)
+			if finding.WhyItMatters != "" {
+				fmt.Fprintf(buf, "  Why it matters: %s\n", finding.WhyItMatters)
+			}
+			if finding.NextAction != "" {
+				fmt.Fprintf(buf, "  Next: %s\n", finding.NextAction)
+			}
+		}
+	}
+	if len(top.NextPRPlan) > 0 {
+		fmt.Fprintln(buf)
+		fmt.Fprintln(buf, "Next PR plan:")
+		for _, action := range firstStrings(top.NextPRPlan, 5) {
+			fmt.Fprintf(buf, "- %s\n", action)
+		}
+	}
+	if top.Confidence != "" {
+		fmt.Fprintf(buf, "\nConfidence: %s\n", top.Confidence)
+	}
 }
 
 func writeAgenticReadiness(buf *bytes.Buffer, readiness signals.AgenticReadiness) {
@@ -589,22 +630,46 @@ func writeSourceCoverage(buf *bytes.Buffer, coverage signals.SourceCoverage, gap
 		return
 	}
 	fmt.Fprintf(buf, "%s Confidence: %s.\n", coverage.Summary, coverage.Confidence)
-	fmt.Fprintln(buf)
-	fmt.Fprintln(buf, "| Source | Status | Unlocks | Next |")
-	fmt.Fprintln(buf, "| --- | --- | --- | --- |")
-	for _, item := range coverage.Sources {
-		next := item.NextAction
-		if next == "" {
-			next = "No action needed."
-		}
-		fmt.Fprintf(buf, "| %s | %s | %s | %s |\n", escapeTable(item.Label), item.Status, escapeTable(item.Unlocks), escapeTable(next))
-	}
+	readiness, future := splitSourceCoverage(coverage.Sources)
+	writeSourceCoverageGroup(buf, "Readiness Essentials", readiness)
+	writeSourceCoverageGroup(buf, "Future ROI Telemetry", future)
 	if len(gaps) > 0 {
 		fmt.Fprintln(buf)
 		fmt.Fprintln(buf, "Most important data gaps:")
 		for _, gap := range firstDataGaps(gaps, 5) {
 			fmt.Fprintf(buf, "- %s: %s Next: %s\n", gap.Label, gap.Unlocks, gap.NextAction)
 		}
+	}
+}
+
+func splitSourceCoverage(items []signals.SourceCoverageItem) ([]signals.SourceCoverageItem, []signals.SourceCoverageItem) {
+	var readiness []signals.SourceCoverageItem
+	var future []signals.SourceCoverageItem
+	for _, item := range items {
+		switch item.Category {
+		case "spend", "business":
+			future = append(future, item)
+		default:
+			readiness = append(readiness, item)
+		}
+	}
+	return readiness, future
+}
+
+func writeSourceCoverageGroup(buf *bytes.Buffer, title string, items []signals.SourceCoverageItem) {
+	if len(items) == 0 {
+		return
+	}
+	fmt.Fprintln(buf)
+	fmt.Fprintf(buf, "### %s\n\n", title)
+	fmt.Fprintln(buf, "| Source | Status | Unlocks | Next |")
+	fmt.Fprintln(buf, "| --- | --- | --- | --- |")
+	for _, item := range items {
+		next := item.NextAction
+		if next == "" {
+			next = "No action needed."
+		}
+		fmt.Fprintf(buf, "| %s | %s | %s | %s |\n", escapeTable(item.Label), item.Status, escapeTable(item.Unlocks), escapeTable(next))
 	}
 }
 

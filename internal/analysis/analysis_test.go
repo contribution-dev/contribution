@@ -89,6 +89,9 @@ func TestRunWritesJsonArtifactsAndLocalOnlyFallback(t *testing.T) {
 	if analysis.AgenticReadiness.Grade == "" || analysis.AgenticReadiness.Score == 0 {
 		t.Fatalf("agentic readiness missing: %+v", analysis.AgenticReadiness)
 	}
+	if analysis.TopRead.Headline == "" || len(analysis.TopRead.NextPRPlan) == 0 {
+		t.Fatalf("top read missing: %+v", analysis.TopRead)
+	}
 	if len(analysis.SourceCoverage.Sources) == 0 || len(analysis.DataGaps) == 0 {
 		t.Fatalf("source coverage/data gaps missing: %+v gaps=%+v", analysis.SourceCoverage, analysis.DataGaps)
 	}
@@ -107,7 +110,8 @@ func TestRunWritesJsonArtifactsAndLocalOnlyFallback(t *testing.T) {
 		"Since last report: No previous local report found; this run establishes the comparison baseline.",
 		"Strength:",
 		"Risk:",
-		"Next:",
+		"Top read:",
+		"Next PR plan:",
 		"Unavailable:",
 		"Optional tool signals unavailable:",
 		"Data: " + filepath.Join(outputDir, "analysis.json"),

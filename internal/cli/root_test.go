@@ -249,7 +249,7 @@ func TestProbeCommandWritesCollectorBundle(t *testing.T) {
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)
 	}
-	for _, want := range []string{"Agentic readiness report", "Bundle: ", "Source coverage: ", "Attribution readiness: "} {
+	for _, want := range []string{"Agentic readiness report", "Top read:", "Next PR plan:", "Bundle: ", "Source coverage: ", "Attribution readiness: "} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("probe stdout missing %q:\n%s", want, stdout)
 		}
@@ -264,7 +264,7 @@ func TestProbeCommandWritesCollectorBundle(t *testing.T) {
 	if err := json.Unmarshal(data, &bundle); err != nil {
 		t.Fatalf("parse collector bundle: %v", err)
 	}
-	if bundle["agentic_readiness"] == nil || bundle["source_coverage"] == nil || bundle["attribution_readiness"] == nil {
+	if bundle["top_read"] == nil || bundle["agentic_readiness"] == nil || bundle["source_coverage"] == nil || bundle["attribution_readiness"] == nil {
 		t.Fatalf("collector bundle missing value-pipeline fields: %+v", bundle)
 	}
 }

@@ -15,6 +15,7 @@ import (
 	coveragepkg "github.com/contribution-dev/contribution/internal/coverage"
 	gitrepo "github.com/contribution-dev/contribution/internal/git"
 	"github.com/contribution-dev/contribution/internal/github"
+	"github.com/contribution-dev/contribution/internal/insights"
 	"github.com/contribution-dev/contribution/internal/publicsafe"
 	"github.com/contribution-dev/contribution/internal/receipt"
 	"github.com/contribution-dev/contribution/internal/repoguide"
@@ -247,6 +248,7 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 	if prior.err != nil && !prior.found {
 		analysis.Limitations = uniqueStrings(append(analysis.Limitations, "Previous local report comparison unavailable: "+prior.err.Error()))
 	}
+	analysis.TopRead = insights.Build(analysis)
 	if opts.PublicSafe {
 		analysis = publicsafe.Analysis(analysis)
 	}
@@ -296,6 +298,21 @@ func writeAnalyzeReceipt(out io.Writer, analysis signals.AnalysisReport, outputD
 	if _, err := fmt.Fprintf(out, "Confidence: %s\n", analysis.AgenticReadiness.Confidence); err != nil {
 		return err
 	}
+	if analysis.TopRead.Headline != "" {
+		if _, err := fmt.Fprintf(out, "Top read: %s\n", terminalText(analysis.TopRead.Headline)); err != nil {
+			return err
+		}
+		if len(analysis.TopRead.NextPRPlan) > 0 {
+			if _, err := fmt.Fprintln(out, "Next PR plan:"); err != nil {
+				return err
+			}
+			for i, action := range firstTerminalStrings(analysis.TopRead.NextPRPlan, 3) {
+				if _, err := fmt.Fprintf(out, "%d. %s\n", i+1, terminalText(action)); err != nil {
+					return err
+				}
+			}
+		}
+	}
 	if analysis.SourceCoverage.Summary != "" {
 		if _, err := fmt.Fprintf(out, "Coverage: %s\n", terminalText(analysis.SourceCoverage.Summary)); err != nil {
 			return err
@@ -320,26 +337,28 @@ func writeAnalyzeReceipt(out io.Writer, analysis signals.AnalysisReport, outputD
 	} else if _, err := fmt.Fprintln(out, "Risk: No major weakness detected with the available evidence."); err != nil {
 		return err
 	}
-	if len(analysis.AgenticReadiness.TopActions) > 0 {
-		if _, err := fmt.Fprintln(out, "Next:"); err != nil {
-			return err
-		}
-		for i, action := range firstTerminalStrings(analysis.AgenticReadiness.TopActions, 3) {
-			if _, err := fmt.Fprintf(out, "%d. %s\n", i+1, terminalText(action)); err != nil {
+	if len(analysis.TopRead.NextPRPlan) == 0 {
+		if len(analysis.AgenticReadiness.TopActions) > 0 {
+			if _, err := fmt.Fprintln(out, "Next:"); err != nil {
 				return err
 			}
-		}
-	} else if len(analysis.WeaknessMap.NextActions) > 0 {
-		if _, err := fmt.Fprintln(out, "Next:"); err != nil {
-			return err
-		}
-		for i, action := range firstTerminalStrings(analysis.WeaknessMap.NextActions, 3) {
-			if _, err := fmt.Fprintf(out, "%d. %s\n", i+1, terminalText(action)); err != nil {
+			for i, action := range firstTerminalStrings(analysis.AgenticReadiness.TopActions, 3) {
+				if _, err := fmt.Fprintf(out, "%d. %s\n", i+1, terminalText(action)); err != nil {
+					return err
+				}
+			}
+		} else if len(analysis.WeaknessMap.NextActions) > 0 {
+			if _, err := fmt.Fprintln(out, "Next:"); err != nil {
 				return err
 			}
+			for i, action := range firstTerminalStrings(analysis.WeaknessMap.NextActions, 3) {
+				if _, err := fmt.Fprintf(out, "%d. %s\n", i+1, terminalText(action)); err != nil {
+					return err
+				}
+			}
+		} else if _, err := fmt.Fprintln(out, "Next: No immediate next action recorded."); err != nil {
+			return err
 		}
-	} else if _, err := fmt.Fprintln(out, "Next: No immediate next action recorded."); err != nil {
-		return err
 	}
 	if notes := analyzeUnavailableNotes(analysis); len(notes) > 0 {
 		if _, err := fmt.Fprintln(out); err != nil {

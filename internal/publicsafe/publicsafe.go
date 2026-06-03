@@ -50,6 +50,7 @@ func Analysis(analysis signals.AnalysisReport) signals.AnalysisReport {
 	analysis.Privacy.AuthorEmailsIncluded = false
 	analysis.PRCards = cards(analysis.PRCards, len(analysis.PRCards), pathReplacements)
 	analysis.WeaknessMap = weaknessMap(analysis.WeaknessMap, pathReplacements)
+	analysis.TopRead = topRead(analysis.TopRead, pathReplacements)
 	analysis.Trends = trends(analysis.Trends, pathReplacements)
 	analysis.FollowUp = followUp(analysis.FollowUp, pathReplacements)
 	analysis.Coverage = coverage(analysis.Coverage, pathReplacements)
@@ -155,6 +156,21 @@ func weaknessMap(value signals.WeaknessMap, replacements ...[]pathReplacement) s
 	value.Weaknesses = redactFindings(value.Weaknesses, replacements...)
 	value.WatchItems = redactFindings(value.WatchItems, replacements...)
 	value.NextActions = redactStrings(value.NextActions, replacements...)
+	return value
+}
+
+func topRead(value signals.TopRead, replacements ...[]pathReplacement) signals.TopRead {
+	value.Headline = redactCommitLikeText(redactText(value.Headline, replacements...))
+	value.Summary = redactCommitLikeText(redactText(value.Summary, replacements...))
+	value.NextPRPlan = redactStrings(value.NextPRPlan, replacements...)
+	for i := range value.Findings {
+		value.Findings[i].ID = redactCommitLikeText(redactText(value.Findings[i].ID, replacements...))
+		value.Findings[i].Label = redactCommitLikeText(redactText(value.Findings[i].Label, replacements...))
+		value.Findings[i].Evidence = redactCommitLikeText(redactText(value.Findings[i].Evidence, replacements...))
+		value.Findings[i].WhyItMatters = redactCommitLikeText(redactText(value.Findings[i].WhyItMatters, replacements...))
+		value.Findings[i].NextAction = redactCommitLikeText(redactText(value.Findings[i].NextAction, replacements...))
+		value.Findings[i].Source = redactCommitLikeText(redactText(value.Findings[i].Source, replacements...))
+	}
 	return value
 }
 
@@ -480,6 +496,11 @@ func pathReplacementsForAnalysis(analysis signals.AnalysisReport) []pathReplacem
 		addFindingText(add, finding)
 	}
 	add(analysis.WeaknessMap.NextActions...)
+	add(analysis.TopRead.Headline, analysis.TopRead.Summary)
+	for _, finding := range analysis.TopRead.Findings {
+		add(finding.ID, finding.Label, finding.Evidence, finding.WhyItMatters, finding.NextAction, finding.Source)
+	}
+	add(analysis.TopRead.NextPRPlan...)
 	add(analysis.Trends.Status, analysis.Trends.Reason)
 	addTrendWindowText(add, analysis.Trends.CurrentWindow)
 	addTrendWindowText(add, analysis.Trends.PriorWindow)

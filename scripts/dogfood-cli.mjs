@@ -771,6 +771,12 @@ function runSmoke(binary, tempRoot, options = {}) {
     "analysis missing agentic readiness score",
   );
   assert(
+    analysis.top_read?.headline &&
+      Array.isArray(analysis.top_read?.next_pr_plan) &&
+      analysis.top_read.next_pr_plan.length > 0,
+    "analysis missing deterministic top read",
+  );
+  assert(
     Array.isArray(analysis.source_coverage?.sources) &&
       analysis.source_coverage.sources.length > 0,
     "analysis missing source coverage",
@@ -826,6 +832,13 @@ function runSmoke(binary, tempRoot, options = {}) {
     "probe output missing collector artifact paths",
   );
   assertPublicSafeFiles(collectFiles(probeRun), analysisRepo);
+  const probeBundle = readJSON(path.join(probeRun, "collector.bundle.json"));
+  assert(
+    probeBundle.top_read?.headline &&
+      Array.isArray(probeBundle.top_read?.next_pr_plan) &&
+      probeBundle.top_read.next_pr_plan.length > 0,
+    "collector bundle missing deterministic top read",
+  );
 
   const workUnitStart = runCli(
     binary,

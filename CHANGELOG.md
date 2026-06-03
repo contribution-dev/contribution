@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Add deterministic `top_read` summaries to `analysis.json`,
+  `collector.bundle.json`, markdown reports, and terminal receipts, and label
+  imported PRs with no changed-file metadata as `insufficient_data` instead of
+  treating sparse metadata as proof of a focused PR.
 - Reposition `analyze` around agentic readiness, add deterministic
   `agentic_readiness`, `source_coverage`, `data_gaps`,
   `recommended_connections`, `attribution_readiness`,

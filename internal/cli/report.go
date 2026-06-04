@@ -39,7 +39,10 @@ func newReportCommand(out io.Writer) *cobra.Command {
 			if err := report.WriteReportOnly(output, analysis, format); err != nil {
 				return err
 			}
-			return writef(out, "Report artifacts written to %s\n", output)
+			if err := writef(out, "Report artifacts written to %s\n", output); err != nil {
+				return err
+			}
+			return report.WriteShareHandoff(out, analysis, output)
 		},
 	}
 	cmd.Flags().StringVar(&input, "input", "", "Path to analysis.json.")

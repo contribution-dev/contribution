@@ -9,6 +9,9 @@ import (
 	"runtime"
 	"strings"
 	"testing"
+	"time"
+
+	"github.com/contribution-dev/contribution/internal/signals"
 )
 
 func TestRootCommandShowsHelp(t *testing.T) {
@@ -365,6 +368,31 @@ func TestReportRequiresInput(t *testing.T) {
 	}
 }
 
+func TestReportCommandPrintsShareHandoff(t *testing.T) {
+	input := writeCLIAnalysisFixture(t)
+	output := t.TempDir()
+
+	stdout, stderr, err := executeForTest([]string{"report", "--input", input, "--output", output, "--format", "json"}, BuildInfo{})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	for _, want := range []string{
+		"Report artifacts written to " + output,
+		"Shareable card (public-safe)",
+		"Agentic readiness: B (82/100)",
+		"Create image: https://contribution.dev/share",
+		"Upload: " + filepath.Join(output, "profile.export.json"),
+		"        " + filepath.Join(output, "share-card.json"),
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout)
+		}
+	}
+}
+
 func TestExportProfileRequiresInput(t *testing.T) {
 	stdout, stderr, err := executeForTest([]string{"export-profile"}, BuildInfo{})
 	if err == nil {
@@ -378,6 +406,31 @@ func TestExportProfileRequiresInput(t *testing.T) {
 	}
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty before process-level error handling", stderr)
+	}
+}
+
+func TestExportProfileCommandPrintsShareHandoff(t *testing.T) {
+	input := writeCLIAnalysisFixture(t)
+	output := t.TempDir()
+
+	stdout, stderr, err := executeForTest([]string{"export-profile", "--input", input, "--output", output}, BuildInfo{})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	for _, want := range []string{
+		"Profile export artifacts written to " + output,
+		"Shareable card (public-safe)",
+		"Agentic readiness: B (82/100)",
+		"Create image: https://contribution.dev/share",
+		"Upload: " + filepath.Join(output, "profile.export.json"),
+		"        " + filepath.Join(output, "share-card.json"),
+	} {
+		if !strings.Contains(stdout, want) {
+			t.Fatalf("stdout missing %q:\n%s", want, stdout)
+		}
 	}
 }
 
@@ -395,6 +448,41 @@ func TestRedactRequiresOutput(t *testing.T) {
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty before process-level error handling", stderr)
 	}
+}
+
+func writeCLIAnalysisFixture(t *testing.T) string {
+	t.Helper()
+	analysis := signals.AnalysisReport{
+		Version:     1,
+		GeneratedAt: time.Date(2026, 1, 2, 3, 4, 5, 0, time.UTC),
+		Profile: signals.ProfileSummary{
+			DisplayName:        "fixture",
+			AnalyzedPRs:        7,
+			AnalysisWindowDays: 30,
+			Confidence:         signals.ConfidenceMedium,
+			Strengths: []signals.Finding{{
+				Label:      "Focused local changes",
+				Evidence:   "Recent changes stayed small.",
+				Confidence: signals.ConfidenceMedium,
+			}},
+		},
+		AgenticReadiness: signals.AgenticReadiness{
+			Grade:      "B",
+			Score:      82,
+			Confidence: signals.ConfidenceMedium,
+		},
+		Privacy:        signals.PrivacySummary{PublicSafe: true},
+		PrivacySummary: signals.PrivacySummary{PublicSafe: true},
+	}
+	data, err := json.Marshal(analysis)
+	if err != nil {
+		t.Fatalf("marshal analysis fixture: %v", err)
+	}
+	path := filepath.Join(t.TempDir(), "analysis.json")
+	if err := os.WriteFile(path, data, 0o600); err != nil {
+		t.Fatalf("write analysis fixture: %v", err)
+	}
+	return path
 }
 
 func TestPacketRequiresPR(t *testing.T) {

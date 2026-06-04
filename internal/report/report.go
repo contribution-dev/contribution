@@ -5,6 +5,7 @@ import (
 	"bytes"
 	"encoding/json"
 	"fmt"
+	"io"
 	"os"
 	"path/filepath"
 	"strings"
@@ -315,6 +316,48 @@ func ShareCard(analysis signals.AnalysisReport) signals.ShareCard {
 		Confidence: analysis.Profile.Confidence,
 		PublicSafe: true,
 	}
+}
+
+// WriteShareHandoff prints the public-safe share card and web handoff.
+func WriteShareHandoff(out io.Writer, analysis signals.AnalysisReport, outputDir string) error {
+	card := ShareCard(analysis)
+	if _, err := fmt.Fprintln(out); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(out, "Shareable card (public-safe)"); err != nil {
+		return err
+	}
+	if card.Title != "" {
+		if _, err := fmt.Fprintln(out, card.Title); err != nil {
+			return err
+		}
+	}
+	if card.Subtitle != "" {
+		if _, err := fmt.Fprintln(out, card.Subtitle); err != nil {
+			return err
+		}
+	}
+	if card.Confidence != "" {
+		if _, err := fmt.Fprintf(out, "Confidence: %s\n", card.Confidence); err != nil {
+			return err
+		}
+	}
+	for _, highlight := range card.Highlights {
+		if _, err := fmt.Fprintf(out, "- %s\n", highlight); err != nil {
+			return err
+		}
+	}
+	if _, err := fmt.Fprintln(out); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintln(out, "Create image: https://contribution.dev/share"); err != nil {
+		return err
+	}
+	if _, err := fmt.Fprintf(out, "Upload: %s\n", filepath.Join(outputDir, "profile.export.json")); err != nil {
+		return err
+	}
+	_, err := fmt.Fprintf(out, "        %s\n", filepath.Join(outputDir, "share-card.json"))
+	return err
 }
 
 // CollectorBundle builds the public-safe web-importable local probe artifact.

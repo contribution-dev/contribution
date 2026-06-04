@@ -379,8 +379,10 @@ func writeAnalyzeReceipt(out io.Writer, analysis signals.AnalysisReport, outputD
 			return err
 		}
 	}
-	_, err := fmt.Fprintf(out, "Data: %s\n", filepath.Join(outputDir, "analysis.json"))
-	return err
+	if _, err := fmt.Fprintf(out, "Data: %s\n", filepath.Join(outputDir, "analysis.json")); err != nil {
+		return err
+	}
+	return report.WriteShareHandoff(out, analysis, outputDir)
 }
 
 func terminalFinding(finding signals.Finding) string {

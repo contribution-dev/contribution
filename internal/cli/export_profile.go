@@ -31,7 +31,10 @@ func newExportProfileCommand(out io.Writer) *cobra.Command {
 			if err := report.WriteProfileArtifacts(output, analysis); err != nil {
 				return err
 			}
-			return writef(out, "Profile export artifacts written to %s\n", output)
+			if err := writef(out, "Profile export artifacts written to %s\n", output); err != nil {
+				return err
+			}
+			return report.WriteShareHandoff(out, analysis, output)
 		},
 	}
 	cmd.Flags().StringVar(&input, "input", "", "Path to analysis.json.")

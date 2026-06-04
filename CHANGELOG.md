@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Add a public-safe share-card handoff to `analyze`, `probe`, `report`, and
+  `export-profile` terminal output, pointing developers at
+  `https://contribution.dev/share` with the generated profile/share artifact
+  paths.
 - Keep one-off fix-like commits from being promoted above stronger Top Read
   findings such as large work units.
 - Add a `PR Inspection Priorities` digest before the full ledger, align

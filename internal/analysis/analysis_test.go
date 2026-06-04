@@ -114,6 +114,10 @@ func TestRunWritesJsonArtifactsAndLocalOnlyFallback(t *testing.T) {
 		"Next PR plan:",
 		"Unavailable:",
 		"Optional tool signals unavailable:",
+		"Shareable card (public-safe)",
+		"Create image: https://contribution.dev/share",
+		"Upload: " + filepath.Join(outputDir, "profile.export.json"),
+		"        " + filepath.Join(outputDir, "share-card.json"),
 		"Data: " + filepath.Join(outputDir, "analysis.json"),
 	} {
 		if !strings.Contains(got, want) {

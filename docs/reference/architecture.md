@@ -60,6 +60,12 @@ regenerating public-safe JSON and markdown from an existing `analysis.json`.
 Both reuse the same redaction engine as `analyze --public-safe` and
 `report --public-safe`.
 
+CLI terminal receipts may render the compact public-safe `share-card.json`
+content and point users at `https://contribution.dev/share` with the generated
+profile/share artifact paths. That receipt is only a handoff to the website
+composer; it is not upload, publishing, image rendering, hosted profile state,
+or social metadata management.
+
 V2 workflow artifacts stay CLI-owned. `preflight.json` carries current-diff
 readiness, changed-line coverage, recent personal pattern evidence, and rubric
 evidence; `friend-review-packet.json` and `friend-feedback.export.json` bridge

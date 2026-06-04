@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"os"
 	"path/filepath"
+	"strings"
 
 	coveragepkg "github.com/contribution-dev/contribution/internal/coverage"
 	"gopkg.in/yaml.v3"
@@ -26,6 +27,7 @@ type Config struct {
 	Coverage  CoverageConfig  `yaml:"coverage" json:"coverage"`
 	AIUsage   AIUsageConfig   `yaml:"ai_usage" json:"ai_usage"`
 	Reports   ReportsConfig   `yaml:"reports" json:"reports"`
+	Tools     ToolsConfig     `yaml:"tools" json:"tools"`
 }
 
 // ProjectConfig contains project identity settings.
@@ -65,6 +67,11 @@ type AIUsageConfig struct {
 // ReportsConfig controls local report output.
 type ReportsConfig struct {
 	OutputDir string `yaml:"output_dir" json:"output_dir"`
+}
+
+// ToolsConfig controls optional analyzer tool discovery.
+type ToolsConfig struct {
+	TrustRepoLocalTools bool `yaml:"trust_repo_local_tools" json:"trust_repo_local_tools"`
 }
 
 // Load reads a config file from repoRoot, returning defaults when it is absent.
@@ -126,6 +133,9 @@ func Default() Config {
 		},
 		Reports: ReportsConfig{
 			OutputDir: ".contribution/reports",
+		},
+		Tools: ToolsConfig{
+			TrustRepoLocalTools: false,
 		},
 	}
 	return cfg
@@ -224,6 +234,70 @@ func applyDefaults(cfg *Config) {
 	if cfg.Reports.OutputDir == "" {
 		cfg.Reports.OutputDir = defaults.Reports.OutputDir
 	}
+}
+
+// ResolveContainedOutputDir resolves a configured report output path under base.
+func ResolveContainedOutputDir(base string, outputDir string) (string, error) {
+	base = strings.TrimSpace(base)
+	if base == "" {
+		return "", errors.New("report output base is empty")
+	}
+	outputDir = strings.TrimSpace(outputDir)
+	if outputDir == "" {
+		outputDir = Default().Reports.OutputDir
+	}
+	if filepath.IsAbs(outputDir) {
+		return "", fmt.Errorf("reports.output_dir must be relative to the repository, got %q", outputDir)
+	}
+	baseAbs, err := filepath.Abs(base)
+	if err != nil {
+		return "", err
+	}
+	candidate, err := filepath.Abs(filepath.Join(baseAbs, outputDir))
+	if err != nil {
+		return "", err
+	}
+	rel, err := filepath.Rel(baseAbs, candidate)
+	if err != nil {
+		return "", err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return "", fmt.Errorf("reports.output_dir must stay within the repository, got %q", outputDir)
+	}
+	if err := ensureExistingParentContained(baseAbs, candidate, outputDir); err != nil {
+		return "", err
+	}
+	return candidate, nil
+}
+
+func ensureExistingParentContained(baseAbs string, candidate string, outputDir string) error {
+	baseReal, err := filepath.EvalSymlinks(baseAbs)
+	if err != nil {
+		return err
+	}
+	existing := candidate
+	for {
+		if _, err := os.Lstat(existing); err == nil {
+			break
+		}
+		parent := filepath.Dir(existing)
+		if parent == existing {
+			return nil
+		}
+		existing = parent
+	}
+	existingReal, err := filepath.EvalSymlinks(existing)
+	if err != nil {
+		return err
+	}
+	rel, err := filepath.Rel(baseReal, existingReal)
+	if err != nil {
+		return err
+	}
+	if rel == ".." || strings.HasPrefix(rel, ".."+string(os.PathSeparator)) || filepath.IsAbs(rel) {
+		return fmt.Errorf("reports.output_dir must stay within the repository, got %q", outputDir)
+	}
+	return nil
 }
 
 func hasFile(root string, relativePath string) bool {

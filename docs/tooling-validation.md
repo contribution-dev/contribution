@@ -4,10 +4,10 @@ This repo uses Go for product code and Node/pnpm for repository automation.
 
 ## Toolchain baseline
 
-- Product code builds with Go 1.26.3.
+- Product code builds with Go 1.26.4.
 - Repository automation runs on Node.js 24 LTS with pnpm 11.4.0.
   `pnpm tools:check` enforces Node.js `>=24.16.0 <25`, pnpm `>=11.4.0`, and
-  Go `>=1.26.3`.
+  Go `>=1.26.4`.
 - `scripts/with-tools` sources `scripts/codex-env.sh`, which uses `.nvmrc`
   through `fnm` when `fnm` is installed. Prefer `scripts/with-tools pnpm ...`
   in shells that are not already on the repo's Node version.
@@ -17,13 +17,16 @@ This repo uses Go for product code and Node/pnpm for repository automation.
 - For code changes, use the smallest changed-aware command that covers the
   task. Default to `pnpm checks:changed`.
 - Use `pnpm tools:install:optional` when optional analyzer findings should be
-  available locally. It installs pinned Semgrep, Gitleaks, OSV Scanner, and
-  Trivy versions into `.tools/`; use `pnpm tools:optional:check` to verify
-  them without reinstalling. The CLI checks repo-local `.tools/` paths after
-  `PATH`; use `scripts/with-tools ...` or source `scripts/codex-env.sh` when
-  you also want the shell and package scripts on the repo toolchain. The
-  `pnpm tools:check` command reports missing analyzer tools with that
-  bootstrap command.
+  available for this checkout's repository automation. It installs pinned
+  Semgrep, Gitleaks, OSV Scanner, and Trivy versions into `.tools/`; use
+  `pnpm tools:optional:check` to verify them without reinstalling. Product CLI
+  commands use tools found on `PATH` by default and only use repo-local
+  `.tools/` executables when `.contribution.yml` sets
+  `tools.trust_repo_local_tools: true`; remote clones never trust their
+  checked-in repo-local tools. Use `scripts/with-tools ...` or source
+  `scripts/codex-env.sh` when repository scripts should run on the repo
+  toolchain. The `pnpm tools:check` command reports missing analyzer tools with
+  that bootstrap command.
 - For AGENTS or policy-doc changes, run `pnpm agents:check`.
 - Use `pnpm validate:final` for full-gate verification or release-sensitive
   changes.
@@ -49,11 +52,12 @@ This repo uses Go for product code and Node/pnpm for repository automation.
 - Review severity parsing and rank comparisons are centralized in
   `scripts/lib/review-severity.mjs`; control-plane and risk-policy scripts
   should import that helper instead of carrying local rank tables.
-- Commit-scoped Codex reviews run as isolated non-interactive subprocesses with
-  a temporary `CODEX_HOME` containing only the auth link, plus user plugins, app
-  tools, and runtime rules disabled. The review prompt injects the applicable
-  repo instructions, so local agent skills, config, plugins, and MCP auth state
-  must not affect gate evidence generation.
+- Commit-scoped Codex reviews and backlog remediation runs execute as isolated
+  non-interactive subprocesses with a temporary `CODEX_HOME` containing only
+  the auth link, plus user plugins, app tools, browser/computer tools,
+  multi-agent tools, and runtime rules disabled. The review prompt injects the
+  applicable repo instructions, so local agent skills, config, plugins, and MCP
+  auth state must not affect gate evidence generation.
 - If Codex exits non-zero after producing the requested final JSON, the review
   wrapper still parses that response as the source of truth, whether it was
   written to the `-o` file or recovered from stdout. A valid schema response is
@@ -65,6 +69,9 @@ This repo uses Go for product code and Node/pnpm for repository automation.
 - Risk-policy finding limits use a bounded default when `MAX_FINDINGS` or
   `--max-findings` is missing, invalid, or too large, so malformed inputs must
   not suppress all actionable review findings.
+- Risk-policy remediation only normalizes actionable findings from trusted
+  review authors configured in `.github/policy/risk-merge-contract.v1.json`,
+  and PR-mutating `workflow_run` automations skip fork pull requests.
 - Stale active-job recovery requeues only the originally observed worker claim;
   it must not remove an active job that another worker claimed concurrently.
 - On macOS, `pnpm tools:check` verifies durable review workers without changing

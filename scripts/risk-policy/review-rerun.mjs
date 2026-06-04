@@ -21,6 +21,7 @@ import {
   REVIEW_STATUS,
   computeRiskTier,
   hasShaDedupComment,
+  isSameRepositoryPullRequest,
   isStaleWorkflowHead,
   isReviewRequired,
   resolveReviewStatus,
@@ -129,6 +130,15 @@ export async function executeReviewRerun(args) {
     repo: args.repo,
     pullNumber: args.pullNumber,
   });
+  if (!isSameRepositoryPullRequest(pr)) {
+    const report = {
+      status: "skipped",
+      reason: "fork-pr",
+      pullNumber: args.pullNumber,
+    };
+    await writeReport(report);
+    return report;
+  }
   if (pr.state !== "open" || pr.draft) {
     const report = {
       status: "skipped",

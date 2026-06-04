@@ -95,7 +95,10 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 	if err != nil {
 		return "", err
 	}
-	tooling := tools.DiscoverForRepo(ctx, !opts.NoExternalTools, start, repo.Path)
+	tooling := tools.DiscoverWithOptions(ctx, !opts.NoExternalTools, start, tools.DiscoverOptions{
+		RepoPath:            repo.Path,
+		TrustRepoLocalTools: cfg.Tools.TrustRepoLocalTools,
+	})
 	limitations := append([]string{}, cfgWarnings...)
 	limitations = append(limitations, coverageInputLimitations...)
 	limitations = append(limitations, tooling.Limitations...)
@@ -208,7 +211,7 @@ func outputRoot(flag string, repo gitrepo.Repo, cfg config.Config) (string, erro
 	if flag != "" {
 		return filepath.Abs(flag)
 	}
-	return filepath.Abs(filepath.Join(repo.Path, cfg.Reports.OutputDir))
+	return config.ResolveContainedOutputDir(repo.Path, cfg.Reports.OutputDir)
 }
 
 func timestamp(t time.Time) string {

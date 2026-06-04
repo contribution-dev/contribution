@@ -85,3 +85,9 @@ export function isStaleWorkflowHead({ eventHeadSha, currentHeadSha }) {
   if (!eventHeadSha || !currentHeadSha) return false;
   return !isSameCommitSha(eventHeadSha, currentHeadSha);
 }
+
+export function isSameRepositoryPullRequest(pr) {
+  const head = String(pr?.head?.repo?.full_name ?? "").toLowerCase();
+  const base = String(pr?.base?.repo?.full_name ?? "").toLowerCase();
+  return Boolean(head) && head === base;
+}

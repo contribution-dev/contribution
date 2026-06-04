@@ -370,10 +370,14 @@ func agentArtifacts(values []signals.AgentArtifactMetadata, replacements ...[]pa
 	out := make([]signals.AgentArtifactMetadata, 0, len(values))
 	for _, value := range values {
 		value.Path = privacy.RedactPath(redactText(value.Path, replacements...), false)
-		value.Source = redactCommitLikeText(redactText(value.Source, replacements...))
+		value.Source = ""
 		value.Reason = redactCommitLikeText(redactText(value.Reason, replacements...))
-		value.Branch = redactCommitLikeText(redactText(value.Branch, replacements...))
+		value.SessionFingerprint = ""
+		value.RepoMatched = false
+		value.Branch = ""
 		value.Commit = ""
+		value.TokenCount = 0
+		value.CostUSD = 0
 		out = append(out, value)
 	}
 	return out

@@ -4,6 +4,15 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Harden security defaults: repo-local optional analyzer binaries now require
+  explicit local trust and are never trusted for remote clones, GitHub metadata
+  import requires an explicit `--github-token` source, config-derived report
+  output directories must stay repo-contained, public-safe exports remove
+  agent telemetry, and review automation now requires trusted finding authors
+  plus same-repository PRs before mutating pull requests.
+- Bump the repository Go toolchain baseline to 1.26.4 so `govulncheck` no
+  longer reports the fixed Go standard-library vulnerabilities present in
+  1.26.3.
 - Add a public-safe share-card handoff to `analyze`, `probe`, `report`, and
   `export-profile` terminal output, pointing developers at
   `https://contribution.dev/share` with the generated profile/share artifact

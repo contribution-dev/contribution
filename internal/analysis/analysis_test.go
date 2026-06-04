@@ -173,6 +173,24 @@ func TestAnalyzeReceiptOmitsMissingStrengthPlaceholder(t *testing.T) {
 	}
 }
 
+func TestRunRejectsConfigOutputDirEscape(t *testing.T) {
+	requireGit(t)
+	withFixedNow(t, time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC))
+	t.Setenv("GITHUB_TOKEN", "")
+	t.Setenv("GH_TOKEN", "")
+
+	repoPath := newAnalysisRepo(t)
+	writeTestFile(t, repoPath, ".contribution.yml", "version: 1\nreports:\n  output_dir: ../outside\n")
+	var stdout bytes.Buffer
+	if _, err := Run(context.Background(), &stdout, Options{
+		Repo:            repoPath,
+		Format:          "json",
+		NoExternalTools: true,
+	}); err == nil || !strings.Contains(err.Error(), "reports.output_dir must stay within the repository") {
+		t.Fatalf("Run() error = %v, want report output containment error", err)
+	}
+}
+
 func TestRunImportsAnalyzeCoverage(t *testing.T) {
 	requireGit(t)
 	withFixedNow(t, time.Date(2026, 3, 4, 5, 6, 7, 0, time.UTC))
@@ -291,6 +309,50 @@ func TestRunMarkdownWritesCanonicalAnalysisWhenGitHubFetchFails(t *testing.T) {
 	}
 	if !strings.Contains(stdout.String(), "Data: "+filepath.Join(outputDir, "analysis.json")) {
 		t.Fatalf("stdout missing canonical analysis path:\n%s", stdout.String())
+	}
+}
+
+func TestRunDoesNotUseAmbientGitHubTokenWithoutExplicitFlag(t *testing.T) {
+	requireGit(t)
+	withFixedNow(t, time.Date(2026, 2, 3, 4, 5, 8, 0, time.UTC))
+	t.Setenv("GITHUB_TOKEN", "ambient-token")
+	t.Setenv("GH_TOKEN", "")
+	called := false
+	oldFetch := fetchMergedPRs
+	fetchMergedPRs = func(_ context.Context, _ string, _ string, _ string, _ int) (github.Metadata, error) {
+		called = true
+		return github.Metadata{}, nil
+	}
+	t.Cleanup(func() {
+		fetchMergedPRs = oldFetch
+	})
+
+	repoPath := newAnalysisRepo(t)
+	runGit(t, repoPath, "remote", "add", "origin", "https://github.com/owner/repo.git")
+	outputRoot := t.TempDir()
+	var stdout bytes.Buffer
+	outputDir, err := Run(context.Background(), &stdout, Options{
+		Repo:            repoPath,
+		Output:          outputRoot,
+		Format:          "json",
+		NoExternalTools: true,
+	})
+	if err != nil {
+		t.Fatalf("Run() error = %v", err)
+	}
+	if called {
+		t.Fatal("GitHub fetch was called without explicit --github-token")
+	}
+	analysis, err := report.ReadAnalysis(filepath.Join(outputDir, "analysis.json"))
+	if err != nil {
+		t.Fatalf("ReadAnalysis() error = %v", err)
+	}
+	if analysis.Config.GitHubMetadataConfigured {
+		t.Fatalf("GitHubMetadataConfigured = true, want false for ambient env token")
+	}
+	assertContains(t, analysis.Limitations, "GitHub metadata was not requested; continuing local-only.")
+	if !strings.Contains(stdout.String(), "GitHub metadata: unavailable, continuing local-only") {
+		t.Fatalf("stdout missing local-only metadata message:\n%s", stdout.String())
 	}
 }
 

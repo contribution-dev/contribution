@@ -41,6 +41,10 @@ type analyzerRun struct {
 func RunAnalyzers(parent context.Context, repoPath string, repoID string, tooling signals.ToolingReport, createdAt time.Time) ([]signals.AnalyzerFinding, []signals.Signal, []string) {
 	available := map[string]bool{}
 	toolPaths := map[string]string{}
+	envRepoPath := ""
+	if tooling.TrustedRepoLocalTools {
+		envRepoPath = repoPath
+	}
 	for _, tool := range tooling.Tools {
 		available[tool.Name] = tool.Available
 		toolPaths[tool.Name] = tool.Path
@@ -72,7 +76,7 @@ func RunAnalyzers(parent context.Context, repoPath string, repoID string, toolin
 			run.cleanup()
 			continue
 		}
-		out, err := runAnalyzer(parent, run.dir, repoPath, def.name, toolPaths[def.name], run.args)
+		out, err := runAnalyzer(parent, run.dir, envRepoPath, def.name, toolPaths[def.name], run.args)
 		run.cleanup()
 		parsed, parseErr := def.parse(out)
 		if parseErr != nil {

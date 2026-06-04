@@ -87,7 +87,11 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 	}
 	outputDir := filepath.Join(outputRoot, timestamp(start))
 
-	tooling := tools.DiscoverForRepo(ctx, !opts.NoExternalTools, start, repo.Path)
+	trustRepoTools := cfg.Tools.TrustRepoLocalTools && !repo.IsRemoteClone
+	tooling := tools.DiscoverWithOptions(ctx, !opts.NoExternalTools, start, tools.DiscoverOptions{
+		RepoPath:            repo.Path,
+		TrustRepoLocalTools: trustRepoTools,
+	})
 	if err := writeLine(out, "Git history: collecting"); err != nil {
 		return "", err
 	}
@@ -147,6 +151,9 @@ func Run(ctx context.Context, out io.Writer, opts Options) (string, error) {
 	}
 	allSignals = append(allSignals, coverageSignals...)
 	limitations := append([]string{}, cfgWarnings...)
+	if cfg.Tools.TrustRepoLocalTools && repo.IsRemoteClone {
+		limitations = append(limitations, "Repo-local optional analyzer tools were not trusted for a remote clone.")
+	}
 	limitations = append(limitations, historyLimitations...)
 	limitations = append(limitations, tooling.Limitations...)
 	limitations = append(limitations, analyzerLimitations...)
@@ -612,9 +619,9 @@ func outputRoot(flag string, repo gitrepo.Repo, cfg config.Config) (string, erro
 		if err != nil {
 			return "", err
 		}
-		return filepath.Abs(filepath.Join(cwd, cfg.Reports.OutputDir))
+		return config.ResolveContainedOutputDir(cwd, cfg.Reports.OutputDir)
 	}
-	return filepath.Abs(filepath.Join(repo.Path, cfg.Reports.OutputDir))
+	return config.ResolveContainedOutputDir(repo.Path, cfg.Reports.OutputDir)
 }
 
 func timestamp(t time.Time) string {

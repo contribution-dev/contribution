@@ -1,12 +1,15 @@
 #!/usr/bin/env node
 
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { readFileSync } from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   buildControlPlaneDocSyncErrorMessage,
   hasControlPlaneChanges,
   isControlPlaneDocUpdated,
 } from "./lib/control-plane-doc-sync.mjs";
+import { gitChangedFilesArgs } from "./lib/git-diff-args.mjs";
 
 function parseArgs(argv) {
   const args = {
@@ -48,13 +51,9 @@ Options:
 }
 
 function readFilesFromGit(args) {
-  let command = "git diff --name-only --diff-filter=ACMR";
-  if (args.staged) {
-    command += " --cached";
-  } else if (args.diffRange) {
-    command += ` ${args.diffRange}`;
-  }
-  const output = execSync(command, { encoding: "utf8" });
+  const output = execFileSync("git", gitChangedFilesArgs(args), {
+    encoding: "utf8",
+  });
   return output
     .split("\n")
     .map((line) => line.trim())
@@ -91,9 +90,13 @@ function main() {
   }
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(`[check-control-plane-doc-sync] ${error.message}`);
-  process.exit(1);
+if (
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1] ?? "")).href
+) {
+  try {
+    main();
+  } catch (error) {
+    console.error(`[check-control-plane-doc-sync] ${error.message}`);
+    process.exit(1);
+  }
 }

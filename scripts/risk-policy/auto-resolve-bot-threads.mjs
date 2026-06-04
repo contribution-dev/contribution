@@ -13,6 +13,7 @@ import {
 } from "./github-client.mjs";
 import {
   REVIEW_STATUS,
+  isSameRepositoryPullRequest,
   isStaleWorkflowHead,
   resolveReviewStatus,
 } from "./review-automation-lib.mjs";
@@ -167,6 +168,15 @@ export async function executeAutoResolve(args) {
     repo: args.repo,
     pullNumber: args.pullNumber,
   });
+  if (!isSameRepositoryPullRequest(pr)) {
+    const report = {
+      status: "skipped",
+      reason: "fork-pr",
+      pullNumber: args.pullNumber,
+    };
+    await writeReport(report);
+    return report;
+  }
   if (pr.state !== "open" || pr.draft) {
     const report = {
       status: "skipped",

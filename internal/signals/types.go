@@ -86,9 +86,10 @@ type ToolAvailability struct {
 
 // ToolingReport summarizes required and optional runtime tooling.
 type ToolingReport struct {
-	GeneratedAt time.Time          `json:"generated_at"`
-	Tools       []ToolAvailability `json:"tools"`
-	Limitations []string           `json:"limitations,omitempty"`
+	GeneratedAt           time.Time          `json:"generated_at"`
+	Tools                 []ToolAvailability `json:"tools"`
+	Limitations           []string           `json:"limitations,omitempty"`
+	TrustedRepoLocalTools bool               `json:"-"`
 }
 
 // AnalyzerFinding is a normalized optional-tool finding without raw code.

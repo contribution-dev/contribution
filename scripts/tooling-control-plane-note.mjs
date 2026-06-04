@@ -1,11 +1,14 @@
 #!/usr/bin/env node
 
-import { execSync } from "node:child_process";
+import { execFileSync } from "node:child_process";
 import { existsSync, readFileSync, writeFileSync } from "node:fs";
+import path from "node:path";
+import { pathToFileURL } from "node:url";
 import {
   CONTROL_PLANE_HISTORY_DOC_PATH,
   listControlPlaneFiles,
 } from "./lib/control-plane-doc-sync.mjs";
+import { gitChangedFilesArgs } from "./lib/git-diff-args.mjs";
 
 const CHANGELOG_HEADER = "## Control-plane changelog";
 
@@ -43,13 +46,9 @@ Options:
 }
 
 function readChangedFiles(args) {
-  let command = "git diff --name-only --diff-filter=ACMR";
-  if (args.staged) {
-    command += " --cached";
-  } else if (args.diffRange) {
-    command += ` ${args.diffRange}`;
-  }
-  const output = execSync(command, { encoding: "utf8" });
+  const output = execFileSync("git", gitChangedFilesArgs(args), {
+    encoding: "utf8",
+  });
   return output
     .split("\n")
     .map((line) => line.trim())
@@ -117,9 +116,13 @@ function main() {
   );
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(`[tooling-control-plane-note] ${error.message}`);
-  process.exit(1);
+if (
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1] ?? "")).href
+) {
+  try {
+    main();
+  } catch (error) {
+    console.error(`[tooling-control-plane-note] ${error.message}`);
+    process.exit(1);
+  }
 }

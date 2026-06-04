@@ -33,7 +33,16 @@ func newDoctorCommand(out io.Writer) *cobra.Command {
 				}()
 				repoPath = repo.Path
 			}
-			tooling := tools.DiscoverForRepo(ctx, true, now, repoPath)
+			cfg := config.Default()
+			var cfgWarnings []string
+			var cfgErr error
+			if repoErr == nil {
+				cfg, cfgWarnings, cfgErr = config.Load(repo.Path)
+			}
+			tooling := tools.DiscoverWithOptions(ctx, true, now, tools.DiscoverOptions{
+				RepoPath:            repoPath,
+				TrustRepoLocalTools: cfg.Tools.TrustRepoLocalTools,
+			})
 			var buf bytes.Buffer
 			fmt.Fprintln(&buf, "Contribution.dev doctor")
 			fmt.Fprintln(&buf)
@@ -54,8 +63,8 @@ func newDoctorCommand(out io.Writer) *cobra.Command {
 				fmt.Fprintf(&buf, "- %s: %s (%s) %s\n", tool.Name, status, required, version)
 			}
 			fmt.Fprintln(&buf)
-			if token, ok := github.ResolveToken(""); ok && token != "" {
-				fmt.Fprintln(&buf, "GitHub token: available from environment")
+			if github.EnvTokenAvailable() {
+				fmt.Fprintln(&buf, "GitHub token: available from environment; pass --github-token env:GITHUB_TOKEN to import PR metadata")
 			} else if github.GHTokenAvailable() {
 				fmt.Fprintln(&buf, "GitHub token: available from gh auth; pass --github-token gh to import PR metadata")
 			} else {
@@ -67,7 +76,6 @@ func newDoctorCommand(out io.Writer) *cobra.Command {
 				fmt.Fprintf(&buf, "Repo state: unavailable (%v)\n", repoErr)
 			} else {
 				fmt.Fprintf(&buf, "Repo state: ok (%s on %s)\n", repo.Name, repo.DefaultBranch)
-				cfg, warnings, cfgErr := config.Load(repo.Path)
 				if cfgErr != nil {
 					fmt.Fprintf(&buf, "Config: invalid (%v)\n", cfgErr)
 				} else {
@@ -86,7 +94,7 @@ func newDoctorCommand(out io.Writer) *cobra.Command {
 							coverageStepAdded = true
 						}
 					}
-					for _, warning := range warnings {
+					for _, warning := range cfgWarnings {
 						fmt.Fprintf(&buf, "- warning: %s\n", warning)
 					}
 				}
@@ -103,8 +111,10 @@ func newDoctorCommand(out io.Writer) *cobra.Command {
 			}
 			if github.GHTokenAvailable() {
 				nextSteps = append(nextSteps, "Run `contribution analyze --repo . --github-token gh --format all` to include GitHub PR metadata.")
+			} else if github.EnvTokenAvailable() {
+				nextSteps = append(nextSteps, "Run `contribution analyze --repo . --github-token env:GITHUB_TOKEN --format all` to include GitHub PR metadata.")
 			} else {
-				nextSteps = append(nextSteps, "Set `GITHUB_TOKEN` or pass `--github-token gh` after `gh auth login` to include PR metadata.")
+				nextSteps = append(nextSteps, "Pass `--github-token env:GITHUB_TOKEN` or `--github-token gh` after `gh auth login` to include PR metadata.")
 			}
 			if !coverageStepAdded {
 				nextSteps = append(nextSteps, repoguide.CoverageDoctorStep(repoPath))

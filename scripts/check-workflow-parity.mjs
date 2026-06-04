@@ -39,6 +39,31 @@ for (const script of [
   }
 }
 
+for (const workflow of [
+  ".github/workflows/review-agent-rerun.yml",
+  ".github/workflows/review-auto-resolve-threads.yml",
+  ".github/workflows/review-remediation.yml",
+]) {
+  if (!existsSync(workflow)) {
+    fail(`Missing review workflow: ${workflow}`);
+    continue;
+  }
+  const content = readFileSync(workflow, "utf8");
+  if (
+    !/workflow_run:/u.test(content) ||
+    !/pull-requests:\s*write/u.test(content)
+  ) {
+    continue;
+  }
+  if (
+    !/github\.event\.workflow_run\.head_repository\.full_name\s*==\s*github\.event\.repository\.full_name/u.test(
+      content,
+    )
+  ) {
+    fail(`${workflow} is missing a same-repository workflow_run guard.`);
+  }
+}
+
 if (failed) {
   process.exit(1);
 }

@@ -24,7 +24,7 @@ go version
 Expected output looks like:
 
 ```text
-go version go1.26.3 darwin/arm64
+go version go1.26.4 darwin/arm64
 ```
 
 If you see `command not found: go`, install Go first. On macOS with Homebrew:
@@ -83,7 +83,7 @@ include linker-provided version metadata.
 
 Requirements for normal CLI use:
 
-- Go 1.26.3 or newer to install from source
+- Go 1.26.4 or newer to install from source
 - Git available on `PATH`
 - A local Git repo to analyze
 - Optional analyzer tools for richer findings; missing optional tools are
@@ -365,7 +365,7 @@ Repository development uses Go for product code and Node/pnpm for automation.
 
 Requirements for working on this repo:
 
-- Go 1.26.3
+- Go 1.26.4
 - Node.js 24.16.0 and pnpm 11.4.0
 - `golangci-lint` and `govulncheck` for the full local gate
 

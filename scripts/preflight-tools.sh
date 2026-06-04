@@ -181,7 +181,7 @@ echo
 
 check_required_version "node" "Install Node.js 24.16.0." "24.16.0" "25" node --version
 check_required_version "pnpm" "Install pnpm >= 11.4.0." "11.4.0" "" pnpm --version
-check_required_version "go" "Install Go 1.26.3." "1.26.3" "" go version
+check_required_version "go" "Install Go 1.26.4." "1.26.4" "" go version
 check_required_tool "git" "Install Git."
 check_optional_command "golangci-lint" "Install golangci-lint for local lint parity." golangci-lint --version
 check_optional_command "govulncheck" "Install govulncheck with 'go install golang.org/x/vuln/cmd/govulncheck@latest'." govulncheck -version

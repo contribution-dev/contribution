@@ -16,15 +16,26 @@ import (
 
 // Discover checks runtime tools and records graceful degradation.
 func Discover(ctx context.Context, includeOptional bool, createdAt time.Time) signals.ToolingReport {
-	return discover(ctx, includeOptional, createdAt, "")
+	return discover(ctx, includeOptional, createdAt, DiscoverOptions{})
 }
 
-// DiscoverForRepo checks runtime tools, including repo-local optional tools.
+// DiscoverForRepo checks runtime tools without trusting repo-local executables.
 func DiscoverForRepo(ctx context.Context, includeOptional bool, createdAt time.Time, repoPath string) signals.ToolingReport {
-	return discover(ctx, includeOptional, createdAt, repoPath)
+	return DiscoverWithOptions(ctx, includeOptional, createdAt, DiscoverOptions{RepoPath: repoPath})
 }
 
-func discover(ctx context.Context, includeOptional bool, createdAt time.Time, repoPath string) signals.ToolingReport {
+// DiscoverOptions controls optional repo-local tool discovery.
+type DiscoverOptions struct {
+	RepoPath            string
+	TrustRepoLocalTools bool
+}
+
+// DiscoverWithOptions checks runtime tools with explicit trust controls.
+func DiscoverWithOptions(ctx context.Context, includeOptional bool, createdAt time.Time, opts DiscoverOptions) signals.ToolingReport {
+	return discover(ctx, includeOptional, createdAt, opts)
+}
+
+func discover(ctx context.Context, includeOptional bool, createdAt time.Time, opts DiscoverOptions) signals.ToolingReport {
 	defs := []struct {
 		name     string
 		required bool
@@ -38,7 +49,10 @@ func discover(ctx context.Context, includeOptional bool, createdAt time.Time, re
 		{name: "osv-scanner", args: []string{"--version"}, fix: optionalToolFix("osv-scanner")},
 		{name: "trivy", args: []string{"--version"}, fix: optionalToolFix("trivy")},
 	}
-	report := signals.ToolingReport{GeneratedAt: createdAt.UTC()}
+	report := signals.ToolingReport{
+		GeneratedAt:           createdAt.UTC(),
+		TrustedRepoLocalTools: opts.TrustRepoLocalTools,
+	}
 	for _, def := range defs {
 		if !def.required && !includeOptional {
 			report.Tools = append(report.Tools, signals.ToolAvailability{
@@ -50,7 +64,13 @@ func discover(ctx context.Context, includeOptional bool, createdAt time.Time, re
 			report.Limitations = append(report.Limitations, fmt.Sprintf("%s was skipped; related signals are unavailable.", def.name))
 			continue
 		}
-		availability := checkTool(ctx, def.name, def.args, def.required, repoPath, repoToolPaths(repoPath)...)
+		var extraDirs []string
+		envRepoPath := ""
+		if opts.TrustRepoLocalTools {
+			extraDirs = repoToolPaths(opts.RepoPath)
+			envRepoPath = opts.RepoPath
+		}
+		availability := checkTool(ctx, def.name, def.args, def.required, envRepoPath, extraDirs...)
 		if !availability.Available {
 			availability.Reason = strings.TrimSpace(availability.Reason)
 			if availability.Reason == "" {
@@ -166,7 +186,7 @@ func nonEmptyDirs(dirs []string) []string {
 }
 
 func optionalToolFix(name string) string {
-	return fmt.Sprintf("Install %s and ensure it is on PATH, or place it in repo-local .tools/bin.", name)
+	return fmt.Sprintf("Install %s and ensure it is on PATH, or explicitly trust repo-local optional tools for this repository.", name)
 }
 
 func toolCommandEnv(base []string, repoPath string) []string {

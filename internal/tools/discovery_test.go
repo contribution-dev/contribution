@@ -33,7 +33,31 @@ func TestDiscoverReportsRequiredToolAndSkippedOptionalTools(t *testing.T) {
 	}
 }
 
-func TestDiscoverForRepoFindsRepoLocalOptionalTools(t *testing.T) {
+func TestDiscoverForRepoDoesNotTrustRepoLocalOptionalToolsByDefault(t *testing.T) {
+	bin := t.TempDir()
+	writeFakeTool(t, bin, "git", "git version 2.0.0\n", 0)
+	t.Setenv("PATH", bin)
+
+	repo := t.TempDir()
+	marker := filepath.Join(repo, "executed")
+	repoBin := filepath.Join(repo, ".tools", "bin")
+	if err := os.MkdirAll(repoBin, 0o700); err != nil {
+		t.Fatalf("mkdir repo bin: %v", err)
+	}
+	writeFakeToolScript(t, repoBin, "semgrep", "#!/bin/sh\ntouch "+shellQuote(marker)+"\nprintf '1.164.0\\n'\n")
+
+	got := DiscoverForRepo(context.Background(), true, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), repo)
+
+	semgrep := findTool(t, got.Tools, "semgrep")
+	if semgrep.Available {
+		t.Fatalf("semgrep availability = %+v, want repo-local optional tool ignored by default", semgrep)
+	}
+	if _, err := os.Stat(marker); !os.IsNotExist(err) {
+		t.Fatalf("repo-local optional tool executed; stat marker err = %v", err)
+	}
+}
+
+func TestDiscoverWithOptionsFindsTrustedRepoLocalOptionalTools(t *testing.T) {
 	bin := t.TempDir()
 	writeFakeTool(t, bin, "git", "git version 2.0.0\n", 0)
 	t.Setenv("PATH", bin)
@@ -45,11 +69,14 @@ func TestDiscoverForRepoFindsRepoLocalOptionalTools(t *testing.T) {
 	}
 	writeFakeTool(t, repoBin, "semgrep", "1.164.0\n", 0)
 
-	got := DiscoverForRepo(context.Background(), true, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), repo)
+	got := DiscoverWithOptions(context.Background(), true, time.Date(2026, 1, 1, 0, 0, 0, 0, time.UTC), DiscoverOptions{
+		RepoPath:            repo,
+		TrustRepoLocalTools: true,
+	})
 
 	semgrep := findTool(t, got.Tools, "semgrep")
 	if !semgrep.Available || semgrep.Version != "1.164.0" {
-		t.Fatalf("semgrep availability = %+v, want repo-local optional tool", semgrep)
+		t.Fatalf("semgrep availability = %+v, want trusted repo-local optional tool", semgrep)
 	}
 }
 
@@ -89,8 +116,16 @@ func writeFakeTool(t *testing.T, bin string, name string, stdout string, exitCod
 	if runtime.GOOS == "windows" {
 		t.Skip("fake shell tools are unix-only")
 	}
-	path := filepath.Join(bin, name)
 	body := "#!/bin/sh\nprintf '%s' " + shellQuote(stdout) + "\nexit " + fmt.Sprint(exitCode) + "\n"
+	writeFakeToolScript(t, bin, name, body)
+}
+
+func writeFakeToolScript(t *testing.T, bin string, name string, body string) {
+	t.Helper()
+	if runtime.GOOS == "windows" {
+		t.Skip("fake shell tools are unix-only")
+	}
+	path := filepath.Join(bin, name)
 	if err := os.WriteFile(path, []byte(body), 0o600); err != nil {
 		t.Fatalf("write fake %s: %v", name, err)
 	}

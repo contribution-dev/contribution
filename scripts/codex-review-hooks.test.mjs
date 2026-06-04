@@ -119,6 +119,35 @@ test("commit review subprocess is isolated from user plugins and rules", () => {
   assert.match(commitReview, /"--ephemeral"/);
 });
 
+test("backlog remediation subprocess is isolated from user plugins and rules", () => {
+  const remediator = readFileSync(
+    "scripts/codex-review-remediate-backlog",
+    "utf8",
+  );
+  assert.match(
+    remediator,
+    /mkdtempSync\(\s*path\.join\(tmpdir\(\), "contribution-codex-home-"\)/,
+  );
+  assert.match(
+    remediator,
+    /symlinkSync\(sourceAuthPath, path\.join\(isolatedHome, "auth\.json"\)\)/,
+  );
+  assert.match(remediator, /CODEX_HOME: isolatedCodexHome\.path/);
+  for (const feature of [
+    "plugins",
+    "apps",
+    "browser_use",
+    "browser_use_external",
+    "computer_use",
+    "multi_agent",
+  ]) {
+    assert.match(remediator, new RegExp(`"--disable",\\s+"${feature}"`));
+  }
+  assert.match(remediator, /"--ignore-user-config"/);
+  assert.match(remediator, /"--ignore-rules"/);
+  assert.match(remediator, /"--ephemeral"/);
+});
+
 test("commit review accepts final output despite non-zero codex exit", () => {
   const dir = mkdtempSync(path.join(tmpdir(), "contribution-codex-output-"));
   try {

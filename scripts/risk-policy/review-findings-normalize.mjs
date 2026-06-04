@@ -13,6 +13,10 @@ const FINDING_HEADER_REGEX =
 const EVIDENCE_FILE_REGEX = /`(?<file>[^`:\n]+):(?<lines>[^`\n]+)`/;
 const DEFAULT_MAX_FINDINGS = 5;
 const MAX_FINDINGS_LIMIT = 50;
+const DEFAULT_TRUSTED_FINDING_AUTHORS = [
+  "coderabbitai[bot]",
+  "greptile-app[bot]",
+];
 
 function parseCommitLine(body) {
   const match = body.match(/- Commit: `(?<sha>[0-9a-f]{7,40})`/i);
@@ -45,6 +49,33 @@ export function normalizeMaxFindings(value) {
   return Math.min(Math.floor(parsed), MAX_FINDINGS_LIMIT);
 }
 
+export function normalizeTrustedFindingAuthors(value) {
+  if (!Array.isArray(value)) {
+    return DEFAULT_TRUSTED_FINDING_AUTHORS;
+  }
+  return value
+    .map((author) =>
+      String(author ?? "")
+        .trim()
+        .toLowerCase(),
+    )
+    .filter(Boolean);
+}
+
+export function isTrustedFindingComment(comment, trustedAuthors) {
+  const allowedAuthors = new Set(
+    normalizeTrustedFindingAuthors(trustedAuthors),
+  );
+  if (allowedAuthors.size === 0) return false;
+  const login = String(comment?.user?.login ?? "")
+    .trim()
+    .toLowerCase();
+  const appSlug = String(comment?.performed_via_github_app?.slug ?? "")
+    .trim()
+    .toLowerCase();
+  return allowedAuthors.has(login) || allowedAuthors.has(appSlug);
+}
+
 export function parseFindingsFromCommentBody(body) {
   const findings = [];
   for (const match of body.matchAll(FINDING_HEADER_REGEX)) {
@@ -70,10 +101,12 @@ export function normalizeActionableFindings({
   comments,
   headSha,
   maxFindings,
+  trustedAuthors,
 }) {
   const limit = normalizeMaxFindings(maxFindings);
   const dedup = new Map();
   for (const comment of comments) {
+    if (!isTrustedFindingComment(comment, trustedAuthors)) continue;
     const body = String(comment?.body ?? "");
     const commitSha = parseCommitLine(body);
     if (!isSameCommitSha(commitSha, headSha)) continue;
@@ -115,6 +148,7 @@ function parseArgs(argv) {
     token: process.env.GITHUB_TOKEN ?? "",
     headSha: process.env.PR_HEAD_SHA ?? "",
     maxFindings: normalizeMaxFindings(process.env.MAX_FINDINGS),
+    trustedAuthors: normalizeTrustedFindingAuthors(),
   };
   for (let i = 2; i < argv.length; i += 1) {
     const arg = argv[i];
@@ -163,6 +197,7 @@ export async function executeFindingsNormalize(args) {
     comments,
     headSha: args.headSha,
     maxFindings: args.maxFindings,
+    trustedAuthors: args.trustedAuthors,
   });
   const report = {
     status: findings.length > 0 ? "ok" : "no-findings",

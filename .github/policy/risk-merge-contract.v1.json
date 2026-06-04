@@ -49,6 +49,7 @@
     "enabled": true,
     "requiredTiers": ["high"],
     "blockedPaths": [],
+    "trustedFindingAuthors": ["coderabbitai[bot]", "greptile-app[bot]"],
     "maxFindingsPerRun": 5
   }
 }

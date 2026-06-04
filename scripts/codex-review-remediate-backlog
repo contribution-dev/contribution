@@ -4,6 +4,7 @@ import { execFileSync, spawn, spawnSync } from "node:child_process";
 import {
   closeSync,
   existsSync,
+  mkdtempSync,
   mkdirSync,
   openSync,
   readdirSync,
@@ -12,8 +13,10 @@ import {
   renameSync,
   rmSync,
   statSync,
+  symlinkSync,
   writeFileSync,
 } from "node:fs";
+import { tmpdir } from "node:os";
 import path from "node:path";
 import process from "node:process";
 import { fileURLToPath, pathToFileURL } from "node:url";
@@ -275,6 +278,33 @@ function git(repoRoot, args, options = {}) {
     stdio: ["ignore", "pipe", "pipe"],
     ...options,
   }).trim();
+}
+
+function resolveCodexHome(env) {
+  const explicit = String(env.CODEX_HOME ?? "").trim();
+  if (explicit) return explicit;
+  const home = String(env.HOME ?? process.env.HOME ?? "").trim();
+  return home ? path.join(home, ".codex") : "";
+}
+
+function createIsolatedCodexHome(env) {
+  const sourceHome = resolveCodexHome(env);
+  const sourceAuthPath = sourceHome ? path.join(sourceHome, "auth.json") : "";
+  const isolatedHome = mkdtempSync(
+    path.join(tmpdir(), "contribution-codex-home-"),
+  );
+  try {
+    if (sourceAuthPath && existsSync(sourceAuthPath)) {
+      symlinkSync(sourceAuthPath, path.join(isolatedHome, "auth.json"));
+    }
+  } catch (error) {
+    rmSync(isolatedHome, { force: true, recursive: true });
+    throw error;
+  }
+  return {
+    path: isolatedHome,
+    cleanup: () => rmSync(isolatedHome, { force: true, recursive: true }),
+  };
 }
 
 function currentHeadSha(repoRoot) {
@@ -1168,19 +1198,52 @@ async function runCodexExec({
   rmSync(outputPath, { force: true });
   const logFd = openSync(logPath, "w", 0o600);
 
-  const args = ["-a", "never", "-s", "workspace-write"];
+  const childEnv = {
+    ...process.env,
+    ...extraEnv,
+    OTEL_SDK_DISABLED: process.env.OTEL_SDK_DISABLED ?? "true",
+  };
+  const isolatedCodexHome = createIsolatedCodexHome(childEnv);
+
+  const args = [
+    "-a",
+    "never",
+    "-s",
+    "workspace-write",
+    "--disable",
+    "plugins",
+    "--disable",
+    "apps",
+    "--disable",
+    "browser_use",
+    "--disable",
+    "browser_use_external",
+    "--disable",
+    "computer_use",
+    "--disable",
+    "multi_agent",
+  ];
   if (model) {
     args.push("--model", model);
   }
-  args.push("exec", "--output-schema", outputSchemaPath, "-o", outputPath, "-");
+  args.push(
+    "exec",
+    "--ignore-user-config",
+    "--ignore-rules",
+    "--ephemeral",
+    "--output-schema",
+    outputSchemaPath,
+    "-o",
+    outputPath,
+    "-",
+  );
 
   const startedAt = Date.now();
   const child = spawn("codex", args, {
     cwd: repoRoot,
     env: {
-      ...process.env,
-      ...extraEnv,
-      OTEL_SDK_DISABLED: process.env.OTEL_SDK_DISABLED ?? "true",
+      ...childEnv,
+      CODEX_HOME: isolatedCodexHome.path,
     },
     stdio: ["pipe", logFd, logFd],
   });
@@ -1240,6 +1303,7 @@ async function runCodexExec({
     }
     clearInterval(interval);
     closeSync(logFd);
+    isolatedCodexHome.cleanup();
   });
 
   const logText = readFileSync(logPath, "utf8");

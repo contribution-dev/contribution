@@ -203,6 +203,30 @@ func TestRunWorktreeFailOnRiskWritesArtifactsAndReturnsError(t *testing.T) {
 	}
 }
 
+func TestRunRejectsConfigOutputDirEscape(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repoPath := t.TempDir()
+	runPreflightGit(t, repoPath, "init", "-b", "main")
+	runPreflightGit(t, repoPath, "config", "user.email", "dogfood@example.test")
+	runPreflightGit(t, repoPath, "config", "user.name", "Dogfood User")
+	writePreflightTestFile(t, repoPath, "internal/app.go", "package app\n\nfunc Value() int { return 1 }\n")
+	writePreflightTestFile(t, repoPath, ".contribution.yml", "version: 1\nreports:\n  output_dir: ../outside\n")
+	runPreflightGit(t, repoPath, "add", ".")
+	runPreflightGit(t, repoPath, "commit", "-m", "initial fixture")
+	t.Chdir(repoPath)
+
+	if _, err := Run(context.Background(), io.Discard, Options{
+		Base:            "HEAD",
+		Head:            "HEAD",
+		Format:          "json",
+		NoExternalTools: true,
+	}); err == nil || !strings.Contains(err.Error(), "reports.output_dir must stay within the repository") {
+		t.Fatalf("Run() error = %v, want report output containment error", err)
+	}
+}
+
 func TestAnalyzerFindingsForChangedFilesFiltersUnrelatedFindings(t *testing.T) {
 	got, omitted := AnalyzerFindingsForChangedFiles(
 		[]signals.AnalyzerFinding{{

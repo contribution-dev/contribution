@@ -111,7 +111,7 @@ func TestInitCommandCreatesConfigAndIsIdempotent(t *testing.T) {
 	}
 }
 
-func TestDoctorUsesRepoLocalOptionalTools(t *testing.T) {
+func TestDoctorDoesNotUseRepoLocalOptionalToolsByDefault(t *testing.T) {
 	setupGitPath(t)
 	repo := t.TempDir()
 	runGit(t, repo, "init", "-b", "main")
@@ -129,14 +129,40 @@ func TestDoctorUsesRepoLocalOptionalTools(t *testing.T) {
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)
 	}
-	if !strings.Contains(stdout, "- semgrep: ok (optional) 1.164.0") {
-		t.Fatalf("doctor stdout missing repo-local semgrep:\n%s", stdout)
+	if strings.Contains(stdout, "- semgrep: ok (optional) 1.164.0") {
+		t.Fatalf("doctor stdout used repo-local semgrep without explicit trust:\n%s", stdout)
 	}
 	if !strings.Contains(stdout, "Install gitleaks and ensure it is on PATH") {
 		t.Fatalf("doctor stdout missing generic optional-tool guidance:\n%s", stdout)
 	}
 	if strings.Contains(stdout, "scripts/with-tools") || strings.Contains(stdout, "pnpm tools:install:optional") {
 		t.Fatalf("doctor stdout contains contribution-repo-only optional-tool guidance:\n%s", stdout)
+	}
+}
+
+func TestDoctorUsesTrustedRepoLocalOptionalTools(t *testing.T) {
+	setupGitPath(t)
+	repo := t.TempDir()
+	runGit(t, repo, "init", "-b", "main")
+	repoBin := filepath.Join(repo, ".tools", "bin")
+	if err := os.MkdirAll(repoBin, 0o700); err != nil {
+		t.Fatalf("mkdir repo bin: %v", err)
+	}
+	writeFakeExecutable(t, repoBin, "semgrep", "1.164.0\n")
+	if err := os.WriteFile(filepath.Join(repo, ".contribution.yml"), []byte("version: 1\ntools:\n  trust_repo_local_tools: true\n"), 0o600); err != nil {
+		t.Fatalf("write config: %v", err)
+	}
+	chdir(t, repo)
+
+	stdout, stderr, err := executeForTest([]string{"doctor"}, BuildInfo{})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, "- semgrep: ok (optional) 1.164.0") {
+		t.Fatalf("doctor stdout missing trusted repo-local semgrep:\n%s", stdout)
 	}
 }
 

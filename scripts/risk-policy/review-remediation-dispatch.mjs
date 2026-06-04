@@ -18,6 +18,7 @@ import {
 } from "./github-client.mjs";
 import {
   computeRiskTier,
+  isSameRepositoryPullRequest,
   isStaleWorkflowHead,
 } from "./review-automation-lib.mjs";
 import { executeFindingsNormalize } from "./review-findings-normalize.mjs";
@@ -163,10 +164,7 @@ export async function executeRemediationDispatch(args) {
     repo: args.repo,
     pullNumber: args.pullNumber,
   });
-  const sameRepo =
-    String(pr.head?.repo?.full_name ?? "").toLowerCase() ===
-    String(pr.base?.repo?.full_name ?? "").toLowerCase();
-  if (!sameRepo) {
+  if (!isSameRepositoryPullRequest(pr)) {
     const report = { status: "skipped", reason: "fork-pr" };
     await writeReport(report);
     return report;
@@ -233,6 +231,9 @@ export async function executeRemediationDispatch(args) {
     pullNumber: args.pullNumber,
     token: args.token,
     headSha,
+    trustedAuthors:
+      policy.trustedFindingAuthors ??
+      contract.reviewAutomation?.autoResolve?.allowedBotAuthors,
     maxFindings: Number.isInteger(policy.maxFindingsPerRun)
       ? policy.maxFindingsPerRun
       : 5,

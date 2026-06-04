@@ -91,3 +91,29 @@ func TestLoadWarnsBeforeApplyingDefaults(t *testing.T) {
 		t.Fatalf("warnings = %#v, want invalid since_days and max_prs warnings", warnings)
 	}
 }
+
+func TestResolveContainedOutputDirRejectsEscapes(t *testing.T) {
+	base := t.TempDir()
+	if got, err := ResolveContainedOutputDir(base, ".contribution/reports"); err != nil {
+		t.Fatalf("ResolveContainedOutputDir() error = %v", err)
+	} else if got != filepath.Join(base, ".contribution", "reports") {
+		t.Fatalf("resolved output = %q, want repo-contained path", got)
+	}
+
+	for _, outputDir := range []string{"../outside", "reports/../../outside", filepath.Join(base, "absolute")} {
+		t.Run(outputDir, func(t *testing.T) {
+			if _, err := ResolveContainedOutputDir(base, outputDir); err == nil {
+				t.Fatalf("ResolveContainedOutputDir(%q) error = nil, want containment error", outputDir)
+			}
+		})
+	}
+
+	outside := t.TempDir()
+	link := filepath.Join(base, "link-outside")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink unavailable: %v", err)
+	}
+	if _, err := ResolveContainedOutputDir(base, "link-outside/reports"); err == nil {
+		t.Fatal("ResolveContainedOutputDir() error = nil, want symlink containment error")
+	}
+}

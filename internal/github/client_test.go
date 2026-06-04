@@ -24,7 +24,7 @@ func TestResolveToken(t *testing.T) {
 		{name: "env name", flag: "CUSTOM_TOKEN", wantToken: "custom-env", wantOK: true},
 		{name: "env prefix", flag: "env:CUSTOM_TOKEN", wantToken: "custom-env", wantOK: true},
 		{name: "missing env prefix", flag: "env:MISSING_TOKEN", wantOK: false},
-		{name: "default env", flag: "", wantToken: "gh-env", wantOK: true},
+		{name: "empty flag ignores ambient env", flag: "", wantOK: false},
 	}
 
 	for _, tt := range tests {
@@ -34,6 +34,15 @@ func TestResolveToken(t *testing.T) {
 				t.Fatalf("ResolveToken(%q) = %q/%v, want %q/%v", tt.flag, got, ok, tt.wantToken, tt.wantOK)
 			}
 		})
+	}
+}
+
+func TestEnvTokenAvailableReportsAmbientDiagnosticsOnly(t *testing.T) {
+	t.Setenv("GITHUB_TOKEN", "gh-env")
+	t.Setenv("GH_TOKEN", "")
+
+	if !EnvTokenAvailable() {
+		t.Fatal("EnvTokenAvailable() = false, want true for diagnostics")
 	}
 }
 

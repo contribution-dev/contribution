@@ -47,7 +47,7 @@ var (
 	githubAPIBaseURL = "https://api.github.com"
 )
 
-// ResolveToken treats the flag value as either a literal token or env var name.
+// ResolveToken treats the explicit flag value as either a literal token or env var name.
 func ResolveToken(flagValue string) (string, bool) {
 	flagValue = strings.TrimSpace(flagValue)
 	if flagValue != "" {
@@ -65,12 +65,17 @@ func ResolveToken(flagValue string) (string, bool) {
 		}
 		return flagValue, true
 	}
+	return "", false
+}
+
+// EnvTokenAvailable reports whether a GitHub token is present in common environment variables.
+func EnvTokenAvailable() bool {
 	for _, name := range []string{"GITHUB_TOKEN", "GH_TOKEN"} {
 		if value := os.Getenv(name); value != "" {
-			return value, true
+			return true
 		}
 	}
-	return "", false
+	return false
 }
 
 // GHTokenAvailable reports whether the GitHub CLI can provide a token.

@@ -26,7 +26,7 @@ func outputRootForCurrent(flag string, repo gitrepo.Repo, cfg config.Config) (st
 	if flag != "" {
 		return filepath.Abs(flag)
 	}
-	return filepath.Abs(filepath.Join(repo.Path, cfg.Reports.OutputDir))
+	return config.ResolveContainedOutputDir(repo.Path, cfg.Reports.OutputDir)
 }
 
 func timestamp(t time.Time) string {

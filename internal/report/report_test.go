@@ -570,11 +570,16 @@ func TestPublicSafeAnalysisRedactsPrivateMetadata(t *testing.T) {
 			Anchors:    []signals.WorkUnitAnchor{{Type: "commit", ID: commitSHA, Label: commitSHA[:8], Confidence: signals.ConfidenceLow}},
 		}},
 		AgentArtifacts: []signals.AgentArtifactMetadata{{
-			Path:       privateRoot + "/" + privateRelativePath,
-			Branch:     "feature/" + privateRelativePath,
-			Commit:     commitSHA,
-			Status:     "available",
-			Confidence: signals.ConfidenceMedium,
+			Path:               privateRoot + "/" + privateRelativePath,
+			Source:             "openai",
+			SessionFingerprint: "secret-session-fingerprint",
+			RepoMatched:        true,
+			Branch:             "feature/" + privateRelativePath,
+			Commit:             commitSHA,
+			Status:             "available",
+			TokenCount:         1234,
+			CostUSD:            0.42,
+			Confidence:         signals.ConfidenceMedium,
 		}},
 		Limitations: []string{"limitation " + secret},
 		Privacy: signals.PrivacySummary{
@@ -609,6 +614,13 @@ func TestPublicSafeAnalysisRedactsPrivateMetadata(t *testing.T) {
 	}
 	if got.PRCards[0].Title != "PR #123" || got.PRCards[0].URL != "" || len(got.PRCards[0].Risks) != 0 || got.PRCards[0].MainRisk != "" || len(got.PRCards[0].Evidence) != 0 {
 		t.Fatalf("PR card was not redacted: %+v", got.PRCards[0])
+	}
+	if len(got.AgentArtifacts) != 1 {
+		t.Fatalf("agent artifacts = %+v, want one redacted artifact", got.AgentArtifacts)
+	}
+	artifact := got.AgentArtifacts[0]
+	if artifact.Source != "" || artifact.SessionFingerprint != "" || artifact.RepoMatched || artifact.Branch != "" || artifact.Commit != "" || artifact.TokenCount != 0 || artifact.CostUSD != 0 {
+		t.Fatalf("agent artifact telemetry was not redacted: %+v", artifact)
 	}
 	if containsText(got, "dogfood-secret-value") || containsText(got, privateRoot) || containsText(got, privateRelativePath) || containsText(got, commitSHA) || containsText(got, commitSHA[:8]) || containsText(got, commitTitle) {
 		t.Fatalf("public-safe analysis retained private text: %+v", got)

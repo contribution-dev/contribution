@@ -108,7 +108,50 @@ func TestProfileExportOmitsRiskyArtifactsByDefault(t *testing.T) {
 	}
 }
 
-func TestMarkdownRendersTopReadBeforeReadinessDetails(t *testing.T) {
+func TestShareCardUsesUsefulLowEvidenceHighlights(t *testing.T) {
+	analysis := signals.AnalysisReport{
+		Profile: signals.ProfileSummary{
+			AnalyzedPRs:        0,
+			AnalysisWindowDays: 90,
+			Confidence:         signals.ConfidenceLow,
+		},
+		AgenticReadiness: signals.AgenticReadiness{
+			Grade:      "D",
+			Score:      63,
+			Confidence: signals.ConfidenceMedium,
+		},
+		TopRead: signals.TopRead{
+			Findings: []signals.TopFinding{{
+				ID:         "missing_validation_command",
+				Label:      "Validation command gap",
+				Evidence:   "No local validation command was detected.",
+				Confidence: signals.ConfidenceMedium,
+			}},
+		},
+	}
+
+	card := ShareCard(analysis)
+	for _, forbidden := range []string{"0 artifacts analyzed", "Private local analysis"} {
+		for _, highlight := range card.Highlights {
+			if highlight == forbidden {
+				t.Fatalf("share card retained weak fallback %q: %+v", forbidden, card.Highlights)
+			}
+		}
+	}
+	for _, want := range []string{"Local readiness baseline", "Readiness D (63/100)", "Validation setup identified"} {
+		if !stringSliceContains(card.Highlights, want) {
+			t.Fatalf("share card highlights missing %q: %+v", want, card.Highlights)
+		}
+	}
+	if hasDuplicateStrings(card.Highlights) {
+		t.Fatalf("share card highlights should be unique: %+v", card.Highlights)
+	}
+	if card.Confidence != signals.ConfidenceMedium {
+		t.Fatalf("share card confidence = %q, want readiness confidence", card.Confidence)
+	}
+}
+
+func TestMarkdownRendersTopReadAsFirstReportSection(t *testing.T) {
 	analysis := signals.AnalysisReport{
 		TopRead: signals.TopRead{
 			Headline:   "Post-merge follow-up churn is the first thing to fix.",
@@ -133,12 +176,13 @@ func TestMarkdownRendersTopReadBeforeReadinessDetails(t *testing.T) {
 
 	got := Markdown(analysis)
 	topIndex := strings.Index(got, "## Top Read")
+	summaryIndex := strings.Index(got, "## Summary")
 	readinessIndex := strings.Index(got, "## Agentic Readiness")
 	if topIndex < 0 {
 		t.Fatalf("markdown missing Top Read:\n%s", got)
 	}
-	if readinessIndex < 0 || topIndex > readinessIndex {
-		t.Fatalf("Top Read should render before Agentic Readiness:\n%s", got)
+	if summaryIndex < 0 || readinessIndex < 0 || topIndex > summaryIndex || summaryIndex > readinessIndex {
+		t.Fatalf("Top Read should be the first report section before Summary and Agentic Readiness:\n%s", got)
 	}
 	for _, want := range []string{
 		"Post-merge follow-up churn is the first thing to fix.",
@@ -202,7 +246,7 @@ func TestMarkdownSummaryExplainsLocalScopeAndWebHandoff(t *testing.T) {
 	}
 
 	got := Markdown(analysis)
-	summary := markdownSection(got, "## Summary", "## Top Read")
+	summary := markdownSection(got, "## Summary", "## Agentic Readiness")
 	if strings.Contains(summary, analysis.TopRead.Summary) {
 		t.Fatalf("summary duplicated top-read evidence:\n%s", got)
 	}
@@ -416,6 +460,37 @@ func TestMarkdownRepeatsNextPlanAndWebConnectedStepAtEnd(t *testing.T) {
 	for _, want := range []string{"collector.bundle.json", "contribution.dev", "GitHub", "issue"} {
 		if !strings.Contains(finalStep, want) {
 			t.Fatalf("web-connected final step missing %q:\n%s", want, finalStep)
+		}
+	}
+}
+
+func TestMarkdownDeduplicatesRepeatedLimitations(t *testing.T) {
+	analysis := signals.AnalysisReport{
+		Limitations: []string{
+			"No coverage report was imported, so test conclusions use file-touch evidence only.",
+			"GitHub metadata was not requested; continuing local-only.",
+			"Review burden is unavailable without imported PR review metadata.",
+			"GitHub metadata was not connected, so review and PR workflow evidence are limited.",
+			"No coverage report was imported, so testing confidence uses file-touch and repo-shape evidence.",
+			"Attribution evidence is weak; work-unit ROI should stay coarse until stronger anchors are connected.",
+		},
+	}
+
+	got := Markdown(analysis)
+	limitations := markdownSection(got, "## Limitations", "")
+	if strings.Count(limitations, "No coverage report was imported") != 1 {
+		t.Fatalf("coverage limitation should render once:\n%s", limitations)
+	}
+	if strings.Count(limitations, "GitHub metadata") != 1 {
+		t.Fatalf("GitHub limitation should render once:\n%s", limitations)
+	}
+	for _, want := range []string{
+		"No coverage report was imported, so testing confidence uses file-touch and repo-shape evidence.",
+		"GitHub metadata was not connected, so review and PR workflow evidence are limited.",
+		"Attribution evidence is weak",
+	} {
+		if !strings.Contains(limitations, want) {
+			t.Fatalf("limitations missing preferred wording %q:\n%s", want, limitations)
 		}
 	}
 }
@@ -999,4 +1074,24 @@ func markdownSection(text string, start string, end string) string {
 		return text[sectionStart:]
 	}
 	return text[sectionStart : sectionStart+endIndex]
+}
+
+func stringSliceContains(values []string, want string) bool {
+	for _, value := range values {
+		if value == want {
+			return true
+		}
+	}
+	return false
+}
+
+func hasDuplicateStrings(values []string) bool {
+	seen := map[string]bool{}
+	for _, value := range values {
+		if seen[value] {
+			return true
+		}
+		seen[value] = true
+	}
+	return false
 }

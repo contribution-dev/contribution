@@ -142,13 +142,13 @@ func Markdown(analysis signals.AnalysisReport) string {
 	var buf bytes.Buffer
 	fmt.Fprintln(&buf, "# Agentic Readiness Report")
 	fmt.Fprintln(&buf)
-	fmt.Fprintln(&buf, "## Summary")
-	fmt.Fprintln(&buf)
-	fmt.Fprintln(&buf, summary(analysis))
-	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "## Top Read")
 	fmt.Fprintln(&buf)
 	writeTopRead(&buf, analysis.TopRead)
+	fmt.Fprintln(&buf)
+	fmt.Fprintln(&buf, "## Summary")
+	fmt.Fprintln(&buf)
+	fmt.Fprintln(&buf, summary())
 	fmt.Fprintln(&buf)
 	fmt.Fprintln(&buf, "## Agentic Readiness")
 	fmt.Fprintln(&buf)
@@ -257,9 +257,7 @@ func Markdown(analysis signals.AnalysisReport) string {
 	if len(analysis.Limitations) == 0 {
 		fmt.Fprintln(&buf, "- No major limitations were recorded.")
 	} else {
-		for _, limitation := range analysis.Limitations {
-			fmt.Fprintf(&buf, "- %s\n", limitation)
-		}
+		writeLimitations(&buf, analysis.Limitations)
 	}
 	return buf.String()
 }
@@ -290,21 +288,48 @@ func ProfileExport(analysis signals.AnalysisReport) signals.ProfileExport {
 // ShareCard builds the compact positive sharing export.
 func ShareCard(analysis signals.AnalysisReport) signals.ShareCard {
 	analysis = publicsafe.Analysis(analysis)
-	highlights := []string{
-		fmt.Sprintf("%d artifacts analyzed", analysis.Profile.AnalyzedPRs),
-	}
+	var highlights []string
+	highlights = appendShareHighlight(highlights, artifactHighlight(analysis.Profile.AnalyzedPRs))
 	for _, strength := range analysis.Profile.Strengths {
-		highlights = append(highlights, strength.Label)
+		highlights = appendShareHighlight(highlights, strength.Label)
 		if len(highlights) == 3 {
 			break
 		}
 	}
+	if len(highlights) < 3 && analysis.AgenticReadiness.Grade != "" {
+		highlights = appendShareHighlight(
+			highlights,
+			fmt.Sprintf("Readiness %s (%d/100)", analysis.AgenticReadiness.Grade, analysis.AgenticReadiness.Score),
+		)
+	}
+	for _, finding := range analysis.TopRead.Findings {
+		if len(highlights) == 3 {
+			break
+		}
+		highlights = appendShareHighlight(highlights, shareHighlightFromTopFinding(finding))
+	}
+	for _, trend := range analysis.Profile.ImprovementTrends {
+		if len(highlights) == 3 {
+			break
+		}
+		highlights = appendShareHighlight(highlights, trend.Label)
+	}
+	for _, fallback := range []string{"Public-safe local analysis", "Deterministic repo signals", "Ready for web import"} {
+		if len(highlights) == 3 {
+			break
+		}
+		highlights = appendShareHighlight(highlights, fallback)
+	}
 	for len(highlights) < 3 {
-		highlights = append(highlights, "Private local analysis")
+		highlights = append(highlights, fmt.Sprintf("Local readiness insight %d", len(highlights)+1))
 	}
 	subtitle := "Improving repo readiness for AI-assisted development"
+	confidence := analysis.Profile.Confidence
 	if analysis.AgenticReadiness.Grade != "" {
 		subtitle = fmt.Sprintf("Agentic readiness: %s (%d/100)", analysis.AgenticReadiness.Grade, analysis.AgenticReadiness.Score)
+		if analysis.AgenticReadiness.Confidence != "" {
+			confidence = analysis.AgenticReadiness.Confidence
+		}
 	} else if len(analysis.Profile.ImprovementTrends) > 0 {
 		subtitle = analysis.Profile.ImprovementTrends[0].Label
 	}
@@ -313,9 +338,62 @@ func ShareCard(analysis signals.AnalysisReport) signals.ShareCard {
 		Title:      "Agentic readiness profile",
 		Subtitle:   subtitle,
 		Highlights: highlights,
-		Confidence: analysis.Profile.Confidence,
+		Confidence: confidence,
 		PublicSafe: true,
 	}
+}
+
+func artifactHighlight(analyzed int) string {
+	if analyzed <= 0 {
+		return "Local readiness baseline"
+	}
+	if analyzed == 1 {
+		return "1 artifact analyzed"
+	}
+	return fmt.Sprintf("%d artifacts analyzed", analyzed)
+}
+
+func appendShareHighlight(highlights []string, candidate string) []string {
+	candidate = strings.TrimSpace(candidate)
+	if candidate == "" || shareHighlightsContain(highlights, candidate) {
+		return highlights
+	}
+	return append(highlights, candidate)
+}
+
+func shareHighlightsContain(highlights []string, candidate string) bool {
+	for _, highlight := range highlights {
+		if strings.EqualFold(strings.TrimSpace(highlight), candidate) {
+			return true
+		}
+	}
+	return false
+}
+
+func shareHighlightFromTopFinding(finding signals.TopFinding) string {
+	switch finding.ID {
+	case "missing_validation_command":
+		return "Validation setup identified"
+	case "no_test_evidence", "risky_no_test_work":
+		return "Test evidence focus"
+	case "fix_like_repair_loop", "pr_follow_up_churn":
+		return "Follow-up churn focus"
+	case "high_churn_files":
+		return "High-churn files surfaced"
+	case "large_work_units":
+		return "Review scope focus"
+	case "attribution_gap":
+		return "Attribution setup next"
+	case "setup_gap_github_metadata":
+		return "GitHub connection next"
+	case "setup_gap_issue_tracker":
+		return "Issue intent connection next"
+	case "setup_gap_coverage_report":
+		return "Coverage import next"
+	case "setup_gap_optional_static_tools":
+		return "Static analysis setup next"
+	}
+	return finding.Label
 }
 
 // WriteShareHandoff prints the public-safe share card and web handoff.
@@ -592,15 +670,8 @@ func writeJSON(path string, value any) error {
 	return nil
 }
 
-func summary(analysis signals.AnalysisReport) string {
-	read := strings.TrimSpace(analysis.TopRead.Headline)
-	if read == "" && analysis.AgenticReadiness.Grade != "" {
-		read = fmt.Sprintf("Agentic readiness is %s (%d/100).", analysis.AgenticReadiness.Grade, analysis.AgenticReadiness.Score)
-	}
-	if read == "" {
-		read = fmt.Sprintf("%d artifacts were analyzed locally.", analysis.Profile.AnalyzedPRs)
-	}
-	return fmt.Sprintf("Local CLI read: %s This report uses deterministic local evidence: git history, repo shape, validation/config signals, and any artifacts you explicitly import. For PR review/check metadata, issue intent, AI/session telemetry, or product outcome context, import the CLI probe bundle (`collector.bundle.json`) at contribution.dev and connect those sources there.", read)
+func summary() string {
+	return "This report uses deterministic local evidence: git history, repo shape, validation/config signals, and any artifacts you explicitly import. For PR review/check metadata, issue intent, AI/session telemetry, or product outcome context, import the CLI probe bundle (`collector.bundle.json`) at contribution.dev and connect those sources there."
 }
 
 func nextPlanActions(analysis signals.AnalysisReport) []string {
@@ -874,6 +945,71 @@ func webConnectedReasons(analysis signals.AnalysisReport) []string {
 		seen[reason] = true
 	}
 	return reasons
+}
+
+func writeLimitations(buf *bytes.Buffer, limitations []string) {
+	for _, limitation := range dedupeLimitations(limitations) {
+		fmt.Fprintf(buf, "- %s\n", limitation)
+	}
+}
+
+func dedupeLimitations(limitations []string) []string {
+	type limitationChoice struct {
+		text string
+		rank int
+	}
+	choices := map[string]limitationChoice{}
+	var order []string
+	for _, limitation := range limitations {
+		limitation = strings.TrimSpace(limitation)
+		if limitation == "" {
+			continue
+		}
+		key := limitationKey(limitation)
+		rank := limitationRank(limitation)
+		if _, ok := choices[key]; !ok {
+			order = append(order, key)
+			choices[key] = limitationChoice{text: limitation, rank: rank}
+			continue
+		}
+		if rank < choices[key].rank {
+			choices[key] = limitationChoice{text: limitation, rank: rank}
+		}
+	}
+	out := make([]string, 0, len(order))
+	for _, key := range order {
+		out = append(out, choices[key].text)
+	}
+	return out
+}
+
+func limitationKey(limitation string) string {
+	normalized := strings.ToLower(limitation)
+	switch {
+	case strings.Contains(normalized, "no coverage report was imported"):
+		return "coverage"
+	case strings.Contains(normalized, "github metadata was not") ||
+		strings.Contains(normalized, "review burden is unavailable"):
+		return "github_metadata"
+	}
+	return normalized
+}
+
+func limitationRank(limitation string) int {
+	normalized := strings.ToLower(limitation)
+	switch {
+	case strings.Contains(normalized, "testing confidence"):
+		return 0
+	case strings.Contains(normalized, "review and pr workflow evidence"):
+		return 0
+	case strings.Contains(normalized, "review burden is unavailable"):
+		return 1
+	case strings.Contains(normalized, "no coverage report was imported"):
+		return 1
+	case strings.Contains(normalized, "github metadata was not"):
+		return 2
+	}
+	return 0
 }
 
 func writeFindings(buf *bytes.Buffer, findings []signals.Finding) {

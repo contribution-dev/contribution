@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Put `Top Read` first in generated markdown reports and make low-evidence
+  share cards use useful readiness/setup highlights instead of duplicate
+  placeholder copy while aligning share-card confidence with the displayed
+  readiness score and deduplicating repeated report limitation notes.
 - Harden security defaults: repo-local optional analyzer binaries now require
   explicit local trust and are never trusted for remote clones, GitHub metadata
   import requires an explicit `--github-token` source, config-derived report

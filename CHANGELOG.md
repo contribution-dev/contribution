@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Keep public-safe share-card highlights from falling back to raw Top Read
+  weakness labels; generated Top Read findings now map to positive labels or
+  safe fallback highlights.
 - Put `Top Read` first in generated markdown reports and make low-evidence
   share cards use useful readiness/setup highlights instead of duplicate
   placeholder copy while aligning share-card confidence with the displayed

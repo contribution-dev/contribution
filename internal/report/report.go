@@ -306,7 +306,9 @@ func ShareCard(analysis signals.AnalysisReport) signals.ShareCard {
 		if len(highlights) == 3 {
 			break
 		}
-		highlights = appendShareHighlight(highlights, shareHighlightFromTopFinding(finding))
+		if highlight, ok := shareHighlightFromTopFinding(finding); ok {
+			highlights = appendShareHighlight(highlights, highlight)
+		}
 	}
 	for _, trend := range analysis.Profile.ImprovementTrends {
 		if len(highlights) == 3 {
@@ -370,30 +372,40 @@ func shareHighlightsContain(highlights []string, candidate string) bool {
 	return false
 }
 
-func shareHighlightFromTopFinding(finding signals.TopFinding) string {
+func shareHighlightFromTopFinding(finding signals.TopFinding) (string, bool) {
 	switch finding.ID {
 	case "missing_validation_command":
-		return "Validation setup identified"
+		return "Validation setup identified", true
+	case "failed_checks":
+		return "Check reliability focus", true
 	case "no_test_evidence", "risky_no_test_work":
-		return "Test evidence focus"
+		return "Test evidence focus", true
 	case "fix_like_repair_loop", "pr_follow_up_churn":
-		return "Follow-up churn focus"
+		return "Follow-up churn focus", true
 	case "high_churn_files":
-		return "High-churn files surfaced"
+		return "High-churn files surfaced", true
 	case "large_work_units":
-		return "Review scope focus"
+		return "Review scope focus", true
+	case "context_bloat":
+		return "Context efficiency focus", true
 	case "attribution_gap":
-		return "Attribution setup next"
+		return "Attribution setup next", true
 	case "setup_gap_github_metadata":
-		return "GitHub connection next"
+		return "GitHub connection next", true
 	case "setup_gap_issue_tracker":
-		return "Issue intent connection next"
+		return "Issue intent connection next", true
 	case "setup_gap_coverage_report":
-		return "Coverage import next"
+		return "Coverage import next", true
+	case "setup_gap_ci_configuration":
+		return "CI validation setup next", true
+	case "setup_gap_repo_instructions":
+		return "Agent instructions setup next", true
+	case "setup_gap_validation_commands":
+		return "Validation command setup next", true
 	case "setup_gap_optional_static_tools":
-		return "Static analysis setup next"
+		return "Static analysis setup next", true
 	}
-	return finding.Label
+	return "", false
 }
 
 // WriteShareHandoff prints the public-safe share card and web handoff.

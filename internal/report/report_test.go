@@ -151,6 +151,71 @@ func TestShareCardUsesUsefulLowEvidenceHighlights(t *testing.T) {
 	}
 }
 
+func TestShareCardMapsTopReadFindingsWithoutLeakingRawLabels(t *testing.T) {
+	analysis := signals.AnalysisReport{
+		Profile: signals.ProfileSummary{
+			AnalyzedPRs:        0,
+			AnalysisWindowDays: 90,
+			Confidence:         signals.ConfidenceLow,
+		},
+		TopRead: signals.TopRead{
+			Findings: []signals.TopFinding{{
+				ID:       "failed_checks",
+				Label:    "Checks failed on imported PRs",
+				Evidence: "3 imported PR(s) had failing or non-success check runs.",
+			}, {
+				ID:       "context_bloat",
+				Label:    "Context efficiency risk",
+				Evidence: "Large instruction files were detected.",
+			}, {
+				ID:       "unknown_future_weakness",
+				Label:    "Critical weakness label",
+				Evidence: "An unmapped finding should never leak its raw label.",
+			}},
+		},
+	}
+
+	card := ShareCard(analysis)
+	for _, want := range []string{"Local readiness baseline", "Check reliability focus", "Context efficiency focus"} {
+		if !stringSliceContains(card.Highlights, want) {
+			t.Fatalf("share card highlights missing %q: %+v", want, card.Highlights)
+		}
+	}
+	for _, forbidden := range []string{"Checks failed on imported PRs", "Context efficiency risk", "Critical weakness label"} {
+		if stringSliceContains(card.Highlights, forbidden) {
+			t.Fatalf("share card leaked raw Top Read label %q: %+v", forbidden, card.Highlights)
+		}
+	}
+	if hasDuplicateStrings(card.Highlights) {
+		t.Fatalf("share card highlights should be unique: %+v", card.Highlights)
+	}
+}
+
+func TestShareCardSkipsUnmappedTopReadFindings(t *testing.T) {
+	analysis := signals.AnalysisReport{
+		Profile: signals.ProfileSummary{
+			AnalyzedPRs:        0,
+			AnalysisWindowDays: 90,
+			Confidence:         signals.ConfidenceLow,
+		},
+		TopRead: signals.TopRead{
+			Findings: []signals.TopFinding{{
+				ID:       "unknown_future_weakness",
+				Label:    "Negative weakness label",
+				Evidence: "An unmapped finding should be skipped.",
+			}},
+		},
+	}
+
+	card := ShareCard(analysis)
+	if stringSliceContains(card.Highlights, "Negative weakness label") {
+		t.Fatalf("share card leaked raw unmapped Top Read label: %+v", card.Highlights)
+	}
+	if !stringSliceContains(card.Highlights, "Public-safe local analysis") {
+		t.Fatalf("share card should fill skipped Top Read findings from safe fallbacks: %+v", card.Highlights)
+	}
+}
+
 func TestMarkdownRendersTopReadAsFirstReportSection(t *testing.T) {
 	analysis := signals.AnalysisReport{
 		TopRead: signals.TopRead{

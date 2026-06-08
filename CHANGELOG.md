@@ -4,6 +4,10 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Fix public-safe GitHub metadata receipts so requested metadata is not
+  reported as unrequested, sanitize GitHub API URLs in public-safe limitations,
+  and prioritize Top Read-specific highlights in share cards before generic
+  strengths.
 - Add opt-in `contribution evidence preview/export/doctor` for derived Claude
   Code and Codex CLI work evidence bundles with redaction receipts, offline
   export, and disabled hosted upload.

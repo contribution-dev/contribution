@@ -191,6 +191,40 @@ func TestShareCardMapsTopReadFindingsWithoutLeakingRawLabels(t *testing.T) {
 	}
 }
 
+func TestShareCardPrioritizesTopReadOverGenericStrengths(t *testing.T) {
+	analysis := signals.AnalysisReport{
+		Profile: signals.ProfileSummary{
+			AnalyzedPRs:        20,
+			AnalysisWindowDays: 90,
+			Confidence:         signals.ConfidenceMedium,
+			Strengths: []signals.Finding{{
+				Label:      "Focused local changes",
+				Confidence: signals.ConfidenceMedium,
+			}, {
+				Label:      "Some adjacent test evidence",
+				Confidence: signals.ConfidenceMedium,
+			}},
+		},
+		AgenticReadiness: signals.AgenticReadiness{
+			Grade:      "D",
+			Score:      68,
+			Confidence: signals.ConfidenceMedium,
+		},
+		TopRead: signals.TopRead{
+			Findings: []signals.TopFinding{{
+				ID:       "failed_checks",
+				Label:    "Checks failed on imported PRs",
+				Evidence: "2 imported PRs had failing or non-success check runs.",
+			}},
+		},
+	}
+
+	card := ShareCard(analysis)
+	if !stringSliceContains(card.Highlights, "Check reliability focus") {
+		t.Fatalf("share card should include Top Read-specific highlight before generic strengths: %+v", card.Highlights)
+	}
+}
+
 func TestShareCardSkipsUnmappedTopReadFindings(t *testing.T) {
 	analysis := signals.AnalysisReport{
 		Profile: signals.ProfileSummary{

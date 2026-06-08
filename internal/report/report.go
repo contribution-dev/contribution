@@ -290,12 +290,6 @@ func ShareCard(analysis signals.AnalysisReport) signals.ShareCard {
 	analysis = publicsafe.Analysis(analysis)
 	var highlights []string
 	highlights = appendShareHighlight(highlights, artifactHighlight(analysis.Profile.AnalyzedPRs))
-	for _, strength := range analysis.Profile.Strengths {
-		highlights = appendShareHighlight(highlights, strength.Label)
-		if len(highlights) == 3 {
-			break
-		}
-	}
 	if len(highlights) < 3 && analysis.AgenticReadiness.Grade != "" {
 		highlights = appendShareHighlight(
 			highlights,
@@ -309,6 +303,12 @@ func ShareCard(analysis signals.AnalysisReport) signals.ShareCard {
 		if highlight, ok := shareHighlightFromTopFinding(finding); ok {
 			highlights = appendShareHighlight(highlights, highlight)
 		}
+	}
+	for _, strength := range analysis.Profile.Strengths {
+		if len(highlights) == 3 {
+			break
+		}
+		highlights = appendShareHighlight(highlights, strength.Label)
 	}
 	for _, trend := range analysis.Profile.ImprovementTrends {
 		if len(highlights) == 3 {

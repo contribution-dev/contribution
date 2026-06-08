@@ -173,6 +173,49 @@ func TestAnalyzeReceiptOmitsMissingStrengthPlaceholder(t *testing.T) {
 	}
 }
 
+func TestAnalyzeReceiptDoesNotReportRequestedGitHubMetadataAsNotRequestedAfterRedaction(t *testing.T) {
+	var stdout bytes.Buffer
+	analysis := signals.AnalysisReport{
+		Config: signals.AnalysisConfigSnapshot{
+			PublicSafe: true,
+		},
+		Profile: signals.ProfileSummary{
+			AnalyzedPRs:        20,
+			AnalysisWindowDays: 90,
+		},
+		AgenticReadiness: signals.AgenticReadiness{
+			Grade:      "D",
+			Score:      68,
+			Confidence: signals.ConfidenceMedium,
+		},
+		Coverage: signals.CoverageSummary{
+			Status: "unknown",
+			Reason: "No coverage report was imported.",
+		},
+		SourceCoverage: signals.SourceCoverage{
+			Sources: []signals.SourceCoverageItem{{
+				ID:     "github_metadata",
+				Status: signals.SourceCoverageAvailable,
+			}},
+		},
+		WeaknessMap: signals.WeaknessMap{
+			Weaknesses: []signals.Finding{{
+				Label:      "Checks failed on imported PRs",
+				Evidence:   "2 imported PRs had failing or non-success check runs.",
+				Confidence: signals.ConfidenceMedium,
+			}},
+		},
+	}
+
+	if err := writeAnalyzeReceipt(&stdout, analysis, "/tmp/report", "json"); err != nil {
+		t.Fatalf("writeAnalyzeReceipt error: %v", err)
+	}
+	got := stdout.String()
+	if strings.Contains(got, "GitHub metadata was not requested") {
+		t.Fatalf("receipt should not say requested GitHub metadata was not requested:\n%s", got)
+	}
+}
+
 func TestRunRejectsConfigOutputDirEscape(t *testing.T) {
 	requireGit(t)
 	withFixedNow(t, time.Date(2026, 1, 2, 3, 4, 6, 0, time.UTC))

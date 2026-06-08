@@ -428,7 +428,15 @@ func analyzeUnavailableNotes(analysis signals.AnalysisReport) []string {
 		}
 		notes = append(notes, reason)
 	}
-	if !analysis.Config.GitHubMetadataConfigured {
+	if status, ok := githubMetadataSourceStatus(analysis.SourceCoverage); ok {
+		switch status {
+		case signals.SourceCoverageAvailable:
+		case signals.SourceCoveragePartial:
+			notes = append(notes, "GitHub metadata was requested but did not provide PR review evidence.")
+		default:
+			notes = append(notes, "GitHub metadata was not requested; review burden is unavailable.")
+		}
+	} else if !analysis.Config.GitHubMetadataConfigured {
 		notes = append(notes, "GitHub metadata was not requested; review burden is unavailable.")
 	} else if githubMetadataLimited(analysis.Limitations) {
 		notes = append(notes, "GitHub metadata was requested but did not provide PR review evidence.")
@@ -437,6 +445,15 @@ func analyzeUnavailableNotes(analysis signals.AnalysisReport) []string {
 		notes = append(notes, note)
 	}
 	return firstTerminalStrings(notes, 3)
+}
+
+func githubMetadataSourceStatus(coverage signals.SourceCoverage) (signals.SourceCoverageStatus, bool) {
+	for _, source := range coverage.Sources {
+		if source.ID == "github_metadata" {
+			return source.Status, true
+		}
+	}
+	return "", false
 }
 
 func githubMetadataLimited(limitations []string) bool {

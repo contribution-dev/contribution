@@ -70,3 +70,25 @@ func TestAnalysisRedactsUnknownTwoSegmentPathCandidatesInText(t *testing.T) {
 		t.Fatalf("summary did not keep redacted basename: %q", got.SourceCoverage.Summary)
 	}
 }
+
+func TestAnalysisSanitizesGitHubAPILimitationURLs(t *testing.T) {
+	analysis := signals.AnalysisReport{
+		Repo: signals.RepoMetadata{ID: "local:test", Name: "test"},
+		Limitations: []string{
+			`GitHub PR #241 review metadata unavailable: Get "https://api.github.com/repos/owner/private/pulls/241/reviews?per_page=100&page=1": context deadline exceeded`,
+		},
+		Privacy: signals.PrivacySummary{PublicSafe: true},
+	}
+
+	got := Analysis(analysis)
+	if len(got.Limitations) != 1 {
+		t.Fatalf("limitations = %+v, want one limitation", got.Limitations)
+	}
+	limitation := got.Limitations[0]
+	if strings.Contains(limitation, "api.github.com") || strings.Contains(limitation, "https:/") || strings.Contains(limitation, "/reviews") {
+		t.Fatalf("limitation retained malformed or raw GitHub URL: %q", limitation)
+	}
+	if !strings.Contains(limitation, "GitHub PR #241 review metadata unavailable") || !strings.Contains(limitation, "context deadline exceeded") {
+		t.Fatalf("limitation lost useful error context: %q", limitation)
+	}
+}

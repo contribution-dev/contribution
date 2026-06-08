@@ -19,6 +19,7 @@ type pathReplacement struct {
 
 var (
 	commitSHAPattern        = regexp.MustCompile(`\b[0-9a-fA-F]{7,40}\b`)
+	githubAPIURLPattern     = regexp.MustCompile(`https://api\.github\.com/[^\s"']+`)
 	pathCandidatePattern    = regexp.MustCompile(`(?:[A-Za-z]:)?(?:[./~]?[\w.-]+[/\\])+[\w.@+-]+`)
 	fractionPattern         = regexp.MustCompile(`^\d+/\d+$`)
 	pathLikePrefixPattern   = regexp.MustCompile(`^(?:\.github|app|apps|assets|bin|build|cmd|config|configs|dist|docs|internal|lib|package|packages|pkg|public|script|scripts|src|test|tests|tool|tools)/`)
@@ -431,6 +432,7 @@ func redactStrings(values []string, replacements ...[]pathReplacement) []string 
 }
 
 func redactText(value string, replacements ...[]pathReplacement) string {
+	value = githubAPIURLPattern.ReplaceAllString(value, "GitHub API request")
 	if len(replacements) > 0 {
 		for _, replacement := range replacements[0] {
 			value = strings.ReplaceAll(value, replacement.private, replacement.public)

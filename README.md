@@ -6,8 +6,9 @@ artifacts that a separate web app can import.
 
 The CLI is local-first. It helps answer whether a repo is prepared for
 AI-assisted development and which changes would make agents faster, safer, and
-less likely to waste review time. It does not upload raw code, publish
-profiles, call social APIs, or store hosted state.
+less likely to waste review time. It does not upload raw code, raw diffs, raw
+AI transcripts, raw prompts, raw model outputs, terminal logs, publish profiles,
+call social APIs, or store hosted state.
 
 ## Install
 
@@ -254,6 +255,39 @@ The CLI only imports supported metadata fields such as provider, session
 fingerprint, branch, commit, token count, or cost. It does not store prompts,
 completions, transcripts, raw logs, credentials, or raw code.
 
+## AI Work Evidence Bundle
+
+Use `evidence` only when you want the CLI to inspect local AI session artifacts.
+This is explicit opt-in; `analyze` and `probe` do not scan `~/.claude/projects`
+or `~/.codex/sessions`.
+
+Preview what would be collected:
+
+```bash
+contribution evidence preview --repo .
+```
+
+Export a local offline bundle:
+
+```bash
+contribution evidence export --repo . --output /tmp/contribution-evidence
+```
+
+The export writes `ai-work-evidence.bundle.json` and `redaction-receipt.json`
+inside a timestamped output directory. The default bundle is derived evidence
+only: source tool, session timing, repo/branch/commit anchors, summaries when
+safe, steering/correction/test-debug counts, agent action counts, file path
+hashes, confidence, source lineage, and a redaction receipt. It blocks raw
+prompts, model outputs, transcript JSONL, diffs, terminal logs, source code,
+secrets, environment values, private keys, and credential URLs by default.
+
+Hosted upload is disabled until the CLI consumes a finalized website receiving
+contract:
+
+```bash
+contribution evidence upload
+```
+
 ## Work Unit Markers
 
 Use a local work-unit marker when a branch or PR will not be a clean unit of
@@ -279,6 +313,8 @@ contribution work-unit export --repo . --output /tmp/contribution-work-units
   `share-card.json`, `tooling.json`, `collector.bundle.json`,
   `source-coverage.json`, and `attribution-readiness.json`.
 - `probe` writes public-safe JSON collector artifacts for web-app import.
+- `evidence export` writes `ai-work-evidence.bundle.json` and
+  `redaction-receipt.json` after explicit opt-in local session discovery.
 - `work-unit start` writes local intent markers under
   `.contribution/work-units/` unless another output directory is supplied.
 - `work-unit export` writes `work-units.json`.
@@ -287,9 +323,10 @@ contribution work-unit export --repo . --output /tmp/contribution-work-units
 - Coverage commands may write repo-specific coverage artifacts such as
   `coverage.out`.
 
-The CLI does not upload raw code, raw diffs, tokens, credentials, private repo
-paths, or hosted state. Public-safe artifacts are designed to omit private
-identifiers while preserving useful summary evidence.
+The CLI does not upload raw code, raw diffs, raw AI transcripts, raw prompts,
+raw model outputs, terminal logs, tokens, credentials, private repo paths, or
+hosted state. Public-safe artifacts are designed to omit private identifiers
+while preserving useful summary evidence.
 
 ## Useful Commands
 
@@ -302,6 +339,9 @@ contribution analyze --repo . --output /tmp/contribution-report --format all --n
 
 # Generate a public-safe collector bundle for the web app.
 contribution probe --repo . --output /tmp/contribution-probe --no-external-tools
+
+# Preview opt-in local AI work evidence without writing or uploading.
+contribution evidence preview --repo .
 
 # Mark a unit of intent before starting agentic work.
 contribution work-unit start --goal "Build onboarding" --issue ENG-123

@@ -33,6 +33,7 @@ func NewRootCommand(out io.Writer, errOut io.Writer, info BuildInfo) *cobra.Comm
 	cmd.AddCommand(
 		newAnalyzeCommand(out, errOut),
 		newDoctorCommand(out),
+		newEvidenceCommand(out),
 		newExportProfileCommand(out),
 		newImportFeedbackCommand(out),
 		newInitCommand(out),

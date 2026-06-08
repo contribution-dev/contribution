@@ -22,6 +22,9 @@ tooling layer for repository automation.
 - `internal/valuepipeline` owns deterministic source coverage, agentic
   readiness, attribution readiness, work-unit candidate, and metadata-only
   agent artifact modeling.
+- `internal/evidence` owns explicit opt-in local AI work evidence discovery,
+  derived bundle schema construction, source lineage, repo linkage confidence,
+  and redaction receipts for Claude Code and Codex CLI session artifacts.
 - `internal/workunit` owns local work-unit marker creation, discovery, and
   export.
 - `internal/privacy` owns redaction primitives.
@@ -94,6 +97,15 @@ ROI.
 including `collector.bundle.json`, `source-coverage.json`, and
 `attribution-readiness.json`. It does not upload until the private web/app repo
 defines an authenticated receiving contract.
+
+`evidence preview` and `evidence export` are opt-in local AI evidence
+collector commands. They may inspect Claude Code and Codex CLI session
+artifacts only after the user runs an evidence command, and they emit
+derived-only `ai-work-evidence.bundle.json` plus `redaction-receipt.json`
+artifacts for offline review. They reject remote Git URLs, do not contact
+hosted services, do not include raw prompts, model outputs, transcripts, diffs,
+terminal logs, or source code by default, and keep hosted upload disabled until
+the CLI consumes a finalized website receiving contract.
 
 `work-unit start` creates optional local intent markers for workflows where a
 branch or PR is not a reliable unit of work. Markers are local files and are not

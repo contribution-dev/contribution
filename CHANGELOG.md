@@ -4,6 +4,9 @@ All notable changes to this project will be documented in this file.
 
 ## Unreleased
 
+- Add opt-in `contribution evidence preview/export/doctor` for derived Claude
+  Code and Codex CLI work evidence bundles with redaction receipts, offline
+  export, and disabled hosted upload.
 - Keep public-safe share-card highlights from falling back to raw Top Read
   weakness labels; generated Top Read findings now map to positive labels or
   safe fallback highlights.

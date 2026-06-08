@@ -63,11 +63,12 @@ func newDoctorCommand(out io.Writer) *cobra.Command {
 				fmt.Fprintf(&buf, "- %s: %s (%s) %s\n", tool.Name, status, required, version)
 			}
 			fmt.Fprintln(&buf)
-			if github.EnvTokenAvailable() {
+			switch {
+			case github.EnvTokenAvailable():
 				fmt.Fprintln(&buf, "GitHub token: available from environment; pass --github-token env:GITHUB_TOKEN to import PR metadata")
-			} else if github.GHTokenAvailable() {
+			case github.GHTokenAvailable():
 				fmt.Fprintln(&buf, "GitHub token: available from gh auth; pass --github-token gh to import PR metadata")
-			} else {
+			default:
 				fmt.Fprintln(&buf, "GitHub token: unavailable; PR review metadata will be skipped")
 			}
 			var nextSteps []string
@@ -109,11 +110,12 @@ func newDoctorCommand(out io.Writer) *cobra.Command {
 			if len(nextSteps) == 0 {
 				nextSteps = append(nextSteps, "Run `contribution analyze --repo . --format all` for the private contribution receipt.")
 			}
-			if github.GHTokenAvailable() {
+			switch {
+			case github.GHTokenAvailable():
 				nextSteps = append(nextSteps, "Run `contribution analyze --repo . --github-token gh --format all` to include GitHub PR metadata.")
-			} else if github.EnvTokenAvailable() {
+			case github.EnvTokenAvailable():
 				nextSteps = append(nextSteps, "Run `contribution analyze --repo . --github-token env:GITHUB_TOKEN --format all` to include GitHub PR metadata.")
-			} else {
+			default:
 				nextSteps = append(nextSteps, "Pass `--github-token env:GITHUB_TOKEN` or `--github-token gh` after `gh auth login` to include PR metadata.")
 			}
 			if !coverageStepAdded {

@@ -129,6 +129,19 @@ func TestEvidenceDoctorAndUploadDisabled(t *testing.T) {
 	}
 }
 
+func TestEvidenceCommandRejectsUnknownSource(t *testing.T) {
+	stdout, stderr, err := executeForTest([]string{"evidence", "preview", "--source", "codx"}, BuildInfo{})
+	if err == nil {
+		t.Fatal("evidence preview error = nil, want unsupported source error")
+	}
+	if stdout != "" || stderr != "" {
+		t.Fatalf("preview stdout/stderr = %q/%q, want empty before process-level handling", stdout, stderr)
+	}
+	if !strings.Contains(err.Error(), "unsupported evidence source") {
+		t.Fatalf("preview source error = %v", err)
+	}
+}
+
 func newCLIEvidenceRepo(t *testing.T) string {
 	t.Helper()
 	repo := t.TempDir()

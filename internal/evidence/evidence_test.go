@@ -176,6 +176,49 @@ func TestEvidenceRejectsRemoteRepoToStayOffline(t *testing.T) {
 	}
 }
 
+func TestEvidenceRejectsUnknownSource(t *testing.T) {
+	_, err := Preview(context.Background(), Options{Sources: []string{"codx"}})
+	if err == nil {
+		t.Fatal("Preview() error = nil, want unsupported source error")
+	}
+	if !strings.Contains(err.Error(), "unsupported evidence source") {
+		t.Fatalf("source error = %v", err)
+	}
+}
+
+func TestEvidenceSkipsSymlinkArtifacts(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repo := newEvidenceRepo(t)
+	head := strings.TrimSpace(gitOutput(t, repo, "rev-parse", "HEAD"))
+	outside := filepath.Join(t.TempDir(), "outside.jsonl")
+	writeEvidenceFile(t, outside, `{"timestamp":"2026-06-01T11:00:00Z","type":"session_meta","payload":{"cwd":"`+slash(repo)+`","branch":"main","commit_sha":"`+head+`"}}`+"\n")
+	codexDir := filepath.Join(t.TempDir(), "codex", "sessions")
+	if err := os.MkdirAll(codexDir, 0o750); err != nil {
+		t.Fatalf("mkdir codex dir: %v", err)
+	}
+	link := filepath.Join(codexDir, "linked.jsonl")
+	if err := os.Symlink(outside, link); err != nil {
+		t.Skipf("symlink not available: %v", err)
+	}
+
+	result, err := Preview(context.Background(), Options{
+		Repo:     repo,
+		CodexDir: codexDir,
+		Sources:  []string{"codex"},
+	})
+	if err != nil {
+		t.Fatalf("Preview() error = %v", err)
+	}
+	if result.SessionsFound != 0 || result.SessionsLinked != 0 {
+		t.Fatalf("symlink artifact was scanned: found=%d linked=%d", result.SessionsFound, result.SessionsLinked)
+	}
+	if len(result.SourceSummaries) != 1 || result.SourceSummaries[0].UnreadableCount == 0 {
+		t.Fatalf("symlink skip was not reported as unreadable: %+v", result.SourceSummaries)
+	}
+}
+
 func TestPromptLikeGenericSummariesAreBlocked(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -188,7 +231,8 @@ func TestPromptLikeGenericSummariesAreBlocked(t *testing.T) {
 		`{"timestamp":"2026-06-01T11:01:00Z","type":"user_message","summary":"raw user prompt summary must not leak","payload":{"content":"normal prompt content"}}`,
 		`{"timestamp":"2026-06-01T11:02:00Z","type":"assistant","title":"raw assistant title must not leak","payload":{"content":"normal assistant output"}}`,
 		`{"timestamp":"2026-06-01T11:03:00Z","intent_summary":"raw content-adjacent summary must not leak","content":"normal prompt content without event type"}`,
-		`{"timestamp":"2026-06-01T11:04:00Z","type":"agent_reasoning","payload":{"intent_summary":"Safe derived summary"}}`,
+		`{"timestamp":"2026-06-01T11:04:00Z","intent_summary":"raw transcript-adjacent summary must not leak","transcript":"raw transcript text must not leak"}`,
+		`{"timestamp":"2026-06-01T11:05:00Z","type":"agent_reasoning","payload":{"intent_summary":"Safe derived summary"}}`,
 	}, "\n")+"\n")
 
 	result, err := Export(context.Background(), Options{
@@ -203,6 +247,10 @@ func TestPromptLikeGenericSummariesAreBlocked(t *testing.T) {
 	assertBundleDoesNotContain(t, result.Bundle, "raw user prompt summary must not leak")
 	assertBundleDoesNotContain(t, result.Bundle, "raw assistant title must not leak")
 	assertBundleDoesNotContain(t, result.Bundle, "raw content-adjacent summary must not leak")
+	assertBundleDoesNotContain(t, result.Bundle, "raw transcript-adjacent summary must not leak")
+	if result.Bundle.RedactionReceipt.BlockedContent["raw_transcript"] == 0 {
+		t.Fatalf("raw transcript block count missing: %+v", result.Bundle.RedactionReceipt.BlockedContent)
+	}
 	if len(result.Bundle.WorkSessions) != 1 || result.Bundle.WorkSessions[0].IntentSummary != "Safe derived summary" {
 		t.Fatalf("summary = %+v, want only explicit derived summary", result.Bundle.WorkSessions)
 	}

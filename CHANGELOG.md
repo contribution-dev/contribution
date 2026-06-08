@@ -11,6 +11,9 @@ All notable changes to this project will be documented in this file.
   generic prompt/model `summary`, `title`, and `goal` fields are blocked from
   safe derived summaries. Evidence bundles now emit schema version 2 for the
   hashed commit-anchor JSON shape.
+- Harden evidence source handling by rejecting unknown `--source` values,
+  skipping symlinked session artifacts, and classifying transcript-like fields
+  as raw transcript content.
 - Keep public-safe share-card highlights from falling back to raw Top Read
   weakness labels; generated Top Read findings now map to positive labels or
   safe fallback highlights.

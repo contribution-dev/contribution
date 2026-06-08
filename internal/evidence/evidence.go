@@ -55,6 +55,9 @@ func Export(ctx context.Context, opts Options) (Result, error) {
 
 // Doctor checks whether local evidence source roots are available. It does not read session files.
 func Doctor(_ context.Context, opts Options) (DoctorResult, error) {
+	if err := validateSources(opts.Sources); err != nil {
+		return DoctorResult{}, err
+	}
 	opts = withDefaultSourceDirs(opts)
 	claudeInfo, claudeErr := os.Stat(opts.ClaudeDir)
 	codexInfo, codexErr := os.Stat(opts.CodexDir)
@@ -74,6 +77,9 @@ func Upload(_ context.Context, _ Options) error {
 }
 
 func build(ctx context.Context, opts Options, write bool) (Result, error) {
+	if err := validateSources(opts.Sources); err != nil {
+		return Result{}, err
+	}
 	opts = withDefaultSourceDirs(opts)
 	if looksLikeGitURL(opts.Repo) {
 		return Result{}, fmt.Errorf("evidence collection requires a local git repository path; remote Git URLs would break offline mode")
@@ -269,6 +275,10 @@ func scanSource(ctx context.Context, sourceTool string, root string, repo gitrep
 			return ctx.Err()
 		}
 		if err != nil {
+			unreadable++
+			return nil
+		}
+		if entry.Type()&os.ModeSymlink != 0 {
 			unreadable++
 			return nil
 		}
@@ -729,6 +739,8 @@ func classifyStringContent(value string, keyPath []string, receipt *RedactionRec
 		receipt.block("raw_prompt")
 	case strings.Contains(lowerKey, "completion") || strings.Contains(lowerKey, "model_output") || strings.Contains(lowerKey, "assistant"):
 		receipt.block("raw_model_output")
+	case strings.Contains(lowerKey, "transcript") || strings.Contains(lowerKey, "conversation") || strings.Contains(lowerKey, "messages"):
+		receipt.block("raw_transcript")
 	case strings.Contains(lowerKey, "diff") || strings.Contains(lowerKey, "patch"):
 		receipt.block("raw_diff")
 	case strings.Contains(lowerKey, "stdout") || strings.Contains(lowerKey, "stderr") || strings.Contains(lowerKey, "terminal") || strings.Contains(lowerKey, "log"):
@@ -834,23 +846,39 @@ func selectedSources(values []string) []string {
 	seen := map[string]struct{}{}
 	var out []string
 	for _, value := range values {
-		switch strings.ToLower(strings.TrimSpace(value)) {
-		case "claude", "claude_code", "claude-code":
-			if _, ok := seen[sourceClaude]; !ok {
-				out = append(out, sourceClaude)
-				seen[sourceClaude] = struct{}{}
-			}
-		case "codex", "codex_cli", "codex-cli":
-			if _, ok := seen[sourceCodex]; !ok {
-				out = append(out, sourceCodex)
-				seen[sourceCodex] = struct{}{}
-			}
+		source, ok := canonicalSource(value)
+		if !ok {
+			continue
+		}
+		if _, ok := seen[source]; !ok {
+			out = append(out, source)
+			seen[source] = struct{}{}
 		}
 	}
 	if len(out) == 0 {
 		return []string{sourceClaude, sourceCodex}
 	}
 	return out
+}
+
+func validateSources(values []string) error {
+	for _, value := range values {
+		if _, ok := canonicalSource(value); !ok {
+			return fmt.Errorf("unsupported evidence source %q; use claude or codex", value)
+		}
+	}
+	return nil
+}
+
+func canonicalSource(value string) (string, bool) {
+	switch strings.ToLower(strings.TrimSpace(value)) {
+	case "claude", "claude_code", "claude-code":
+		return sourceClaude, true
+	case "codex", "codex_cli", "codex-cli":
+		return sourceCodex, true
+	default:
+		return "", false
+	}
 }
 
 func evidenceOutputDir(repoPath string, output string, now time.Time) (string, error) {
@@ -1219,6 +1247,8 @@ func unsafeSummaryEvent(event map[string]any) bool {
 		"diff",
 		"log",
 		"terminal",
+		"transcript",
+		"conversation",
 		"stdout",
 		"stderr",
 	} {
@@ -1252,6 +1282,8 @@ func unsafeSummaryKey(key string) bool {
 	return lower == "content" ||
 		lower == "message" ||
 		lower == "messages" ||
+		lower == "transcript" ||
+		lower == "conversation" ||
 		lower == "stdout" ||
 		lower == "stderr" ||
 		strings.Contains(lower, "prompt") ||
@@ -1259,6 +1291,8 @@ func unsafeSummaryKey(key string) bool {
 		strings.Contains(lower, "model_output") ||
 		strings.Contains(lower, "assistant_output") ||
 		strings.Contains(lower, "terminal") ||
+		strings.Contains(lower, "transcript") ||
+		strings.Contains(lower, "conversation") ||
 		strings.Contains(lower, "diff") ||
 		strings.Contains(lower, "patch") ||
 		strings.Contains(lower, "log")

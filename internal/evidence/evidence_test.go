@@ -28,7 +28,7 @@ func TestExportBuildsDerivedBundleAndBlocksRawContent(t *testing.T) {
 		t.Fatalf("Export() error = %v", err)
 	}
 
-	if result.Bundle.Schema != "ai_work_evidence_bundle" || result.Bundle.Version != 1 {
+	if result.Bundle.Schema != "ai_work_evidence_bundle" || result.Bundle.Version != 2 {
 		t.Fatalf("bundle identity = %q/%d", result.Bundle.Schema, result.Bundle.Version)
 	}
 	if result.Bundle.Upload.Mode != UploadModeDisabled || result.Bundle.Export.Mode != ExportModeOffline {

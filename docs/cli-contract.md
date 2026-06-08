@@ -150,7 +150,7 @@ lives in Go tests and `scripts/dogfood-cli.mjs`.
   recommended connections, attribution readiness, candidate work units,
   optional metadata-only agent artifact summaries, setup actions, limitations,
   and privacy posture.
-- `ai-work-evidence.bundle.json` is V1 with schema
+- `ai-work-evidence.bundle.json` is V2 with schema
   `ai_work_evidence_bundle`. It includes source lineage, repo/branch/hashed
   commit/PR and issue anchors where discoverable, derived work sessions,
   privacy flags, offline export mode, disabled upload mode, linkage confidence,

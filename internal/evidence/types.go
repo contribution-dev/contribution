@@ -10,8 +10,8 @@ import (
 const (
 	// BundleSchema is the stable schema name for AI work evidence exports.
 	BundleSchema = "ai_work_evidence_bundle"
-	// BundleVersion is the current additive schema version.
-	BundleVersion = 1
+	// BundleVersion is the current schema version.
+	BundleVersion = 2
 
 	// ExportModeOffline means the bundle was written locally without network use.
 	ExportModeOffline = "offline_export"

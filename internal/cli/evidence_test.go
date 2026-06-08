@@ -75,7 +75,7 @@ func TestEvidencePreviewAndExportCommands(t *testing.T) {
 	if err := json.Unmarshal(data, &bundle); err != nil {
 		t.Fatalf("parse bundle: %v", err)
 	}
-	if bundle["schema"] != "ai_work_evidence_bundle" || bundle["work_sessions"] == nil {
+	if bundle["schema"] != "ai_work_evidence_bundle" || bundle["version"] != float64(2) || bundle["work_sessions"] == nil {
 		t.Fatalf("bundle missing schema/sessions: %+v", bundle)
 	}
 	if strings.Contains(string(data), "raw prompt must not leak") ||

@@ -14,6 +14,7 @@ func TestEvidencePreviewAndExportCommands(t *testing.T) {
 		t.Skip("git not available")
 	}
 	repo := newCLIEvidenceRepo(t)
+	head := strings.TrimSpace(cliGitOutput(t, repo, "rev-parse", "HEAD"))
 	claudeDir, codexDir := writeCLIEvidenceFixtures(t, repo)
 
 	stdout, stderr, err := executeForTest([]string{
@@ -77,7 +78,9 @@ func TestEvidencePreviewAndExportCommands(t *testing.T) {
 	if bundle["schema"] != "ai_work_evidence_bundle" || bundle["work_sessions"] == nil {
 		t.Fatalf("bundle missing schema/sessions: %+v", bundle)
 	}
-	if strings.Contains(string(data), "raw prompt must not leak") || strings.Contains(string(data), "super-secret") {
+	if strings.Contains(string(data), "raw prompt must not leak") ||
+		strings.Contains(string(data), "super-secret") ||
+		strings.Contains(string(data), head) {
 		t.Fatalf("bundle leaked raw fixture content:\n%s", string(data))
 	}
 }

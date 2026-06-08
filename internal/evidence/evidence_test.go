@@ -15,6 +15,7 @@ func TestExportBuildsDerivedBundleAndBlocksRawContent(t *testing.T) {
 		t.Skip("git not available")
 	}
 	repo := newEvidenceRepo(t)
+	head := strings.TrimSpace(gitOutput(t, repo, "rev-parse", "HEAD"))
 	claudeDir, codexDir := writeEvidenceFixtures(t, repo)
 
 	result, err := Export(context.Background(), Options{
@@ -40,7 +41,7 @@ func TestExportBuildsDerivedBundleAndBlocksRawContent(t *testing.T) {
 		if session.SourceTool == "" || session.SourceKind == "" || session.StartedAt.IsZero() || session.EndedAt.IsZero() {
 			t.Fatalf("session missing required source/time fields: %+v", session)
 		}
-		if session.RepoRemoteHash == "" || session.Branch == "" || len(session.CommitSHAs) == 0 {
+		if session.RepoRemoteHash == "" || session.Branch == "" || len(session.CommitSHAHashes) == 0 {
 			t.Fatalf("session missing repo anchors: %+v", session)
 		}
 		if session.HumanSteeringCount == 0 || session.AgentActionCount == 0 || session.TestDebugCount == 0 {
@@ -79,6 +80,10 @@ func TestExportBuildsDerivedBundleAndBlocksRawContent(t *testing.T) {
 	}
 	if result.Bundle.EvidenceUpload.Status != "not_uploaded" {
 		t.Fatalf("upload status = %+v, want not_uploaded", result.Bundle.EvidenceUpload)
+	}
+	assertBundleDoesNotContain(t, result.Bundle, head)
+	if result.Bundle.Repo.CurrentCommitSHAHash == "" || result.Bundle.Repo.CurrentCommitSHAHash == head {
+		t.Fatalf("bundle current commit hash = %+v, want hashed anchor", result.Bundle.Repo)
 	}
 	assertNoRawFixtureContent(t, result.Bundle)
 	assertFileExists(t, result.BundlePath)
@@ -171,6 +176,38 @@ func TestEvidenceRejectsRemoteRepoToStayOffline(t *testing.T) {
 	}
 }
 
+func TestPromptLikeGenericSummariesAreBlocked(t *testing.T) {
+	if _, err := exec.LookPath("git"); err != nil {
+		t.Skip("git not available")
+	}
+	repo := newEvidenceRepo(t)
+	head := strings.TrimSpace(gitOutput(t, repo, "rev-parse", "HEAD"))
+	codexDir := filepath.Join(t.TempDir(), "codex", "sessions")
+	writeEvidenceFile(t, filepath.Join(codexDir, "prompt-summary.jsonl"), strings.Join([]string{
+		`{"timestamp":"2026-06-01T11:00:00Z","type":"session_meta","payload":{"cwd":"` + slash(repo) + `","branch":"main","commit_sha":"` + head + `"}}`,
+		`{"timestamp":"2026-06-01T11:01:00Z","type":"user_message","summary":"raw user prompt summary must not leak","payload":{"content":"normal prompt content"}}`,
+		`{"timestamp":"2026-06-01T11:02:00Z","type":"assistant","title":"raw assistant title must not leak","payload":{"content":"normal assistant output"}}`,
+		`{"timestamp":"2026-06-01T11:03:00Z","intent_summary":"raw content-adjacent summary must not leak","content":"normal prompt content without event type"}`,
+		`{"timestamp":"2026-06-01T11:04:00Z","type":"agent_reasoning","payload":{"intent_summary":"Safe derived summary"}}`,
+	}, "\n")+"\n")
+
+	result, err := Export(context.Background(), Options{
+		Repo:     repo,
+		Output:   t.TempDir(),
+		CodexDir: codexDir,
+		Sources:  []string{"codex"},
+	})
+	if err != nil {
+		t.Fatalf("Export() error = %v", err)
+	}
+	assertBundleDoesNotContain(t, result.Bundle, "raw user prompt summary must not leak")
+	assertBundleDoesNotContain(t, result.Bundle, "raw assistant title must not leak")
+	assertBundleDoesNotContain(t, result.Bundle, "raw content-adjacent summary must not leak")
+	if len(result.Bundle.WorkSessions) != 1 || result.Bundle.WorkSessions[0].IntentSummary != "Safe derived summary" {
+		t.Fatalf("summary = %+v, want only explicit derived summary", result.Bundle.WorkSessions)
+	}
+}
+
 func newEvidenceRepo(t *testing.T) string {
 	t.Helper()
 	repo := filepath.Join(t.TempDir(), "fixture-repo")
@@ -231,11 +268,6 @@ func writeHeuristicCodexSession(t *testing.T, codexDir string, repoName string) 
 
 func assertNoRawFixtureContent(t *testing.T, bundle AIWorkEvidenceBundle) {
 	t.Helper()
-	data, err := json.Marshal(bundle)
-	if err != nil {
-		t.Fatalf("marshal bundle: %v", err)
-	}
-	text := string(data)
 	for _, blocked := range []string{
 		"super-secret",
 		"raw prompt must not leak",
@@ -247,9 +279,18 @@ func assertNoRawFixtureContent(t *testing.T, bundle AIWorkEvidenceBundle) {
 		"internal/evidence/evidence.go",
 		"acme/fixture-repo",
 	} {
-		if strings.Contains(text, blocked) {
-			t.Fatalf("bundle leaked %q:\n%s", blocked, text)
-		}
+		assertBundleDoesNotContain(t, bundle, blocked)
+	}
+}
+
+func assertBundleDoesNotContain(t *testing.T, bundle AIWorkEvidenceBundle, blocked string) {
+	t.Helper()
+	data, err := json.Marshal(bundle)
+	if err != nil {
+		t.Fatalf("marshal bundle: %v", err)
+	}
+	if strings.Contains(string(data), blocked) {
+		t.Fatalf("bundle leaked %q:\n%s", blocked, string(data))
 	}
 }
 

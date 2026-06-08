@@ -96,11 +96,13 @@ type RepoAnchor struct {
 	RepoRemoteHash        string   `json:"repo_remote_hash,omitempty"`
 	RepoName              string   `json:"repo_name,omitempty"`
 	Branch                string   `json:"branch,omitempty"`
-	CurrentCommitSHA      string   `json:"current_commit_sha,omitempty"`
-	CommitSHAs            []string `json:"commit_shas"`
+	CurrentCommitSHAHash  string   `json:"current_commit_sha_hash,omitempty"`
+	CommitSHAHashes       []string `json:"commit_sha_hashes"`
 	PRNumbers             []int    `json:"pr_numbers,omitempty"`
 	IssueKeys             []string `json:"issue_keys,omitempty"`
 	CurrentDiffFilesCount int      `json:"current_diff_files_count"`
+	rawCurrentCommitSHA   string
+	rawCommitSHAs         []string
 }
 
 // WorkSession is one derived local AI work session.
@@ -114,7 +116,7 @@ type WorkSession struct {
 	RepoID                string             `json:"repo_id,omitempty"`
 	RepoName              string             `json:"repo_name,omitempty"`
 	Branch                string             `json:"branch,omitempty"`
-	CommitSHAs            []string           `json:"commit_shas"`
+	CommitSHAHashes       []string           `json:"commit_sha_hashes"`
 	PRNumbers             []int              `json:"pr_numbers,omitempty"`
 	IssueKeys             []string           `json:"issue_keys,omitempty"`
 	IntentSummary         string             `json:"intent_summary"`

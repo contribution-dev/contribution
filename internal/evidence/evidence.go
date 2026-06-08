@@ -188,9 +188,11 @@ func collectRepoAnchor(ctx context.Context, repo gitrepo.Repo, opts Options) Rep
 		RepoID:                repoID,
 		RepoRemoteHash:        hashString(repo.RemoteURL),
 		Branch:                branch,
-		CurrentCommitSHA:      repo.HeadSHA,
-		CommitSHAs:            commits,
+		CurrentCommitSHAHash:  hashString(repo.HeadSHA),
+		CommitSHAHashes:       hashStrings(commits),
 		CurrentDiffFilesCount: currentDiffFileCount(ctx, repo.Path),
+		rawCurrentCommitSHA:   repo.HeadSHA,
+		rawCommitSHAs:         commits,
 	}
 	if opts.IncludeRepoName {
 		anchor.RepoName = repo.Name
@@ -500,13 +502,16 @@ func recordRepoHints(draft *sessionDraft, event map[string]any) {
 }
 
 func recordSummaries(draft *sessionDraft, event map[string]any, receipt *RedactionReceipt) {
+	if unsafeSummaryEvent(event) {
+		return
+	}
 	for _, item := range collectSummaryFields(event) {
 		summary := sanitizeSummary(item.value, receipt)
 		if summary == "" {
 			continue
 		}
 		switch item.key {
-		case "intent_summary", "summary", "title", "goal":
+		case "intent_summary":
 			if draft.intentSummary == "" {
 				draft.intentSummary = summary
 				receipt.extract("intent_summary")
@@ -578,8 +583,8 @@ func finalizeSession(draft sessionDraft, repo gitrepo.Repo, anchor RepoAnchor, o
 		branch = anchor.Branch
 	}
 	commits := sortedStrings(draft.commits)
-	if len(commits) == 0 && anchor.CurrentCommitSHA != "" {
-		commits = []string{anchor.CurrentCommitSHA}
+	if len(commits) == 0 && anchor.rawCurrentCommitSHA != "" {
+		commits = []string{anchor.rawCurrentCommitSHA}
 	}
 	filePaths := sortedStrings(draft.filePaths)
 	filePathHashes := make([]string, 0, len(filePaths))
@@ -593,7 +598,7 @@ func finalizeSession(draft sessionDraft, repo gitrepo.Repo, anchor RepoAnchor, o
 		StartedAt:             draft.startedAt,
 		EndedAt:               draft.endedAt,
 		Branch:                branch,
-		CommitSHAs:            commits,
+		CommitSHAHashes:       hashStrings(commits),
 		PRNumbers:             sortedInts(draft.prNumbers),
 		IssueKeys:             sortedStrings(draft.issueKeys),
 		IntentSummary:         defaultSummary(draft.intentSummary, "Intent summary unavailable from derived metadata."),
@@ -630,7 +635,7 @@ func linkSession(draft sessionDraft, repo gitrepo.Repo, anchor RepoAnchor) (sign
 		}
 	}
 	repoCommits := map[string]struct{}{}
-	for _, commit := range anchor.CommitSHAs {
+	for _, commit := range anchor.rawCommitSHAs {
 		repoCommits[commit] = struct{}{}
 		if len(commit) >= 7 {
 			repoCommits[commit[:7]] = struct{}{}
@@ -1163,9 +1168,6 @@ func collectSummaryFields(value any) []summaryField {
 		"intent_summary":         {},
 		"plan_summary":           {},
 		"implementation_summary": {},
-		"summary":                {},
-		"title":                  {},
-		"goal":                   {},
 	}
 	var out []summaryField
 	var walk func(any)
@@ -1192,6 +1194,74 @@ func collectSummaryFields(value any) []summaryField {
 	}
 	walk(value)
 	return out
+}
+
+func unsafeSummaryEvent(event map[string]any) bool {
+	eventType := strings.ToLower(firstString(event, "type", "event", "kind"))
+	role := strings.ToLower(firstString(event, "role"))
+	if role == "" {
+		role = strings.ToLower(firstStringFromMessage(event, "role"))
+	}
+	switch role {
+	case "user", "assistant", "tool":
+		return true
+	}
+	for _, marker := range []string{
+		"user",
+		"prompt",
+		"assistant",
+		"completion",
+		"model_output",
+		"tool",
+		"exec",
+		"apply_patch",
+		"patch",
+		"diff",
+		"log",
+		"terminal",
+		"stdout",
+		"stderr",
+	} {
+		if strings.Contains(eventType, marker) {
+			return true
+		}
+	}
+	return hasUnsafeSummaryKey(event)
+}
+
+func hasUnsafeSummaryKey(value any) bool {
+	switch typed := value.(type) {
+	case map[string]any:
+		for key, child := range typed {
+			if unsafeSummaryKey(key) || hasUnsafeSummaryKey(child) {
+				return true
+			}
+		}
+	case []any:
+		for _, child := range typed {
+			if hasUnsafeSummaryKey(child) {
+				return true
+			}
+		}
+	}
+	return false
+}
+
+func unsafeSummaryKey(key string) bool {
+	lower := strings.ToLower(key)
+	return lower == "content" ||
+		lower == "message" ||
+		lower == "messages" ||
+		lower == "stdout" ||
+		lower == "stderr" ||
+		strings.Contains(lower, "prompt") ||
+		strings.Contains(lower, "completion") ||
+		strings.Contains(lower, "model_output") ||
+		strings.Contains(lower, "assistant_output") ||
+		strings.Contains(lower, "terminal") ||
+		strings.Contains(lower, "diff") ||
+		strings.Contains(lower, "patch") ||
+		strings.Contains(lower, "log")
 }
 
 func collectPathFields(value any) []string {
@@ -1343,6 +1413,24 @@ func hashString(value string) string {
 	}
 	sum := sha256.Sum256([]byte(value))
 	return hex.EncodeToString(sum[:])
+}
+
+func hashStrings(values []string) []string {
+	out := make([]string, 0, len(values))
+	seen := map[string]struct{}{}
+	for _, value := range values {
+		hash := hashString(value)
+		if hash == "" {
+			continue
+		}
+		if _, ok := seen[hash]; ok {
+			continue
+		}
+		seen[hash] = struct{}{}
+		out = append(out, hash)
+	}
+	sort.Strings(out)
+	return out
 }
 
 func shortHash(value string) string {

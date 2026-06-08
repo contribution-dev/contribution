@@ -275,9 +275,10 @@ contribution evidence export --repo . --output /tmp/contribution-evidence
 
 The export writes `ai-work-evidence.bundle.json` and `redaction-receipt.json`
 inside a timestamped output directory. The default bundle is derived evidence
-only: source tool, session timing, repo/branch/commit anchors, summaries when
-safe, steering/correction/test-debug counts, agent action counts, file path
-hashes, confidence, source lineage, and a redaction receipt. It blocks raw
+only: source tool, session timing, repo/branch/hashed commit anchors, summaries
+when safe, steering/correction/test-debug counts, agent action counts, commit
+SHA hashes, file path hashes, confidence, source lineage, and a redaction
+receipt. It blocks raw
 prompts, model outputs, transcript JSONL, diffs, terminal logs, source code,
 secrets, environment values, private keys, and credential URLs by default.
 

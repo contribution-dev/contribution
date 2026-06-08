@@ -151,11 +151,11 @@ lives in Go tests and `scripts/dogfood-cli.mjs`.
   optional metadata-only agent artifact summaries, setup actions, limitations,
   and privacy posture.
 - `ai-work-evidence.bundle.json` is V1 with schema
-  `ai_work_evidence_bundle`. It includes source lineage, repo/branch/commit/PR
-  and issue anchors where discoverable, derived work sessions, privacy flags,
-  offline export mode, disabled upload mode, linkage confidence, and a nested
-  redaction receipt. It includes file path hashes by default; repo-relative
-  paths require explicit `--include-file-paths`.
+  `ai_work_evidence_bundle`. It includes source lineage, repo/branch/hashed
+  commit/PR and issue anchors where discoverable, derived work sessions,
+  privacy flags, offline export mode, disabled upload mode, linkage confidence,
+  and a nested redaction receipt. It includes commit SHA hashes and file path
+  hashes by default; repo-relative paths require explicit `--include-file-paths`.
 - `redaction-receipt.json` records scanned source names, extracted field count,
   redacted content classes, blocked raw content classes, privacy flags, export
   mode, upload mode, and whether redaction was guaranteed. Export fails closed

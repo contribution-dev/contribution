@@ -7,6 +7,9 @@ All notable changes to this project will be documented in this file.
 - Add opt-in `contribution evidence preview/export/doctor` for derived Claude
   Code and Codex CLI work evidence bundles with redaction receipts, offline
   export, and disabled hosted upload.
+- Harden evidence bundle exports so default commit anchors are hashed and
+  generic prompt/model `summary`, `title`, and `goal` fields are blocked from
+  safe derived summaries.
 - Keep public-safe share-card highlights from falling back to raw Top Read
   weakness labels; generated Top Read findings now map to positive labels or
   safe fallback highlights.

@@ -823,6 +823,8 @@ function runSmoke(binary, tempRoot, options = {}) {
     "collector.bundle.json",
     "source-coverage.json",
     "attribution-readiness.json",
+    "profile.export.json",
+    "share-card.json",
     "tooling.json",
   ]);
   assert(

@@ -253,6 +253,19 @@ func TestPreflightCommandWritesJSONArtifacts(t *testing.T) {
 	}
 }
 
+func TestPreflightHelpDocumentsBaseDefault(t *testing.T) {
+	stdout, stderr, err := executeForTest([]string{"preflight", "--help"}, BuildInfo{})
+	if err != nil {
+		t.Fatalf("Execute() error = %v", err)
+	}
+	if stderr != "" {
+		t.Fatalf("stderr = %q, want empty", stderr)
+	}
+	if !strings.Contains(stdout, "Base branch or SHA. Defaults to project.default_branch from .contribution.yml, or main.") {
+		t.Fatalf("preflight help does not document --base default:\n%s", stdout)
+	}
+}
+
 func TestProbeCommandWritesCollectorBundle(t *testing.T) {
 	if _, err := exec.LookPath("git"); err != nil {
 		t.Skip("git not available")
@@ -278,12 +291,24 @@ func TestProbeCommandWritesCollectorBundle(t *testing.T) {
 	if stderr != "" {
 		t.Fatalf("stderr = %q, want empty", stderr)
 	}
-	for _, want := range []string{"Agentic readiness report", "Top read:", "Next PR plan:", "Bundle: ", "Source coverage: ", "Attribution readiness: "} {
+	for _, want := range []string{
+		"Agentic readiness report",
+		"Top read:",
+		"Next PR plan:",
+		"Upload: ",
+		"share-card.json",
+		"Bundle: ",
+		"Source coverage: ",
+		"Attribution readiness: ",
+	} {
 		if !strings.Contains(stdout, want) {
 			t.Fatalf("probe stdout missing %q:\n%s", want, stdout)
 		}
 	}
 	bundlePath := lineValue(t, stdout, "Bundle: ")
+	runDir := filepath.Dir(bundlePath)
+	assertFileExists(t, filepath.Join(runDir, "profile.export.json"))
+	assertFileExists(t, filepath.Join(runDir, "share-card.json"))
 	// #nosec G304 -- test reads the artifact path printed by the command under t.TempDir.
 	data, err := os.ReadFile(bundlePath)
 	if err != nil {

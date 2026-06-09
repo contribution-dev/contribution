@@ -157,7 +157,9 @@ contribution preflight \
   --no-external-tools
 ```
 
-If your repo uses another default branch, replace `main` with that branch.
+If your repo uses another default branch, replace `main` with that branch. If
+you omit `--base`, `preflight` uses `project.default_branch` from
+`.contribution.yml`, or `main` when no config sets it.
 
 Expected output files:
 

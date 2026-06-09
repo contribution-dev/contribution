@@ -22,7 +22,7 @@ func newPreflightCommand(out io.Writer) *cobra.Command {
 			return err
 		},
 	}
-	cmd.Flags().StringVar(&opts.Base, "base", "", "Base branch or SHA.")
+	cmd.Flags().StringVar(&opts.Base, "base", "", "Base branch or SHA. Defaults to project.default_branch from .contribution.yml, or main.")
 	cmd.Flags().StringVar(&opts.Head, "head", "HEAD", "Head branch or SHA.")
 	cmd.Flags().StringVar(&opts.Output, "output", "", "Output directory root.")
 	cmd.Flags().StringVar(&opts.Format, "format", "all", "Output format: json, markdown, or all.")

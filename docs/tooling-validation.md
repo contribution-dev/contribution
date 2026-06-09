@@ -150,6 +150,8 @@ review fallback roots named `contribution-code-reviews-*` are preserved. Run
   present, and asserts public-safe outputs do not contain local roots, remotes,
   commit SHAs, tokens, emails, private paths, stale phase wording, or blank
   PR-ledger risk/action cells.
+- Dogfood scripts accept the standard pnpm argument separator when forwarding
+  script flags, for example `pnpm dogfood:real -- --keep-temp`.
 - `pnpm dogfood:release` runs the smoke flow, creates a GoReleaser snapshot,
   unpacks the current runner artifact, and runs a clean-environment smoke. This
   current-runner artifact check is the intended default; add cross-OS artifact

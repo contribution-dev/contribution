@@ -13,7 +13,7 @@ import {
   writeFileSync,
 } from "node:fs";
 import path from "node:path";
-import { fileURLToPath } from "node:url";
+import { fileURLToPath, pathToFileURL } from "node:url";
 import { cleanupStaleProjectTempRoots } from "./lib/temp-cleanup.mjs";
 
 const SCRIPT_DIR = path.dirname(fileURLToPath(import.meta.url));
@@ -24,7 +24,7 @@ const SECRET_VALUE = "dogfood-secret-value";
 const SECRET_SENTINEL = `token=${SECRET_VALUE}`;
 const MODES = new Set(["smoke", "release", "real"]);
 
-function parseArgs(argv) {
+export function parseArgs(argv) {
   const args = {
     mode: "smoke",
     binary: "",
@@ -34,6 +34,9 @@ function parseArgs(argv) {
 
   for (let i = 0; i < argv.length; i += 1) {
     const token = argv[i];
+    if (token === "--") {
+      continue;
+    }
     if (token === "--mode") {
       args.mode = argv[i + 1] ?? "";
       i += 1;
@@ -1473,9 +1476,14 @@ function main() {
   }
 }
 
-try {
-  main();
-} catch (error) {
-  console.error(`[dogfood-cli] ${error.message}`);
-  process.exit(1);
+if (
+  process.argv[1] &&
+  import.meta.url === pathToFileURL(path.resolve(process.argv[1])).href
+) {
+  try {
+    main();
+  } catch (error) {
+    console.error(`[dogfood-cli] ${error.message}`);
+    process.exit(1);
+  }
 }

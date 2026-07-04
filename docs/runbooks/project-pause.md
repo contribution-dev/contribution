@@ -10,6 +10,8 @@ state.
   `workflow_dispatch` only.
 - `.github/dependabot.yml` was removed so Dependabot version-update PRs are not
   opened from repository config.
+- Dependabot security updates and vulnerability alerts were disabled in GitHub
+  repository settings.
 - Local Codex review LaunchAgents for this checkout were uninstalled:
   - `com.contribution.codex-review-worker.codex.*`
   - `com.contribution.codex-review-remediation.*`
@@ -36,6 +38,13 @@ Restore Husky hooks for this checkout with:
 
 ```sh
 git config --local core.hooksPath .husky/_
+```
+
+Restore Dependabot security alerts and security-update PRs with:
+
+```sh
+gh api --method PUT repos/contribution-dev/contribution/vulnerability-alerts
+gh api --method PUT repos/contribution-dev/contribution/automated-security-fixes
 ```
 
 GitHub Actions can also be re-enabled from repository settings if they were

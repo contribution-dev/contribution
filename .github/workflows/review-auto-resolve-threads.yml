@@ -1,9 +1,7 @@
 name: Review Auto Resolve Threads
 
 on:
-  workflow_run:
-    workflows: ["CI"]
-    types: [completed]
+  workflow_dispatch:
 
 permissions:
   contents: read

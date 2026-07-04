@@ -1,9 +1,7 @@
 name: Review Remediation
 
 on:
-  workflow_run:
-    workflows: ["Review Agent Rerun"]
-    types: [completed]
+  workflow_dispatch:
 
 permissions:
   contents: read
